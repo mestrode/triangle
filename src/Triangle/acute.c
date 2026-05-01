@@ -198,7 +198,7 @@ void findNewSPLocationWithoutMaxAngle(mesh *m, behavior *b,
 		/* Use the counterclockwise() routine to ensure a positive (and */
 		/*   reasonably accurate) result, avoiding any possibility of   */
 		/*   division by zero.                                          */
-		denominator = 0.5 / counterclockwise(m, b, tdest, tapex, torg);
+		denominator = 0.5 / tri_counterclockwise(m, b, tdest, tapex, torg);
 		/* Don't count the above as an orientation test. */
 		m->counterclockcount--;
 	}
@@ -464,7 +464,7 @@ void findNewSPLocationWithoutMaxAngle(mesh *m, behavior *b,
 				dest(neighborotri, neighborvertex_2);	
 				apex(neighborotri, neighborvertex_3);		
 				// now calculate neighbor's circumcenter which is the voronoi site
-				findcircumcenter(m, b, neighborvertex_1, neighborvertex_2,neighborvertex_3,neighborCircumcenter, &xi_tmp, &eta_tmp, 0);
+				tri_findcircumcenter(m, b, neighborvertex_1, neighborvertex_2,neighborvertex_3,neighborCircumcenter, &xi_tmp, &eta_tmp, 0);
 				/// compute petal and Voronoi edge intersection ///
 				// in order to avoid degenerate cases, we need to do a vector based calculation for line		
 				vector_x = (middleAngleCorner[1] - smallestAngleCorner[1]);//(-y, x)
@@ -575,7 +575,7 @@ void findNewSPLocationWithoutMaxAngle(mesh *m, behavior *b,
 				dest(neighborotri, neighborvertex_2);	
 				apex(neighborotri, neighborvertex_3);		
 				// now calculate neighbor's circumcenter which is the voronoi site
-				findcircumcenter(m, b, neighborvertex_1, neighborvertex_2,neighborvertex_3,neighborCircumcenter, &xi_tmp, &eta_tmp, 0);	
+				tri_findcircumcenter(m, b, neighborvertex_1, neighborvertex_2,neighborvertex_3,neighborCircumcenter, &xi_tmp, &eta_tmp, 0);	
 	
 				/// compute petal and Voronoi edge intersection ///
 				// in order to avoid degenerate cases, we need to do a vector based calculation for line		
@@ -820,7 +820,7 @@ void findNewSPLocationWithMaxAngle(mesh *m, behavior *b,
 		/* Use the counterclockwise() routine to ensure a positive (and */
 		/*   reasonably accurate) result, avoiding any possibility of   */
 		/*   division by zero.                                          */
-		denominator = 0.5 / counterclockwise(m, b, tdest, tapex, torg);
+		denominator = 0.5 / tri_counterclockwise(m, b, tdest, tapex, torg);
 		/* Don't count the above as an orientation test. */
 		m->counterclockcount--;
 	}
@@ -1129,7 +1129,7 @@ void findNewSPLocationWithMaxAngle(mesh *m, behavior *b,
 				dest(neighborotri, neighborvertex_2);	
 				apex(neighborotri, neighborvertex_3);		
 				// now calculate neighbor's circumcenter which is the voronoi site
-				findcircumcenter(m, b, neighborvertex_1, neighborvertex_2,neighborvertex_3,neighborCircumcenter, &xi_tmp, &eta_tmp, 0);
+				tri_findcircumcenter(m, b, neighborvertex_1, neighborvertex_2,neighborvertex_3,neighborCircumcenter, &xi_tmp, &eta_tmp, 0);
 				/// compute petal and Voronoi edge intersection ///						
 				// in order to avoid degenerate cases, we need to do a vector based calculation for line		
 				vector_x = (middleAngleCorner[1] - smallestAngleCorner[1]);//(-y, x)
@@ -1393,7 +1393,7 @@ void findNewSPLocationWithMaxAngle(mesh *m, behavior *b,
 				dest(neighborotri, neighborvertex_2);	
 				apex(neighborotri, neighborvertex_3);		
 				// now calculate neighbor's circumcenter which is the voronoi site
-				findcircumcenter(m, b, neighborvertex_1, neighborvertex_2,neighborvertex_3,neighborCircumcenter, &xi_tmp, &eta_tmp, 0);	
+				tri_findcircumcenter(m, b, neighborvertex_1, neighborvertex_2,neighborvertex_3,neighborCircumcenter, &xi_tmp, &eta_tmp, 0);	
 	
 				/// compute petal and Voronoi edge intersection ///
 				// in order to avoid degenerate cases, we need to do a vector based calculation for line		
@@ -3614,7 +3614,7 @@ REAL minDistanceToNeigbor(mesh *m, behavior *b, REAL newlocX, REAL newlocY, stru
 		otricopy(*searchtri, horiz);
 	}else{
 		/* Orient `searchtri' to fit the preconditions of calling preciselocate(). */
-		ahead = counterclockwise(m, b, torg, tdest, newvertex);
+		ahead = tri_counterclockwise(m, b, torg, tdest, newvertex);
 		if (ahead < 0.0) {
 			/* Turn around so that `searchpoint' is to the left of the */
 			/*   edge specified by `searchtri'.                        */

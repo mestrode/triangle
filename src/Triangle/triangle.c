@@ -7343,7 +7343,7 @@ void splittriangle(mesh *m, behavior *b,
 #ifndef NO_ACUTE
     if (b->fixedarea || b->vararea || b->usertest) {
       // TODO: Acute fails for certain area constraints.
-      findcircumcenter(m, b, borg, bdest, bapex, newvertex, &xi, &eta, 1);
+      tri_findcircumcenter(m, b, borg, bdest, bapex, newvertex, &xi, &eta, 1);
     } else {
       findNewSPLocation(m, b, borg, bdest, bapex, newvertex, &xi, &eta, 1, badotri);
     }
