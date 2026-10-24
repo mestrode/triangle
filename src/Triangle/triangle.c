@@ -2943,6 +2943,7 @@ enum insertvertexresult insertvertex(mesh *m, behavior *b,
   vertex first;
   vertex leftvertex, rightvertex, botvertex, topvertex, farvertex;
   vertex segmentorg, segmentdest;
+  vertex subsegorg, subsegdest;
   REAL attrib;
   REAL area;
   enum insertvertexresult success;
@@ -3293,8 +3294,13 @@ enum insertvertexresult insertvertex(mesh *m, behavior *b,
         doflip = 0;
 #ifndef CDT_ONLY
         if (segmentflaws) {
-          /* Does the new vertex encroach upon this subsegment? */
-          if (checkseg4encroach(m, b, &checksubseg)) {
+          /* Does the new vertex encroach upon this subsegment?  A vertex */
+          /*   on the far side may encroach upon it too; that one was    */
+          /*   there before, and is left for the subsegment queue.       */
+          sorg(checksubseg, subsegorg);
+          sdest(checksubseg, subsegdest);
+          if (checkseg4encroach(m, b, &checksubseg) &&
+              inlens(b, subsegorg, subsegdest, newvertex)) {
             success = ENCROACHINGVERTEX;
           }
         }
