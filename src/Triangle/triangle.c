@@ -1862,6 +1862,43 @@ struct badtriang *dequeuebadtriang(mesh *m)
 
 /*****************************************************************************/
 /*                                                                           */
+/*  inlens()   Check whether a vertex lies in the diametral lens of the      */
+/*             subsegment from `eorg' to `edest' (the diametral circle if    */
+/*             `conformdel' is set).                                         */
+/*                                                                           */
+/*  A dot product of two sides of the triangle the vertex makes with the     */
+/*  subsegment is used to check whether the angle at the vertex is greater   */
+/*  than (180 - 2 `minangle') degrees (for lenses; 90 degrees for diametral  */
+/*  circles).                                                                */
+/*                                                                           */
+/*****************************************************************************/
+
+#ifndef CDT_ONLY
+
+int inlens(behavior *b, vertex eorg, vertex edest, vertex eapex)
+{
+  REAL dotproduct;
+
+  dotproduct = (eorg[0] - eapex[0]) * (edest[0] - eapex[0]) +
+               (eorg[1] - eapex[1]) * (edest[1] - eapex[1]);
+  if (dotproduct < 0.0) {
+    if (b->conformdel ||
+        (dotproduct * dotproduct >=
+         (2.0 * b->goodangle - 1.0) * (2.0 * b->goodangle - 1.0) *
+         ((eorg[0] - eapex[0]) * (eorg[0] - eapex[0]) +
+          (eorg[1] - eapex[1]) * (eorg[1] - eapex[1])) *
+         ((edest[0] - eapex[0]) * (edest[0] - eapex[0]) +
+          (edest[1] - eapex[1]) * (edest[1] - eapex[1])))) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+#endif /* not CDT_ONLY */
+
+/*****************************************************************************/
+/*                                                                           */
 /*  checkseg4encroach()   Check a subsegment to see if it is encroached; add */
 /*                        it to the list if it is.                           */
 /*                                                                           */
@@ -1891,7 +1928,6 @@ int checkseg4encroach(mesh *m, behavior *b,
   struct otri neighbortri;
   struct osub testsym;
   struct badsubseg *encroachedseg;
-  REAL dotproduct;
   int encroached;
   int sides;
   vertex eorg, edest, eapex;
@@ -1910,22 +1946,9 @@ int checkseg4encroach(mesh *m, behavior *b,
     /* Find a vertex opposite this subsegment. */
     apex(neighbortri, eapex);
     /* Check whether the apex is in the diametral lens of the subsegment */
-    /*   (the diametral circle if `conformdel' is set).  A dot product   */
-    /*   of two sides of the triangle is used to check whether the angle */
-    /*   at the apex is greater than (180 - 2 `minangle') degrees (for   */
-    /*   lenses; 90 degrees for diametral circles).                      */
-    dotproduct = (eorg[0] - eapex[0]) * (edest[0] - eapex[0]) +
-                 (eorg[1] - eapex[1]) * (edest[1] - eapex[1]);
-    if (dotproduct < 0.0) {
-      if (b->conformdel ||
-          (dotproduct * dotproduct >=
-           (2.0 * b->goodangle - 1.0) * (2.0 * b->goodangle - 1.0) *
-           ((eorg[0] - eapex[0]) * (eorg[0] - eapex[0]) +
-            (eorg[1] - eapex[1]) * (eorg[1] - eapex[1])) *
-           ((edest[0] - eapex[0]) * (edest[0] - eapex[0]) +
-            (edest[1] - eapex[1]) * (edest[1] - eapex[1])))) {
-        encroached = 1;
-      }
+    /*   (the diametral circle if `conformdel' is set).                  */
+    if (inlens(b, eorg, edest, eapex)) {
+      encroached = 1;
     }
   }
   /* Check the other neighbor of the subsegment. */
@@ -1938,18 +1961,8 @@ int checkseg4encroach(mesh *m, behavior *b,
     apex(neighbortri, eapex);
     /* Check whether the apex is in the diametral lens of the subsegment */
     /*   (or the diametral circle, if `conformdel' is set).              */
-    dotproduct = (eorg[0] - eapex[0]) * (edest[0] - eapex[0]) +
-                 (eorg[1] - eapex[1]) * (edest[1] - eapex[1]);
-    if (dotproduct < 0.0) {
-      if (b->conformdel ||
-          (dotproduct * dotproduct >=
-           (2.0 * b->goodangle - 1.0) * (2.0 * b->goodangle - 1.0) *
-           ((eorg[0] - eapex[0]) * (eorg[0] - eapex[0]) +
-            (eorg[1] - eapex[1]) * (eorg[1] - eapex[1])) *
-           ((edest[0] - eapex[0]) * (edest[0] - eapex[0]) +
-            (edest[1] - eapex[1]) * (edest[1] - eapex[1])))) {
-        encroached += 2;
-      }
+    if (inlens(b, eorg, edest, eapex)) {
+      encroached += 2;
     }
   }
 

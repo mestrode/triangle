@@ -161,6 +161,8 @@ void enqueuebadtri(mesh *m, behavior *b, struct otri *enqtri,
 
 struct badtriang *dequeuebadtriang(mesh *m);
 
+int inlens(behavior *b, vertex eorg, vertex edest, vertex eapex);
+
 int checkseg4encroach(mesh *m, behavior *b,
                       struct osub *testsubseg);
 
