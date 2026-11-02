@@ -5803,8 +5803,13 @@ enum finddirectionresult finddirection(mesh *m, behavior *b,
       rightflag = 0;
     }
   }
-  int tries = 0;
-  while (leftflag && tries < NMAXTRY) {
+  /* Each turn moves to a different triangle around `startvertex', so more */
+  /*   turns than there are triangles is going in circles.  A vertex at the */
+  /*   end of a long row of collinear vertices can legitimately have a fan  */
+  /*   of thousands of triangles around it.                                 */
+  long maxtries = m->triangles.items;
+  long tries = 0;
+  while (leftflag && tries < maxtries) {
     /* Turn left until satisfied. */
     onextself(*searchtri);
     if (searchtri->tri == m->dummytri) {
@@ -5819,7 +5824,7 @@ enum finddirectionresult finddirection(mesh *m, behavior *b,
     leftflag = leftccw > 0.0;
     tries++;
   }
-  while (rightflag && tries < NMAXTRY ) {
+  while (rightflag && tries < maxtries) {
     /* Turn right until satisfied. */
     oprevself(*searchtri);
     if (searchtri->tri == m->dummytri) {
@@ -5834,7 +5839,7 @@ enum finddirectionresult finddirection(mesh *m, behavior *b,
     rightflag = rightccw > 0.0;
     tries++;
   }
-  if ( tries >= NMAXTRY )
+  if ( tries >= maxtries )
   {
     *status = TRI_FIND_DIRECTION;
     return WITHIN;
