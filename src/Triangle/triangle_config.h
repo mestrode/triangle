@@ -36,10 +36,8 @@
 #define TRI_SEG_SCOUT (-8)
 #define TRI_FILE_OPEN (-9)
 #define TRI_FILE_READ (-10)
+#define TRI_CYCLE (-11)
 #define TRI_NULL (-20)
-
-// Maximum number of attempts in finddirection to detect infinite loop.
-#define NMAXTRY 1000
 
 /* Set correct size for pointer alignment calculations */
 #if defined(_M_X64) || defined(__amd64__)

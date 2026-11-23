@@ -208,9 +208,16 @@
 #include "acute.h"
 #endif
 
-/* Random number seed is not constant, but I've made it global anyway.       */
+/* Random number seed.  Each thread has its own, set to 1 when a context is  */
+/* created, so a mesh does not depend on what other threads are meshing.    */
 
-unsigned long randomseed;                     /* Current random number seed. */
+#if defined(_MSC_VER)
+#define TRI_THREAD_LOCAL __declspec(thread)
+#else
+#define TRI_THREAD_LOCAL _Thread_local
+#endif
+
+static TRI_THREAD_LOCAL unsigned long randomseed;  /* Current random number seed. */
 
 /* Fast lookup arrays to speed some of the mesh manipulation primitives.     */
 
@@ -1488,6 +1495,8 @@ void triangleinit(mesh *m)
   m->samples = 1;         /* Point location should take at least one sample. */
   m->checksegments = 0;   /* There are no segments in the triangulation yet. */
   m->checkquality = 0;     /* The quality triangulation stage has not begun. */
+  m->cyclefail = 0;
+  m->scoutsteps = 0;
   m->incirclecount = m->counterclockcount = m->orient3dcount = 0;
   m->hyperbolacount = m->circletopcount = m->circumcentercount = 0;
   randomseed = 1;
@@ -1853,6 +1862,43 @@ struct badtriang *dequeuebadtriang(mesh *m)
 
 /*****************************************************************************/
 /*                                                                           */
+/*  inlens()   Check whether a vertex lies in the diametral lens of the      */
+/*             subsegment from `eorg' to `edest' (the diametral circle if    */
+/*             `conformdel' is set).                                         */
+/*                                                                           */
+/*  A dot product of two sides of the triangle the vertex makes with the     */
+/*  subsegment is used to check whether the angle at the vertex is greater   */
+/*  than (180 - 2 `minangle') degrees (for lenses; 90 degrees for diametral  */
+/*  circles).                                                                */
+/*                                                                           */
+/*****************************************************************************/
+
+#ifndef CDT_ONLY
+
+int inlens(behavior *b, vertex eorg, vertex edest, vertex eapex)
+{
+  REAL dotproduct;
+
+  dotproduct = (eorg[0] - eapex[0]) * (edest[0] - eapex[0]) +
+               (eorg[1] - eapex[1]) * (edest[1] - eapex[1]);
+  if (dotproduct < 0.0) {
+    if (b->conformdel ||
+        (dotproduct * dotproduct >=
+         (2.0 * b->goodangle - 1.0) * (2.0 * b->goodangle - 1.0) *
+         ((eorg[0] - eapex[0]) * (eorg[0] - eapex[0]) +
+          (eorg[1] - eapex[1]) * (eorg[1] - eapex[1])) *
+         ((edest[0] - eapex[0]) * (edest[0] - eapex[0]) +
+          (edest[1] - eapex[1]) * (edest[1] - eapex[1])))) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+#endif /* not CDT_ONLY */
+
+/*****************************************************************************/
+/*                                                                           */
 /*  checkseg4encroach()   Check a subsegment to see if it is encroached; add */
 /*                        it to the list if it is.                           */
 /*                                                                           */
@@ -1882,7 +1928,6 @@ int checkseg4encroach(mesh *m, behavior *b,
   struct otri neighbortri;
   struct osub testsym;
   struct badsubseg *encroachedseg;
-  REAL dotproduct;
   int encroached;
   int sides;
   vertex eorg, edest, eapex;
@@ -1901,22 +1946,9 @@ int checkseg4encroach(mesh *m, behavior *b,
     /* Find a vertex opposite this subsegment. */
     apex(neighbortri, eapex);
     /* Check whether the apex is in the diametral lens of the subsegment */
-    /*   (the diametral circle if `conformdel' is set).  A dot product   */
-    /*   of two sides of the triangle is used to check whether the angle */
-    /*   at the apex is greater than (180 - 2 `minangle') degrees (for   */
-    /*   lenses; 90 degrees for diametral circles).                      */
-    dotproduct = (eorg[0] - eapex[0]) * (edest[0] - eapex[0]) +
-                 (eorg[1] - eapex[1]) * (edest[1] - eapex[1]);
-    if (dotproduct < 0.0) {
-      if (b->conformdel ||
-          (dotproduct * dotproduct >=
-           (2.0 * b->goodangle - 1.0) * (2.0 * b->goodangle - 1.0) *
-           ((eorg[0] - eapex[0]) * (eorg[0] - eapex[0]) +
-            (eorg[1] - eapex[1]) * (eorg[1] - eapex[1])) *
-           ((edest[0] - eapex[0]) * (edest[0] - eapex[0]) +
-            (edest[1] - eapex[1]) * (edest[1] - eapex[1])))) {
-        encroached = 1;
-      }
+    /*   (the diametral circle if `conformdel' is set).                  */
+    if (inlens(b, eorg, edest, eapex)) {
+      encroached = 1;
     }
   }
   /* Check the other neighbor of the subsegment. */
@@ -1929,18 +1961,8 @@ int checkseg4encroach(mesh *m, behavior *b,
     apex(neighbortri, eapex);
     /* Check whether the apex is in the diametral lens of the subsegment */
     /*   (or the diametral circle, if `conformdel' is set).              */
-    dotproduct = (eorg[0] - eapex[0]) * (edest[0] - eapex[0]) +
-                 (eorg[1] - eapex[1]) * (edest[1] - eapex[1]);
-    if (dotproduct < 0.0) {
-      if (b->conformdel ||
-          (dotproduct * dotproduct >=
-           (2.0 * b->goodangle - 1.0) * (2.0 * b->goodangle - 1.0) *
-           ((eorg[0] - eapex[0]) * (eorg[0] - eapex[0]) +
-            (eorg[1] - eapex[1]) * (eorg[1] - eapex[1])) *
-           ((edest[0] - eapex[0]) * (edest[0] - eapex[0]) +
-            (edest[1] - eapex[1]) * (edest[1] - eapex[1])))) {
-        encroached += 2;
-      }
+    if (inlens(b, eorg, edest, eapex)) {
+      encroached += 2;
     }
   }
 
@@ -2270,7 +2292,7 @@ enum locateresult preciselocate(mesh *m, behavior *b,
                                 vertex searchpoint, struct otri *searchtri,
                                 int stopatsubsegment)
 {
-  int count = 0;
+  long count = 0;
   struct otri backtracktri;
   struct osub checkedge;
   vertex forg, fdest, fapex;
@@ -2353,7 +2375,10 @@ enum locateresult preciselocate(mesh *m, behavior *b,
       return OUTSIDE;
     }
 
-    if ( count > 10 )
+    /* Each step of the walk moves to a different triangle, so a walk that */
+    /*   has taken more steps than there are triangles is going in circles */
+    /*   Anything short of that is a legitimate walk across a large mesh.  */
+    if ( count > m->triangles.items )
     {
       return OUTSIDE;
     }
@@ -2918,11 +2943,13 @@ enum insertvertexresult insertvertex(mesh *m, behavior *b,
   vertex first;
   vertex leftvertex, rightvertex, botvertex, topvertex, farvertex;
   vertex segmentorg, segmentdest;
+  vertex subsegorg, subsegdest;
   REAL attrib;
   REAL area;
   enum insertvertexresult success;
   enum locateresult intersect;
   int doflip;
+  long circles;
   int mirrorflag;
   int enq;
   int i;
@@ -3245,8 +3272,17 @@ enum insertvertexresult insertvertex(mesh *m, behavior *b,
   org(horiz, first);
   rightvertex = first;
   dest(horiz, leftvertex);
-  /* Circle until finished. */
+  /* Circle until finished.  Each pass flips an edge, which adds a triangle */
+  /*   around the new vertex, or moves on to the next edge, so more passes   */
+  /*   than twice the triangles in the mesh means the flips are going in    */
+  /*   circles.  Input whose segments cross can leave the mesh that way.     */
+  /*   The vertex is in the mesh either way; the caller is told to stop.     */
+  circles = 0;
   while (1) {
+    if (++circles > 2 * m->triangles.items) {
+      m->cyclefail = 1;
+      return SUCCESSFULVERTEX;
+    }
     /* By default, the edge will be flipped. */
     doflip = 1;
 
@@ -3258,8 +3294,13 @@ enum insertvertexresult insertvertex(mesh *m, behavior *b,
         doflip = 0;
 #ifndef CDT_ONLY
         if (segmentflaws) {
-          /* Does the new vertex encroach upon this subsegment? */
-          if (checkseg4encroach(m, b, &checksubseg)) {
+          /* Does the new vertex encroach upon this subsegment?  A vertex */
+          /*   on the far side may encroach upon it too; that one was    */
+          /*   there before, and is left for the subsegment queue.       */
+          sorg(checksubseg, subsegorg);
+          sdest(checksubseg, subsegdest);
+          if (checkseg4encroach(m, b, &checksubseg) &&
+              inlens(b, subsegorg, subsegdest, newvertex)) {
             success = ENCROACHINGVERTEX;
           }
         }
@@ -5762,8 +5803,13 @@ enum finddirectionresult finddirection(mesh *m, behavior *b,
       rightflag = 0;
     }
   }
-  int tries = 0;
-  while (leftflag && tries < NMAXTRY) {
+  /* Each turn moves to a different triangle around `startvertex', so more */
+  /*   turns than there are triangles is going in circles.  A vertex at the */
+  /*   end of a long row of collinear vertices can legitimately have a fan  */
+  /*   of thousands of triangles around it.                                 */
+  long maxtries = m->triangles.items;
+  long tries = 0;
+  while (leftflag && tries < maxtries) {
     /* Turn left until satisfied. */
     onextself(*searchtri);
     if (searchtri->tri == m->dummytri) {
@@ -5778,7 +5824,7 @@ enum finddirectionresult finddirection(mesh *m, behavior *b,
     leftflag = leftccw > 0.0;
     tries++;
   }
-  while (rightflag && tries < NMAXTRY ) {
+  while (rightflag && tries < maxtries) {
     /* Turn right until satisfied. */
     oprevself(*searchtri);
     if (searchtri->tri == m->dummytri) {
@@ -5793,7 +5839,7 @@ enum finddirectionresult finddirection(mesh *m, behavior *b,
     rightflag = rightccw > 0.0;
     tries++;
   }
-  if ( tries >= NMAXTRY )
+  if ( tries >= maxtries )
   {
     *status = TRI_FIND_DIRECTION;
     return WITHIN;
@@ -5862,6 +5908,15 @@ void segmentintersection(mesh *m, behavior *b,
 	  return;
   }
   split = (ey * etx - ex * ety) / denom;
+  /* The intersection lies on the subsegment being split, give or take    */
+  /*   roundoff.  Segments that are nearly parallel can give a denominator */
+  /*   so small that `split' is not finite, or lies well off the           */
+  /*   subsegment; inserting that vertex corrupts the mesh, or puts a      */
+  /*   point with NaN coordinates into it.                                 */
+  if (!(split >= -1.0e-9 && split <= 1.0 + 1.0e-9)) {
+      *status = TRI_SEG_INTERSECT;
+	  return;
+  }
   /* Create the new vertex. */
   newvertex = (vertex) poolalloc(&m->vertices);
   /* Interpolate its coordinate and attributes. */
@@ -5872,6 +5927,10 @@ void segmentintersection(mesh *m, behavior *b,
   setvertextype(newvertex, INPUTVERTEX);
   /* Insert the intersection vertex.  This should always succeed. */
   success = insertvertex(m, b, newvertex, splittri, splitsubseg, 0, 0, 0);
+  if (m->cyclefail) {
+    *status = TRI_CYCLE;
+    return;
+  }
   if (success != SUCCESSFULVERTEX) {
       // TODO: Internal error: segmentintersection()
       // Failure to split a segment.
@@ -5949,6 +6008,14 @@ int scoutsegment(mesh *m, behavior *b, struct otri *searchtri,
   vertex leftvertex, rightvertex;
   enum finddirectionresult collinear;
   subseg sptr;                      /* Temporary variable used by tspivot(). */
+
+  /* Each call reaches a vertex further along the segment, or is one of the */
+  /*   two that follow a midpoint conformingedge() adds, so more calls than */
+  /*   twice the vertices means the insertion is going in circles.          */
+  if (++m->scoutsteps > 2 * m->vertices.items) {
+    *status = TRI_SEG_SCOUT;
+    return TRI_SEG_SCOUT;
+  }
 
   collinear = finddirection(m, b, searchtri, endpoint2, status);
   if (*status < 0) return TRI_SEG_SCOUT;
@@ -6252,6 +6319,7 @@ void constrainededge(mesh *m, behavior *b,
   REAL area;
   int collision;
   int done;
+  long digs;
   triangle ptr;             /* Temporary variable used by sym() and oprev(). */
   subseg sptr;                      /* Temporary variable used by tspivot(). */
 
@@ -6262,8 +6330,21 @@ void constrainededge(mesh *m, behavior *b,
   /*   between endpoint1 and endpoint2.                            */
   collision = 0;
   done = 0;
+  digs = 0;
   do {
+    /* Each pass removes an edge crossing the segment, so more passes than */
+    /*   there are triangles means the dig is going in circles.            */
+    if (++digs > m->triangles.items) {
+      *status = TRI_SEG_INSERT;
+      return;
+    }
     org(fixuptri, farvertex);
+    if (farvertex == (vertex) NULL) {
+      /* The dig has left the triangulation; the segment cannot be */
+      /*   inserted.                                                 */
+      *status = TRI_SEG_INSERT;
+      return;
+    }
     /* `farvertex' is the extreme point of the polygon we are "digging" */
     /*   to get from endpoint1 to endpoint2.                           */
     if ((farvertex[0] == endpoint2[0]) && (farvertex[1] == endpoint2[1])) {
@@ -6311,6 +6392,7 @@ void constrainededge(mesh *m, behavior *b,
           collision = 1;
           /* Insert a vertex at the intersection. */
           segmentintersection(m, b, &fixuptri, &crosssubseg, endpoint2, status);
+          if (*status < 0) return;
           done = 1;
         }
       }
@@ -6323,6 +6405,7 @@ void constrainededge(mesh *m, behavior *b,
   if (collision) {
     /* Insert the remainder of the segment. */
     if (!scoutsegment(m, b, &fixuptri, endpoint2, newmark, status)) {
+      if (*status < 0) return;
       constrainededge(m, b, &fixuptri, endpoint2, newmark, status);
     }
   }
@@ -6341,6 +6424,8 @@ void insertsegment(mesh *m, behavior *b,
   triangle encodedtri;
   vertex checkvertex;
   triangle ptr;                         /* Temporary variable used by sym(). */
+
+  m->scoutsteps = 0;
 
   /* Find a triangle whose origin is the segment's first endpoint. */
   checkvertex = (vertex) NULL;
@@ -7260,6 +7345,10 @@ void splitencsegs(mesh *m, behavior *b, int triflaws, int *status)
         /* Insert the splitting vertex.  This should always succeed. */
         success = insertvertex(m, b, newvertex, &enctri, &currentenc,
                                1, triflaws, 0);
+        if (m->cyclefail) {
+          *status = TRI_CYCLE;
+          return;
+        }
         if ((success != SUCCESSFULVERTEX) && (success != ENCROACHINGVERTEX)) {
           // TODO: Internal error: splitencsegs()
           // Failure to split a segment.
@@ -7351,8 +7440,11 @@ void splittriangle(mesh *m, behavior *b,
       tri_findcircumcenter( m, b, borg, bdest, bapex, newvertex, &xi, &eta, 1 );
 #endif
 
-    /* Check whether the new vertex lies on a triangle vertex. */
-    if (((newvertex[0] == borg[0]) && (newvertex[1] == borg[1])) ||
+    /* Check whether the new vertex lies on a triangle vertex, or could not  */
+    /*   be placed at all: a triangle with no area has no circumcenter, and */
+    /*   the one computed for it is not finite.                             */
+    if (!isfinite(newvertex[0]) || !isfinite(newvertex[1]) ||
+        ((newvertex[0] == borg[0]) && (newvertex[1] == borg[1])) ||
         ((newvertex[0] == bdest[0]) && (newvertex[1] == bdest[1])) ||
         ((newvertex[0] == bapex[0]) && (newvertex[1] == bapex[1]))) {
 #ifdef _DEBUG
@@ -7478,6 +7570,10 @@ void enforcequality(mesh *m, behavior *b, int *status)
       /* Fix one bad triangle by inserting a vertex at its circumcenter. */
       badtri = dequeuebadtriang(m);
       splittriangle(m, b, badtri);
+      if (m->cyclefail) {
+        *status = TRI_CYCLE;
+        return;
+      }
       if (m->badsubsegs.items > 0) {
         /* Put bad triangle back in queue for another try later. */
         enqueuebadtriang(m, b, badtri);
