@@ -447,12 +447,11 @@ impl Mesh {
     }
 
     /// C infect (triangle.h:875): set the viral-infection bit (bit 1) of
-    /// word 6 of the triangle row. KNOWN GAP, issue #22: with the ADR 0002
-    /// packing, a triangle-side subseg handle (tri[6+orient], ss<<1|
-    /// ssorient) occupies bit 1 with its row id, so infecting a mesh with
-    /// segments writes into the stored handle's id bits where C wrote only
-    /// the spare alignment bit. Resolving the packing (issue #22) may move
-    /// this bit; the corpus keeps subsequent changes honest.
+    /// word 6 of the triangle row. With -p the word holds a stored subseg
+    /// handle; under the amended packing (ADR 0002 amendment, issue #22)
+    /// bit 1 is spare in every stored handle exactly like C's pointer-
+    /// alignment bit, so this is the literal C mirror on -p rows and
+    /// plain rows alike.
     pub(crate) fn infect(&mut self, o: Otri) {
         let w = self.tri_slot(o.tri, 6);
         self.set_tri_slot(o.tri, 6, w | 2);
@@ -464,7 +463,7 @@ impl Mesh {
         self.set_tri_slot(o.tri, 6, w & !2);
     }
 
-    /// C infected (triangle.h:885). See the infect caveat (issue #22).
+    /// C infected (triangle.h:885).
     #[inline]
     pub(crate) fn infected(&self, o: Otri) -> bool {
         self.tri_slot(o.tri, 6) & 2 != 0
@@ -851,23 +850,27 @@ mod tests {
 
     #[test]
     fn infect_flips_the_bit_and_uninfect_restores() {
-        // slot 6 only exists once the row grew past the 48-byte plain
-        // geometry; C runs the virus under quality meshing (vararea rows).
-        // With -p the slot aliases the stored subseg handle exactly like
-        // the C bit aliases the pointer's spare alignment bit - except the
-        // port packing has no spare bit there: issue #22 (KNOWN GAP).
-        let mut m = Mesh::new(16, 2, 0, 0, false, 1, false, true, false, false).expect("init");
+        // C's own case: a -p mesh, where word 6 holds stored subseg handles
+        // (every fresh triangle side starts bonded to the omnipresent
+        // subsegment). Under the amended packing bit 1 is spare in every
+        // stored handle, so the flag mirrors C exactly (issue #22 resolved).
+        let mut m = mesh(true);
         let a = Otri {
             tri: DUMMY_TRI,
             orient: 0,
         };
-        assert_eq!(m.tri_slot(a.tri, 6), 0);
+        let dummy_sub = sencode(Osub {
+            ss: DUMMY_SUB,
+            ssorient: 0,
+        });
+        assert_eq!(dummy_sub, 4, "the DUMMY_SUB stored word moved to ss<<2");
+        assert_eq!(m.tri_slot(a.tri, 6), dummy_sub);
         assert!(!m.infected(a));
         m.infect(a);
-        assert_eq!(m.tri_slot(a.tri, 6), 2);
+        assert_eq!(m.tri_slot(a.tri, 6), dummy_sub | 2);
         assert!(m.infected(a));
         m.uninfect(a);
-        assert_eq!(m.tri_slot(a.tri, 6), 0);
+        assert_eq!(m.tri_slot(a.tri, 6), dummy_sub);
         assert!(!m.infected(a));
     }
 

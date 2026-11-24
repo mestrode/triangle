@@ -31,12 +31,12 @@ Status: accepted 2026-11-24; decided in the wayfinder ticket Core data model: ha
 
 ### 1. Handle representation: packed u64 slot encoding, C-mirror unpacked register form
 
-Stored handles. Every stored handle (neighbor slots tri[0..2], subsegment slots tri[6..8] and ss[0..1], triangle words ss[6..7], vertex2tri) is one packed u64: a 32-bit row index in the high bits, the orientation in the low 2 bits (triangles) or the low 1 bit (subsegments). The all-zero word keeps the exact meaning of the C NULL slot and is never decoded, exactly as C never decodes NULL.
+Stored handles. Every stored handle (neighbor slots tri[0..2], subsegment slots tri[6..8] and ss[0..1], triangle words ss[6..7], vertex2tri) is one packed u64: a 32-bit row index in the high bits, the orientation in the low 2 bits (triangles and subsegments alike; a subsegment's bit 1 stays permanently spare - the mirror of C's pointer-alignment bit that the viral-infection flag occupies on triangle word 6, triangle.h:875 - see the amendment at the end). The all-zero word keeps the exact meaning of the C NULL slot and is never decoded, exactly as C never decodes NULL.
 
     encode(o: Otri)  = (o.tri as u64) << 2 | o.orient     C analog: pointer | orient
     decode(w: u64)   = tri = w >> 2, orient = w & 3       C analog: mask 3l, xor
-    sencode(s: Osub) = (s.ss as u64) << 1 | s.ssorient    subsegments: 1 tag bit
-    sdecode(w: u64)  = ss = w >> 1, ssorient = w & 1
+    sencode(s: Osub) = (s.ss as u64) << 2 | s.ssorient    subsegments mask the low 2 bits, like C; bit 1 = spare virus bit
+    sdecode(w: u64)  = ss = w >> 2, ssorient = w & 1
 
 Semantics are identical to triangle.h:703-708: a one-to-one mapping between (row, orientation) and one machine word, orientation recovered from the low bits. Density is exactly C's: 8 bytes per slot, 48-byte triangle rows without -p. 32-bit row ids cap a pool at 4.29e9 items (settled on the map as far above realistic mesh sizes); the unused high bits of the u64 are spare, the mirror of C's unused alignment bits.
 
@@ -145,12 +145,12 @@ Implementable shapes (not a full transliteration; module placement lands with #1
     #[inline]
     pub(crate) fn sencode(s: Osub) -> u64 {
         debug_assert!(s.ssorient < 2);
-        ((s.ss as u64) << 1) | s.ssorient as u64
+        ((s.ss as u64) << 2) | s.ssorient as u64
     }
     #[inline]
     pub(crate) fn sdecode(w: u64) -> Osub {
         debug_assert!(w != 0);
-        Osub { ss: (w >> 1) as u32, ssorient: (w & 0b1) as u8 }
+        Osub { ss: (w >> 2) as u32, ssorient: (w & 0b1) as u8 }
     }
 
     // slots.rs - the one private accessor chokepoint (all pool storage access lives here)
@@ -229,3 +229,26 @@ Notes:
 - plus1mod3/minus1mod3 exist in the C core already; org/dest/apex, onext, and friends keep the exact slot arithmetic of triangle.h:703-1090; the sketch shows the shapes, not every offset table.
 - WordPool is the #9 pool behind the section 4 interface; the chokepoint is its only client.
 - All functions above are safe; the whole core targets zero unsafe, with debug_asserts carrying the invariants and Miri runs of the corpus as the rung-1 acceptance test.
+
+## Amendment (2026-11-24): subsegment packing reserves both low bits (issue #22)
+
+Section 1 pinned subsegment handles at ss<<1 - one orientation bit, the row
+id from bit 1 upward. That collided with C's viral-infection flag: C's
+infect() tags bit 1 of triangle word 6 (triangle.h:875-887), whose masked
+-out low bits come from sdecode's ~3 (triangle.h:925-933) - C keeps bit 1
+free by 4-byte pointer alignment regardless of what the slot holds. Under
+ss<<1 the infection tag destroyed the packed row id instead. Found while
+landing the stage-1 foundation (PR #23, issue #22); resolved by moving the
+whole subsegment packing up one bit:
+
+    sencode(s: Osub) = (s.ss as u64) << 2 | s.ssorient    bit 0 orient, bit 1 spare (the virus)
+    sdecode(w: u64)  = ss = w >> 2, ssorient = w & 1      the literal mirror of C's mask ~3
+
+Section 1 and the appendix sketch above are updated in place to match. Consequences:
+- Triangle encode/decode are untouched.
+- Subsegment row ids cap at 2^30 (still far above realistic subseg counts);
+  triangle ids still cap at 2^32.
+- The DUMMY_SUB stored word moves from 2 to 4.
+- infect/uninfect/infected (slots.rs) become literal C mirrors at bit 1 of
+  word 6, on -p rows and plain rows alike; the KNOWN GAP comments are gone.
+- Deviation D1's wording is updated ("low 2 bits" for both handle kinds).
