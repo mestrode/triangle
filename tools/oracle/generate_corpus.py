@@ -18,7 +18,9 @@ Case classes
   pslg_concave  L-shaped domain (concave corner) with random interior
   pslg_wall     unit square with an interior wall segment (open slit)
 
-Size classes: s, m, l. The area-constrained families use a per-case area
+Size classes: s, m, l, plus an opt-in xl (via --sizes, for the
+performance gate's MT variants, ticket #11; default output unchanged).
+The area-constrained families use a per-case area
 target = domain_area / area_target_elements, so element counts (and runtimes)
 stay comparable across size classes.
 
@@ -36,7 +38,7 @@ reader (the same format the C writers use). Two runs of this script produce
 identical bytes; the harness self-check verifies this by regenerating into a
 temp directory and comparing hashes.
 
-Usage: python3 tools/oracle/generate_corpus.py [--out DIR] [--quiet]
+Usage: python3 tools/oracle/generate_corpus.py [--out DIR] [--sizes s,m,l] [--quiet]
 """
 
 import argparse
@@ -49,7 +51,7 @@ MANIFEST_VERSION = 1
 
 # Per-case-class seeds; fixed integers, never derived from time or machine state.
 SEEDS = {"grid": 11, "random": 22, "pslg_hole": 33, "pslg_concave": 44, "pslg_wall": 55}
-SIZE_INDEX = {"s": 0, "m": 1, "l": 2}
+SIZE_INDEX = {"s": 0, "m": 1, "l": 2, "xl": 3}
 
 # Size class parameters: (grid n, random points, pslg interior points,
 # area target elements).
@@ -57,6 +59,10 @@ SIZE_PARAMS = {
     "s": (10, 40, 15, 200),
     "m": (20, 300, 150, 3000),
     "l": (36, 1200, 600, 30000),
+    # xl is opt-in (--sizes xl) for the performance gate's MT variants
+    # (ticket #11): a heavier single-mesh workload class so parallel scaling
+    # is measurable. It is NOT part of the sealed 120-run harness contract.
+    "xl": (100, 100000, 50000, 1000000),
 }
 
 # Option families, per the strategy decision (ticket #6, ADR 0001): the full
@@ -251,7 +257,18 @@ def main():
     parser.add_argument("--out", default=None,
                         help="output directory (default: tools/oracle/work/corpus)")
     parser.add_argument("--quiet", action="store_true", help="suppress per-case output")
+    parser.add_argument("--sizes", default="s,m,l",
+                        help="comma-separated size classes to generate "
+                             "(default s,m,l). 'xl' is opt-in: a heavier "
+                             "class for the performance-gate MT variants "
+                             "(ticket #11); the default s,m,l output IS the "
+                             "sealed 120-run differential-harness contract")
     args = parser.parse_args()
+
+    sizes = [t_.strip() for t_ in args.sizes.split(",") if t_.strip()]
+    if not sizes or any(t_ not in SIZE_INDEX for t_ in sizes):
+        parser.error("--sizes must be a comma-separated list drawn from %s"
+                     % ", ".join(SIZE_INDEX))
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
     out = args.out or os.path.join(script_dir, "work", "corpus")
@@ -259,7 +276,7 @@ def main():
 
     manifest_cases = []
     for kind in ("grid", "random", "pslg_hole", "pslg_concave", "pslg_wall"):
-        for size in ("s", "m", "l"):
+        for size in sizes:
             case_id = "%s_%s" % (kind, size)
             case_dir = os.path.join(out, case_id)
             os.makedirs(case_dir, exist_ok=True)
