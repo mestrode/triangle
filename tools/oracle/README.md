@@ -65,7 +65,10 @@ committed; regeneration is byte-identical, verified by the self-check):
 Each case produces `input.node` and `input.poly` plus a manifest
 (`work/corpus/manifest.json`) with per-file sha256 hashes and per-family
 argv. Area targets scale with domain area and size class so element counts
-(and runtimes) stay comparable.
+(and runtimes) stay comparable. An opt-in size class `xl` exists for the
+performance gate (\#11): it is generated separately (`--sizes xl`, e.g.
+`--out work/corpus-mt`) so the default corpus stays the sealed 120-run
+parity contract.
 
 ## Differential harness
 
@@ -158,6 +161,49 @@ regenerates byte-identically.
   single-threaded parity in #11 compares against the same
   `build-oracle.sh` binary.
 
+## Performance gate (#11)
+
+The benchmark corpus IS the harness corpus: `run-bench.sh`/`bench.py` time
+whole-process wall time over exactly those (case, family) runs, under the
+harness's own invocation contract ('./candidate <options> <input>', symlinked,
+stdout to file). ADR 0001's single-threaded parity goal is therefore a single
+documented command:
+
+```sh
+tools/oracle/run-bench.sh --candidate <rust-cli> --gate 1.05
+```
+
+Configuration (ticket #11): the timed set is sizes m and l of every case
+class x option family (80 runs); size s stays corpus-only, its runs are
+startup-dominated and measure process overhead, not the meshing kernels.
+Per timed entry, oracle and candidate runs interleave: 3 warmup runs per
+side, then 25 timed runs per side; the per-side statistic is the median.
+Binding numbers: the sum-of-medians total ratio and the geometric mean of
+per-run ratios, both within the tolerance (1.05), plus a per-run ceiling
+(1.35) as a regression tripwire. The tolerance is not a guess - it is bounded
+below by the measured noise floor of the gate machine: pointing
+`--candidate` at the pinned oracle itself measures the ratio distribution
+around 1.0, and on the 2-vCPU build server the aggregate total ratio stayed
+within about +/-1.6% across repeated probes (single-run CV ~15%; worst
+per-run median-of-25 ratio 1.16). A failed gate may be rerun once, binding
+on the rerun. Re-derive the tolerance with the same noise probe whenever
+the gate machine changes.
+
+MT variants: `--threads N` passes `TRIANGLE_THREADS=N` to the candidate only
+(the pinned C oracle is single-threaded and ignores it). MT scaling is
+measured against the SAME candidate at N=1 (the single-threaded Rust
+baseline), never against the C oracle; the MT timed set is sizes l and xl;
+each thread-count variant is pinned to N vCPUs via `--pin` (taskset). The
+serial path stays byte-identical in any case (the permanent gate;
+MT-output equivalence follows the parallelism determinism ruling, ticket
+#12). Hardware for the MT axis is a separate, still-open user decision
+(see ticket #11).
+
+Invocation schedule (ADR 0001): the gate runs at stage-1 completion, at
+every idiomatization rung boundary (rungs 1-4, before a rung lands), and as
+the end gate - with the serial byte-identity gate (`run-harness.sh`)
+running at all of those points regardless.
+
 ## File map
 
 ```
@@ -166,5 +212,7 @@ tools/oracle/generate_corpus.py  deterministic, seeded corpus generator
 tools/oracle/diff_harness.py     differential runner + localization report
 tools/oracle/stub_candidate.py   injected-divergence stub (harness validation)
 tools/oracle/run-harness.sh      single entry point (the documented command)
-tools/oracle/README.md           this file
+tools/oracle/bench.py             performance-gate benchmark runner (#11)
+tools/oracle/run-bench.sh         performance-gate single entry point (#11)
+tools/oracle/README.md            this file
 ```
