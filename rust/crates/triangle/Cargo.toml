@@ -1,0 +1,16 @@
+[package]
+name = "triangle"
+description = "Rust port of Triangle (Shewchuk's Triangle 1.6 + aCute refinement), verified byte-identical against the pinned C oracle"
+version.workspace = true
+edition.workspace = true
+# No dependencies on day one (ADR 0004). Adding one needs its own ticket.
+
+[features]
+default = ["acute"]
+# aCute refinement (the -U max-angle family). The mirror of the C NO_ACUTE
+# compile switch, inverted: C builds WITH aCute unless NO_ACUTE is defined;
+# this crate builds with the acute feature unless --no-default-features.
+acute = []
+
+[lints]
+workspace = true

@@ -44,6 +44,17 @@ _Avoid_: test set, fixtures
 The list recording every deliberate departure from 1:1 during transliteration.
 _Avoid_: exception list
 
+## Architecture
+
+**Module map**: The standing assignment of every C compilation unit, and of each named split of triangle.c, to exactly one Rust module, recorded in docs/function-mapping.md; the stage-1 tickets fill the per-function rows, the module assignment itself is decided by ADR 0004.
+_Avoid_: mirror directory, file-by-file port
+
+**Error funnel**: The single seam at the api module boundary where the transliterated core's mirrored internal status codes are translated into the public Error taxonomy; no other code maps internal codes to public errors.
+_Avoid_: error codes, exceptions, panics
+
+**Candidate contract**: The differential harness's invocation rule (tools/oracle): the Rust CLI runs as ./candidate <options> <input> inside a prepared run directory, writing the standard input.1.* outputs with exit 0 on success.
+_Avoid_: wrapper script, argument compatibility set
+
 ## Data model
 
 **Packed handle**:

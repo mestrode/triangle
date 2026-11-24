@@ -1,0 +1,11 @@
+[package]
+name = "triangle-cli"
+description = "The CLI of the Rust Triangle port; the differential harness's candidate (triangle-CLI interface)"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+triangle = { path = "../triangle" }
+
+[lints]
+workspace = true
