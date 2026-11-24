@@ -7,9 +7,10 @@
 //! (tools/oracle/, see docs/adr/0001-port-strategy.md). On the serial path
 //! this parity guarantee is permanent.
 //!
-//! On day one only the API shell described in
-//! docs/adr/0004-crate-api-architecture.md exists; the core modules below
-//! are transliteration zones filled by the stage-1 tickets.
+//! The day-one API shell of docs/adr/0004-crate-api-architecture.md
+//! (section 5) is implemented; the core modules below are
+//! transliteration zones filled by the stage-1 tickets (entry points
+//! whose core has not landed yet return the marked scaffolding error).
 //!
 //! - 64-bit targets only (x86-64, aarch64): the packed-handle data model and
 //!   the byte-parity gate are pinned to 64-bit (docs/adr/0002).
@@ -27,18 +28,22 @@
 )]
 
 // ---------------------------------------------------------------------------
-// Public API shell modules (idiomatic from day one; ADR 0004, section 5).
-// They re-export through the crate root once their types exist:
-//     pub use api::{triangulate, Mesh, MeshOutput, Statistics, Quality, BoundingBox};
-//     pub use error::{Error, Result};
-//     pub use input::{MeshInput, Point2};
-//     pub use options::{Options, VertexSample};
+// Public API shell modules (idiomatic from day one; ADR 0004, sections
+// 4-6), re-exported at the crate root as the day-one surface:
+// triangulate, Mesh, Options, MeshInput, MeshOutput, Statistics,
+// Quality, BoundingBox, Error, Result, Unsuitable, VertexSample and
+// the version constants.
 // ---------------------------------------------------------------------------
 
 pub mod api;
 pub mod error;
 pub mod input;
 pub mod options;
+
+pub use api::{triangulate, BoundingBox, Mesh, MeshOutput, Quality, Statistics};
+pub use error::{Error, Result, SegmentRecoveryKind};
+pub use input::{Hole, MeshInput, Point2, Region};
+pub use options::{Options, Unsuitable, VertexSample};
 
 // ---------------------------------------------------------------------------
 // Transliterated core (private; fills with the stage-1 implementation

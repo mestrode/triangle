@@ -680,18 +680,40 @@ impl Mesh {
 mod tests {
     use super::*;
     use crate::mesh::Mesh;
+    use crate::options::Behavior;
 
     /// A small mesh for slot tests. invertices 16 keeps the first blocks at
     /// the per-block constants; order 1 (linear elements); poly gates -p.
     fn mesh(poly: bool) -> Mesh {
-        Mesh::new(16, 2, 0, 0, poly, 1, poly, false, false, false).expect("mesh init")
+        Mesh::new(
+            &Behavior {
+                poly,
+                usesegments: poly,
+                ..Behavior::default_form()
+            },
+            16,
+            2,
+            0,
+            0,
+        )
+        .expect("mesh init")
     }
 
     #[test]
     fn int_overlay_preserves_the_other_half() {
         // a -n mesh: word 6 exists (the 52-byte minimum row) and is the
         // numbering overlay slot; without -p it carries no stored handle
-        let mut m = Mesh::new(16, 2, 0, 0, false, 1, false, false, false, true).expect("init");
+        let mut m = Mesh::new(
+            &Behavior {
+                neighbors: true,
+                ..Behavior::default_form()
+            },
+            16,
+            2,
+            0,
+            0,
+        )
+        .expect("init");
         // the numbering slot: write through the overlay while the high half
         // holds a foreign value and check it survives
         let half = HalfWord {
@@ -957,7 +979,17 @@ mod tests {
         // shape-level check of the -n numbering overlay the init pins
         let m = mesh(false);
         assert_eq!(m.tri_shape.numberindex, None);
-        let mn = Mesh::new(16, 2, 0, 0, false, 1, false, false, false, true).expect("init");
+        let mn = Mesh::new(
+            &Behavior {
+                neighbors: true,
+                ..Behavior::default_form()
+            },
+            16,
+            2,
+            0,
+            0,
+        )
+        .expect("init");
         assert_eq!(
             mn.tri_shape.numberindex,
             Some(HalfWord {
@@ -975,7 +1007,17 @@ mod tests {
 
     #[test]
     fn attribute_and_areabound_slots() {
-        let mut m = Mesh::new(16, 2, 0, 2, false, 1, false, true, false, false).expect("init");
+        let mut m = Mesh::new(
+            &Behavior {
+                vararea: true,
+                ..Behavior::default_form()
+            },
+            16,
+            2,
+            0,
+            2,
+        )
+        .expect("init");
         // eextras 2 + vararea: attributes at words 6,7; areabound at 8
         let t = m.tri_alloc().expect("alloc");
         m.set_tri_attribute(t, 0, 0.25);

@@ -1,0 +1,6 @@
+# The workspace channel pin (the stage-1 shell PR). local gates and CI
+# both compile with this exact stable toolchain so the byte-parity
+# campaign runs against one known compiler; rustup auto-installs it.
+[toolchain]
+channel = "1.100.0"
+components = ["rustfmt", "clippy"]

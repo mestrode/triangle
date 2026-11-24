@@ -17,13 +17,15 @@
 //! vertexdealloc / vertextraverse, badsubsegdealloc / badsubsegtraverse,
 //! getvertex, triangledeinit (triangle.c:1196-1408).
 //!
-//! Stage-1 note: the init functions take primitive stand-ins for the
-//! behavior fields they read; options.rs supplies the Behavior struct in
-//! the stage-1 shell PR. The blanket below silences ahead-of-use dead_code
-//! until the consuming modules land.
+//! The behavior fields the init functions read arrive on the normalized
+//! Behavior (options.rs): Mesh::new takes &Behavior exactly where C's
+//! construction path would read its context-owned behavior struct. The
+//! blanket below silences ahead-of-use dead_code until the consuming
+//! modules land.
 #![allow(dead_code)]
 
 use crate::handles::{encode, sencode, Osub, Otri, DUMMY_SUB, DUMMY_TRI};
+use crate::options::Behavior;
 use crate::pool::{Oom, WordPool};
 use crate::slots::{HalfWord, TriShape, VertexShape};
 
@@ -79,21 +81,16 @@ impl Mesh {
     /// C's initializevertexpool (triangle.c:1100) and
     /// initializetrisubpools (triangle.c:1136), which ends in dummyinit.
     ///
-    /// Stage-1 stand-ins for the fields the C behavior struct supplies
-    /// (options.rs lands in the stage-1 shell PR): poly, order,
-    /// usesegments, vararea, regionattrib, neighbors.
-    #[allow(clippy::too_many_arguments)]
+    /// The behavior-derived fields (poly, order, usesegments, vararea,
+    /// regionattrib, neighbors) arrive on the normalized &Behavior, the
+    /// field-mirror of C's struct behavior (options.rs; its source is
+    /// Options::validate).
     pub(crate) fn new(
+        b: &Behavior,
         invertices: i32,
         mesh_dim: i32,
         nextras: i32,
         eextras: i32,
-        poly: bool,
-        order: i32,
-        usesegments: bool,
-        vararea: bool,
-        regionattrib: bool,
-        neighbors: bool,
     ) -> Result<Mesh, Oom> {
         let mut m = Mesh {
             // poolzero state for the three structural pools (dormant until
@@ -150,8 +147,14 @@ impl Mesh {
             nextras,
             eextras,
         };
-        m.initializevertexpool(poly)?;
-        m.initializetrisubpools(order, usesegments, vararea, regionattrib, neighbors)?;
+        m.initializevertexpool(b.poly)?;
+        m.initializetrisubpools(
+            b.order,
+            b.usesegments,
+            b.vararea,
+            b.regionattrib,
+            b.neighbors,
+        )?;
         Ok(m)
     }
 
@@ -393,6 +396,27 @@ mod tests {
     use crate::handles::Otri;
     use crate::slots::{HalfWord, TriShape};
 
+    /// Test-assembled Behavior with exactly the fields the geometry
+    /// reads; mirrors the direct C call shapes of the landed init rows.
+    fn behavior(
+        poly: bool,
+        order: i32,
+        usesegments: bool,
+        vararea: bool,
+        regionattrib: bool,
+        neighbors: bool,
+    ) -> Behavior {
+        Behavior {
+            poly,
+            order,
+            usesegments,
+            vararea,
+            regionattrib,
+            neighbors,
+            ..Behavior::default_form()
+        }
+    }
+
     fn mesh(
         poly: bool,
         order: i32,
@@ -402,16 +426,11 @@ mod tests {
         neighbors: bool,
     ) -> Mesh {
         Mesh::new(
+            &behavior(poly, order, usesegments, vararea, regionattrib, neighbors),
             16,
             2,
             0,
             0,
-            poly,
-            order,
-            usesegments,
-            vararea,
-            regionattrib,
-            neighbors,
         )
         .expect("mesh init")
     }
@@ -516,7 +535,7 @@ mod tests {
         assert_eq!(m.tri_shape.elemattribindex, 9);
         // -p with two element attributes and vararea: elemattribindex 9,
         // areaboundindex 11, trisize (11 + 1) * 8 = 96 -> stride 12
-        let m = Mesh::new(16, 2, 0, 2, true, 1, true, true, false, false).expect("init");
+        let m = Mesh::new(&behavior(true, 1, true, true, false, false), 16, 2, 0, 2).expect("init");
         assert_eq!(m.tri_shape.elemattribindex, 9);
         assert_eq!(m.tri_shape.areaboundindex, 11);
         assert_eq!(m.tri_shape.stride, 12);
@@ -606,7 +625,14 @@ mod tests {
         assert_eq!(m.splaynodes.stride(), 5);
         assert_eq!(m.splaynodes.block_items(), 508);
         // large invertices stretch the first blocks like C
-        let big = Mesh::new(6000, 2, 0, 0, false, 1, false, false, false, false).expect("init");
+        let big = Mesh::new(
+            &behavior(false, 1, false, false, false, false),
+            6000,
+            2,
+            0,
+            0,
+        )
+        .expect("init");
         assert_eq!(big.triangles.first_block_items(), 2 * 6000 - 2);
         assert_eq!(big.vertices.first_block_items(), 6000);
     }
@@ -634,7 +660,8 @@ mod tests {
 
     #[test]
     fn maketriangle_with_attributes_initializes_the_c_values() {
-        let mut m = Mesh::new(16, 2, 0, 2, true, 1, true, true, false, false).expect("init");
+        let mut m =
+            Mesh::new(&behavior(true, 1, true, true, false, false), 16, 2, 0, 2).expect("init");
         let a = m.maketriangle(true, true).expect("alloc");
         for i in 0..2 {
             assert_eq!(m.tri_attribute(a.tri, i), 0.0);

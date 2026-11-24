@@ -1,0 +1,36 @@
+# Rust gates (ADR 0004 section 8; the stage-1 shell PR): the stable-only
+# mirror of the local gate set. Miri stays out of CI (slow, advisory;
+# the oracle workflow keeps the C-side gate, and the differential
+# harness becomes CI when the Rust CLI reaches the candidate contract
+# in the I/O phase).
+name: rust
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    paths:
+      - "rust/**"
+      - ".github/workflows/rust.yml"
+
+jobs:
+  stable:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        # rust/rust-toolchain.toml pins the exact stable channel.
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v4
+      - name: fmt
+        run: cargo fmt --check
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: build
+        run: cargo build
+      - name: test
+        run: cargo test
+      - name: build (NO_ACUTE mirror)
+        run: cargo build --no-default-features
+      - name: test (NO_ACUTE mirror)
+        run: cargo test --no-default-features
