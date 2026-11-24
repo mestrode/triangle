@@ -4,7 +4,7 @@
 # Wayfinder ticket #11: Performance gate and benchmark suite.
 #
 #   tools/oracle/run-bench.sh --candidate BIN                benchmark vs oracle
-#   tools/oracle/run-bench.sh --candidate BIN --gate 1.10    apply tolerance band
+#   tools/oracle/run-bench.sh --candidate BIN --gate 1.05    apply tolerance band (the band from #11)
 #   tools/oracle/run-bench.sh --candidate <oracle-path>     noise-floor probe
 #   tools/oracle/run-bench.sh --candidate BIN --threads N    one MT variant
 #
