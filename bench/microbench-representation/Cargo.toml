@@ -1,0 +1,9 @@
+[package]
+name = "microbench-representation"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Throwaway representation microbench for wayfinder ticket #7 (mestrode/triangle). Never merge this branch."
+
+# Default release profile (opt-level 3, no LTO, no -C target-cpu overrides):
+# same conditions as the default C build on the same machine.
