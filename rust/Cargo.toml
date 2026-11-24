@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = ["crates/triangle", "crates/triangle-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+# Stage 1 pins zero unsafe code (ADR 0002, ADR 0004 section 6): forbid, not
+# deny, so no module can re-enable it by accident. A later rung-gated unsafe
+# change (bounds-check elision inside the chokepoints only) relaxes this line
+# in its own PR, together with a docs/deviation-register.md entry.
+[workspace.lints.rust]
+unsafe_code = "forbid"

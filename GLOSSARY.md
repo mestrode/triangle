@@ -44,6 +44,17 @@ _Avoid_: test set, fixtures
 The list recording every deliberate departure from 1:1 during transliteration.
 _Avoid_: exception list
 
+## Architecture
+
+**Module map**: The standing assignment of every C compilation unit, and of each named split of triangle.c, to exactly one Rust module, recorded in docs/function-mapping.md; the stage-1 tickets fill the per-function rows, the module assignment itself is decided by ADR 0004.
+_Avoid_: mirror directory, file-by-file port
+
+**Error funnel**: The single seam at the api module boundary where the transliterated core's mirrored internal status codes are translated into the public Error taxonomy; no other code maps internal codes to public errors.
+_Avoid_: error codes, exceptions, panics
+
+**Candidate contract**: The differential harness's invocation rule (tools/oracle): the Rust CLI runs as ./candidate <options> <input> inside a prepared run directory, writing the standard input.1.* outputs with exit 0 on success.
+_Avoid_: wrapper script, argument compatibility set
+
 ## Data model
 
 **Packed handle**:
@@ -77,3 +88,25 @@ _Avoid_: garbage list, open freelist
 **Sentinel rows**:
 The reserved out-of-band rows for outer space (dummytri) and the omnipresent subsegment (dummysub): fixed row ids, excluded from traversal and the dead stack, bonded exactly as in C.
 _Avoid_: guard objects, dummy pointers
+
+## Memory management
+
+**Row id**:
+The Copy u32 index naming one pool row: valid until dealloc, re-handed on dead-reuse, meaning the row position in the pool's index space, exactly what the item address means in C.
+_Avoid_: handle id, slot index, item number
+
+**Word pool**:
+The single pool type replacing C's struct memorypool: one flat Vec of untyped u64 words per mesh pool, stride-fixed rows, LIFO dead stack threaded through slot 0, monotonic fresh ids, allocation-order traversal; every mesh pool is an instance.
+_Avoid_: arena, bump allocator, slot container
+
+**Logical block geometry**:
+The first-block and per-block item counts each pool carries as plain numbers from C: they drive the sampleraise and getvertex formulas (output-observable) and the memory-parity initial reservation, independent of the physical Vec capacity and its growth.
+_Avoid_: block size, capacity plan, growth factor
+
+**Oracle address order**:
+The total order over triangle rows that replaces the C raw-pointer comparisons in the edge-list outputs: blocks in reverse allocation order (glibc top-down mmap placement), rows ascending within a block; provided by the pool, canaried by the pen corpus family.
+_Avoid_: pointer order, id order, row order
+
+**Acute scratch buffers**:
+The aCute pool in Rust: eight typed f64 buffers replacing acutepool, sized from the vertex-count hint and grown only, never walked, recycled, or id-addressed like the item pools.
+_Avoid_: acute allocator, petal pool, acute arena
