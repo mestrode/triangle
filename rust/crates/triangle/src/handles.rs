@@ -84,30 +84,26 @@ pub(crate) fn decode(word: u64) -> Otri {
     }
 }
 
-/// C: sencode(): compress an oriented subsegment into one word (subsegments
-/// pack one tag bit; D1).
+/// C: sencode(): compress an oriented subsegment into one word. The low two
+/// bits are masked exactly like C's ~3 (triangle.h:925-933): ssorient at
+/// bit 0, bit 1 permanently spare - the mirror of C's pointer-alignment
+/// bit that the viral-infection flag (slots.rs infect, triangle.h:875)
+/// occupies on triangle word 6 (D1; ADR 0002 amendment, issue #22).
 #[inline]
 pub(crate) fn sencode(osub: Osub) -> u64 {
     debug_assert!(osub.ssorient < 2, "subsegment orientation out of range");
-    ((osub.ss as u64) << 1) | osub.ssorient as u64
+    ((osub.ss as u64) << 2) | osub.ssorient as u64
 }
 
 /// C: sdecode(): expand a word into an oriented subsegment. Null discipline
-/// as for decode().
-///
-/// KNOWN GAP (issue #22): C masks two low bits here ("one for orientation,
-/// one for viral infection") and keeps the infection bit free by pointer
-/// alignment, because infect() tags bit 1 of triangle word 6, which with -p
-/// holds a packed subsegment handle. The ADR 0002 section 1 packing pins
-/// the row id at bit 1 upward, so the infection tag and the packed ids
-/// collide; the mirror below follows the ADR as pinned, and the ruling
-/// belongs to the construct.rs plague ticket. The -p corpus families are
-/// the canary.
+/// as for decode(). The low two bits drop out exactly like C's ~3 mask;
+/// bit 1 (the virus flag when the word lives in triangle slot 6) never
+/// reaches the row id or the orientation (D1; ADR 0002 amendment, #22).
 #[inline]
 pub(crate) fn sdecode(word: u64) -> Osub {
     debug_assert!(word != 0, "null slot must never be decoded (C never does)");
     Osub {
-        ss: (word >> 1) as u32,
+        ss: (word >> 2) as u32,
         ssorient: (word & 0b1) as u8,
     }
 }
@@ -204,7 +200,9 @@ mod tests {
             ss: u32::MAX,
             ssorient: 1,
         };
-        assert_eq!(sencode(s), ((u32::MAX as u64) << 1) | 1);
+        assert_eq!(sencode(s), ((u32::MAX as u64) << 2) | 1);
+        // bit 1 stays spare in every stored subsegment word (the C virus bit)
+        assert_eq!(sencode(s) & 2, 0);
     }
 
     #[test]
