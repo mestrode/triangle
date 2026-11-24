@@ -1,6 +1,6 @@
 # Architecture spec: the Triangle C-to-Rust port (library plus binary)
 
-Status: draft, awaiting user sign-off (2026-11-24). This document is the destination artifact of the wayfinder map ([issue #1](https://github.com/mestrode/triangle/issues/1)): it synthesizes the twelve resolved tickets (#2 through #13) and the five accepted ADRs into one implementable architecture. It adds no new decisions; every ruling below cites its owning document. Sign-off is the user's merge of the PR carrying this file, after which the map closes as completed.
+Status: accepted: merged via PR #20 on 2026-11-24. This document is the destination artifact of the wayfinder map ([issue #1](https://github.com/mestrode/triangle/issues/1)): it synthesizes the twelve resolved tickets (#2 through #13) and the five accepted ADRs into one implementable architecture. It adds no new decisions; every ruling below cites its owning document. Sign-off is the user's merge of the PR carrying this file, after which the map closes as completed.
 
 ## 1. Scope and goals
 
@@ -81,7 +81,7 @@ Hybrid, decided and user-confirmed:
 ### 5.3 Memory management - ADR 0003
 
 - One uniform WordPool type serves all eight mesh pools and the five small pools (viri, badsubsegs, badtriangles, flipstackers, splaynodes): a flat Vec<u64> per pool, stride-fixed rows, Copy u32 row ids (0 null, 1 sentinel row for tri/subseg pools), exact-LIFO dead stack threaded through slot 0, allocation-order traversal covering 0..high-water including dead rows, poolrestart with retained capacity. Byte identity depends on this order contract; it is non-negotiable.
-- Growth: amortized Vec doubling (a deliberate deviation from C's fixed-block steps; on a flat store C-step growth aggregates O8N1.5) copying). Initial capacities mirror C's first-block hints, memory parity only. OOM routes through try_reserve to the error funnel's Error::OutOfMemory.
+- Growth: amortized Vec doubling (a deliberate deviation from C's fixed-block steps; on a flat store C-step growth aggregates O(N^1.5) copying). Initial capacities mirror C's first-block hints, memory parity only. OOM routes through try_reserve to the error funnel's Error::OutOfMemory.
 - The aCute pool stays eight typed Vec<f64> scratch buffers, only-grow, zero-filled resize (deviation-register entry).
 - The C raw-pointer ORDER comparisons (edge/neighbor/eps output paths) are mirrored arithmetically as oracle_address_order (blocks descending, rows ascending within a block; glibc-verified; the pen corpus family is the canary).
 
@@ -132,8 +132,8 @@ CLI phase: triangle-cli graduates from stub to the full C-compatible surface; ex
 ## 7. Risks and their standing counters
 
 - Idiomatization stall (temporary code lives longest): explicit rung tickets, the permanent oracle gate (ADR 0001).
-- API freeze violations after stage 1: the section 5.4 surface is ti v0 line; changes require their own ticket against the mas.
-- CPX42 per-exec bimodality (~2.2x modes on short runs): xl binding, deeper lt-tier repeats (ADR 0005).
+- API freeze violations after stage 1: the section 5.4 surface is the v0 line; changes require their own ticket against the map.
+- CPX42 per-exec bimodality (~2.2x modes on short runs): xl binding, deeper l-tier repeats (ADR 0005).
 - The unsafe store wrapper: bounded to one chokepoint pocket, claim-asserted, Miri-covered, deviation-registered; any growth re-runs its own ticket.
 - Refinement-family structural band (provisional +/-5%): calibrated and recorded at the first MT milestone run; the calibration is a gate artifact, not an opinion.
 
@@ -149,4 +149,4 @@ CLI phase: triangle-cli graduates from stub to the full C-compatible surface; ex
 
 User decisions already confirmed and binding: the hybrid port strategy (#6), the representation ruling (no tagged raw pointers, 2026-11-24), internal MT in scope with MT scaling binding (2026-11-24), the differential-harness-first strategy, and the MT hardware (Hetzner CPX42).
 
-Remaining act: the user reviews this spec (PR carrying this file) and merges it, closing wayfinder map issue #1 as completed. The stage-1 implementation tickets are then cut against docs/function-mapping.md with tools/oracle/run-harness.sh binding from their first PR.
+Sign-off recorded: PR #20 merged 2026-11-24; wayfinder map issue #1 is closed as completed. The stage-1 implementation tickets are cut next against docs/function-mapping.md with tools/oracle/run-harness.sh binding from their first PR.
