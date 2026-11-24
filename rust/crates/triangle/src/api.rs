@@ -3,5 +3,5 @@
 //! / refine / output / statistics / quality / check_mesh / check_delaunay
 //! / memory_bytes) plus the public MeshOutput, Statistics, Quality,
 //! BoundingBox types.
-//! 
+//!
 //! ADR 0004 section 5.3; C correspondence in docs/function-mapping.md.

@@ -19,9 +19,12 @@
 //!   TRIANGLE_THREADS environment variable, read by the triangle-cli
 //!   binary; the library API does not expose a thread switch yet.
 
-#![cfg_attr(not(target_pointer_width = "64"), compile_error(
-    "the Rust port targets 64-bit platforms only (map #1 scope ruling, docs/adr/0002)"
-))]
+#![cfg_attr(
+    not(target_pointer_width = "64"),
+    compile_error(
+        "the Rust port targets 64-bit platforms only (map #1 scope ruling, docs/adr/0002)"
+    )
+)]
 
 // ---------------------------------------------------------------------------
 // Public API shell modules (idiomatic from day one; ADR 0004, section 5).

@@ -1,37 +1,32 @@
-//! triangle-cli: the sketch of the Rust port's CLI program.
+//! triangle-cli: the CLI binary of the Rust Triangle port.
 //!
-//! Wayfinder ticket #10 pins only the shape (ADR 0004 section 7):
+//! Stage-1 stub per the stage-1 foundation PR: argument echo and exit 0,
+//! nothing else. Its only job today is to exist as the differential
+//! harness's candidate executable (tools/oracle, invoke via run-harness.sh
+//! --candidate) so the plumbing from harness to port is proven wired and
+//! documented before the I/O phase lands (byte parity is NOT expected at
+//! this stage; the harness wiring proof is recorded in that PR).
 //!
-//! - Candidate contract (tools/oracle, ticket #13): invoked as
-//!   ./candidate <options> <input> inside a prepared run directory, writing
-//!   the standard input.1.* outputs, exit 0 on success. The compatibility
-//!   surface itself (the option-switch families, file-name derivation,
-//!   iteration suffixes) is pinned by the I/O-phase ticket, not here.
+//! Notes for the arriving phases:
+//! - Candidate contract: invoked inside a prepared run directory with the
+//!   ported option switches; the option-switch families, file-name
+//!   derivation and iteration suffixes are pinned by the I/O-phase ticket.
 //! - The thread-count knob for the future internal multithreading is the
-//!   TRIANGLE_THREADS environment variable (as wired by the performance
-//!   gate, ticket #11) - spelled exactly so; TRAINGLE_THREADS is a typo and
-//!   is rejected, never honored. It becomes a CLI flag in the I/O phase
-//!   once ticket #12 rules the parallel design.
-//!
-//! Until the I/O phase lands, this main is deliberately a stub: exit code 1,
-//! nothing else.
+//!   TRIANGLE_THREADS environment variable (spelled exactly so). Its
+//!   validation returns with the I/O phase; this stage must not exit
+//!   nonzero, so the stub performs no validation at all.
 
 fn main() {
-    if let Ok(threads) = std::env::var("TRIANGLE_THREADS") {
-        if threads.parse::<usize>().map(|n| n == 0).unwrap_or(true) {
-            eprintln!(
-                "triangle-cli: TRIANGLE_THREADS must be a positive integer (got {threads:?})"
-            );
-        }
-    }
-
-    // Keep the lib dependency honest while this main is a stub: the linked
-    // core exposes its version constants today (lib.rs); the entry points
-    // (api.rs) arrive with the stage-1 shell and replace this statement.
-    let _linked_core = (triangle::VERSION, triangle::HAS_ACUTE);
-
-    eprintln!(
-        "triangle-cli (Rust port): not implemented yet; see docs/adr/0004-crate-api-architecture.md"
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let (major, minor, patch) = triangle::VERSION;
+    println!(
+        "triangle-cli (stage-1 stub, Triangle {}.{}.{}, aCute {}): {}",
+        major,
+        minor,
+        patch,
+        triangle::HAS_ACUTE,
+        args.join(" ")
     );
-    std::process::exit(1);
+    // exit 0: the harness records candidate invocations before comparing
+    // outputs, and this stub has no failure mode yet.
 }
