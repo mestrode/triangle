@@ -60,14 +60,14 @@ side changes; the function names are the stable key).
 | `parsecommandline` | triangle.c:364 | `options.rs` | same name (snake_case) | S1 shell | Options::defaults and Options::parse; derived-field tail transliterated bit-exact |
 | `printtriangle` | triangle.c:574 | `debug.rs` | same name (snake_case) | S1 | |
 | `printsubseg` | triangle.c:660 | `debug.rs` | same name (snake_case) | S1 | |
-| `poolzero` | triangle.c:746 | `pool.rs` | same name (snake_case) | S1 | ticket #9 lands these per the ADR 0002 §4 contract (D4) |
-| `poolrestart` | triangle.c:774 | `pool.rs` | same name (snake_case) | S1 | ticket #9 lands these per the ADR 0002 §4 contract (D4) |
-| `poolinit` | triangle.c:814 | `pool.rs` | same name (snake_case) | S1 | ticket #9 lands these per the ADR 0002 §4 contract (D4) |
-| `pooldeinit` | triangle.c:852 | `pool.rs` | same name (snake_case) | S1 | ticket #9 lands these per the ADR 0002 §4 contract (D4) |
-| `poolalloc` | triangle.c:867 | `pool.rs` | same name (snake_case) | S1 | ticket #9 lands these per the ADR 0002 §4 contract (D4) |
-| `pooldealloc` | triangle.c:924 | `pool.rs` | same name (snake_case) | S1 | ticket #9 lands these per the ADR 0002 §4 contract (D4) |
-| `traversalinit` | triangle.c:940 | `pool.rs` | same name (snake_case) | S1 | ticket #9 lands these per the ADR 0002 §4 contract (D4) |
-| `traverse` | triangle.c:970 | `pool.rs` | same name (snake_case) | S1 | ticket #9 lands these per the ADR 0002 §4 contract (D4) |
+| `poolzero` | triangle.c:746 | `pool.rs` | per ADR 0003 §3 | S1 | naming authority is ADR 0003 §3 (`signatures are the contract`): dissolves into WordPool construction/Drop (D11, D4); landed in PR #23 |
+| `poolrestart` | triangle.c:774 | `pool.rs` | per ADR 0003 §3 | S1 | naming authority is ADR 0003 §3 (`signatures are the contract`): restart; landed in PR #23 |
+| `poolinit` | triangle.c:814 | `pool.rs` | per ADR 0003 §3 | S1 | naming authority is ADR 0003 §3 (`signatures are the contract`): WordPool::new; landed in PR #23 |
+| `pooldeinit` | triangle.c:852 | `pool.rs` | per ADR 0003 §3 | S1 | naming authority is ADR 0003 §3 (`signatures are the contract`): dissolves into WordPool construction/Drop (D11, D4); landed in PR #23 |
+| `poolalloc` | triangle.c:867 | `pool.rs` | per ADR 0003 §3 | S1 | naming authority is ADR 0003 §3 (`signatures are the contract`): alloc; landed in PR #23 |
+| `pooldealloc` | triangle.c:924 | `pool.rs` | per ADR 0003 §3 | S1 | naming authority is ADR 0003 §3 (`signatures are the contract`): dealloc; landed in PR #23 |
+| `traversalinit` | triangle.c:940 | `pool.rs` | per ADR 0003 §3 | S1 | naming authority is ADR 0003 §3 (`signatures are the contract`): traversal; landed in PR #23 |
+| `traverse` | triangle.c:970 | `pool.rs` | per ADR 0003 §3 | S1 | naming authority is ADR 0003 §3 (`signatures are the contract`): traverse_next; landed in PR #23 |
 | `dummyinit` | triangle.c:1029 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit) |
 | `initializevertexpool` | triangle.c:1100 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit) |
 | `initializetrisubpools` | triangle.c:1136 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit) |
@@ -281,7 +281,7 @@ side changes; the function names are the stable key).
 | `org()` / `dest()` / `apex()` | triangle.h:703-1090 | `slots.rs` | vertex-id reads, no references escape |
 | `vertexmark` / `vertextype` / `vertex2tri` accessors | triangle.h:1077-1088 | `slots.rs` | int overlays / encoded word behind the chokepoint (D2) |
 | `struct behavior` | triangle.h | `options.rs` | public `Options` mirror per switch family |
-| `struct mesh` | triangle.h | `slots.rs` (storage) + `mesh.rs` (lifecycle) | pool ownership per ADR 0002 |
+| `struct mesh` | triangle.h | `mesh.rs` (struct + lifecycle) + `slots.rs` (accessor chokepoint) | pool ownership per ADR 0002; storage share corrected per the ADR 0002 amendment (2026-11-24) |
 | `struct memorypool` | triangle.c | `pool.rs` | ticket #9 per the ADR 0002 §4 contract (D4) |
 | `struct quality` / `struct statistics` / `struct rect` | triangle_api.h / triangle.h | `api.rs` | public `Quality`, `Statistics`, `BoundingBox` |
 | `TRI_*` status codes | triangle_config.h:28-40 | `error.rs` | `InternalStatus` mirror + `Error` funnel (D8) |
