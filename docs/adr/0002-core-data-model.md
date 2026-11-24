@@ -252,3 +252,11 @@ Section 1 and the appendix sketch above are updated in place to match. Consequen
 - infect/uninfect/infected (slots.rs) become literal C mirrors at bit 1 of
   word 6, on -p rows and plain rows alike; the KNOWN GAP comments are gone.
 - Deviation D1's wording is updated ("low 2 bits" for both handle kinds).
+
+## Errata (2026-11-24, same amendment): function-mapping storage share for "struct mesh"
+
+The function-mapping.md row for "struct mesh" originally read "slots.rs (storage) +
+mesh.rs (lifecycle)". The landed stage-1 split (PR #23) is the reverse: the
+struct and its pool lifecycles live in mesh.rs, and slots.rs is the accessor
+chokepoint (the only client of pool.rs, per section 3). The mapping row is
+corrected in the same change that adds this errata.
