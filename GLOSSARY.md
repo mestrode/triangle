@@ -110,3 +110,32 @@ _Avoid_: pointer order, id order, row order
 **Acute scratch buffers**:
 The aCute pool in Rust: eight typed f64 buffers replacing acutepool, sized from the vertex-count hint and grown only, never walked, recycled, or id-addressed like the item pools.
 _Avoid_: acute allocator, petal pool, acute arena
+
+## Parallelism
+
+**Serial path**: The execution route with thread count 1: the transliterated core exactly as ported, whose byte-identity against the C oracle over the corpus is the permanently binding gate; every other guarantee stands on it as the reproducibility anchor.
+_Avoid_: fallback path, single-threaded mode
+
+**Parallel path**: The execution route with thread count above 1: freer-scheduled workers over the same pools via a shard overlay and claim discipline, structurally validated, never byte-compared.
+_Avoid_: MT mode, threaded mode
+
+**Structural validation**: The acceptance method for parallel outputs against the serial Rust run: exact count and attribute equality for parallel-invariant families; counts within a recorded band plus zero invariant-checker failures for refinement families.
+_Avoid_: fuzzy compare, relaxed diff
+
+**Worker**: One scoped OS thread executing a phase shard or claiming queue work during a parallel run; never owns the mesh pools exclusively.
+_Avoid_: lane, executor
+
+**Pool shard**: The parallel path's per-worker overlay on a WordPool: reserved fresh-id blocks and per-worker dead-stack chains above the unchanged pool; merged at scoped joins in deterministic owner order where merges occur.
+_Avoid_: thread pool, arena
+
+**Claim sidecar**: The per-row claim-flag array outside the pool words of the parallel path, so row layouts stay C-identical and claims are cheap atomic words.
+_Avoid_: lock word, flag slot
+
+**Star claim**: The refinement conflict primitive: all-or-nothing acquisition of the triangle rows an operation will touch, taken in row-id order, with stale items released and re-enqueued on conflict.
+_Avoid_: edge lock, optimistic retry
+
+**Worker stream**: A derived LCG stream on the parallel path (same constants, seed hashed from the context seed and a structure key), keyed per subtree in construction and per worker in sampling; the serial path keeps the single context-seeded sequence.
+_Avoid_: thread RNG, seeded lane
+
+**MT axis**: The scaling measurement of the performance gate: the same candidate timed at T=1 versus T pinned to N vCPUs over the l/xl timed set, efficiency against the T=1 baseline, never against the C oracle.
+_Avoid_: MT benchmark, threaded sweep
