@@ -43,3 +43,37 @@ _Avoid_: test set, fixtures
 **Deviation register**:
 The list recording every deliberate departure from 1:1 during transliteration.
 _Avoid_: exception list
+
+## Data model
+
+**Packed handle**:
+The one-word storage form of an oriented triangle or subsegment: a u64 carrying a 32-bit pool row index and the orientation in the low 2 bits (triangles) or 1 bit (subsegments), keeping the C slot density and encode/decode semantics without raw pointers.
+_Avoid_: tagged pointer, slot key, fat handle
+
+**Register handle**:
+The unpacked form the handle-macro methods operate on: Otri (row index, orientation), Osub (row index, side); a handle is packed only when stored into a row slot, exactly where the C macros encode and decode.
+_Avoid_: hot handle, wrapper handle
+
+**Row**:
+One pool item's storage: a runtime-sized array of u64 slot words (triangle, subsegment, or vertex row), addressed by a copy row id and laid out by the mirrored C slot formulas.
+_Avoid_: record, element, object
+
+**Slot**:
+One u64 word of a row; its role (neighbor, subsegment, vertex id, coordinate, attribute, area bound, int overlay, payload) is fixed at runtime by the pool-init formulas.
+_Avoid_: field, cell
+
+**Accessor chokepoint**:
+The single private module through which all row storage is read and written; outside it only handles and values exist, so the transliterated core is safe and Miri-testable.
+_Avoid_: accessor layer, gateway
+
+**Int overlay**:
+A 32-bit integer kept in one half of a slot word (vertex boundary marker, vertex type, subsegment boundary marker, element numbering), written through the chokepoint touching exactly those 4 bytes, mirroring the C int casts without aliasing.
+_Avoid_: int cast, punned field
+
+**Dead stack**:
+The LIFO pool freelist threaded through slot 0 of dead rows, as in C pooldealloc; carrying row ids until reuse. Deadness detection (killtri's null slots) is separate and stays a data-model concern.
+_Avoid_: garbage list, open freelist
+
+**Sentinel rows**:
+The reserved out-of-band rows for outer space (dummytri) and the omnipresent subsegment (dummysub): fixed row ids, excluded from traversal and the dead stack, bonded exactly as in C.
+_Avoid_: guard objects, dummy pointers
