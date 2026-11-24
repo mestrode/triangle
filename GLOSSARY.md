@@ -88,3 +88,25 @@ _Avoid_: garbage list, open freelist
 **Sentinel rows**:
 The reserved out-of-band rows for outer space (dummytri) and the omnipresent subsegment (dummysub): fixed row ids, excluded from traversal and the dead stack, bonded exactly as in C.
 _Avoid_: guard objects, dummy pointers
+
+## Memory management
+
+**Row id**:
+The Copy u32 index naming one pool row: valid until dealloc, re-handed on dead-reuse, meaning the row position in the pool's index space, exactly what the item address means in C.
+_Avoid_: handle id, slot index, item number
+
+**Word pool**:
+The single pool type replacing C's struct memorypool: one flat Vec of untyped u64 words per mesh pool, stride-fixed rows, LIFO dead stack threaded through slot 0, monotonic fresh ids, allocation-order traversal; every mesh pool is an instance.
+_Avoid_: arena, bump allocator, slot container
+
+**Logical block geometry**:
+The first-block and per-block item counts each pool carries as plain numbers from C: they drive the sampleraise and getvertex formulas (output-observable) and the memory-parity initial reservation, independent of the physical Vec capacity and its growth.
+_Avoid_: block size, capacity plan, growth factor
+
+**Oracle address order**:
+The total order over triangle rows that replaces the C raw-pointer comparisons in the edge-list outputs: blocks in reverse allocation order (glibc top-down mmap placement), rows ascending within a block; provided by the pool, canaried by the pen corpus family.
+_Avoid_: pointer order, id order, row order
+
+**Acute scratch buffers**:
+The aCute pool in Rust: eight typed f64 buffers replacing acutepool, sized from the vertex-count hint and grown only, never walked, recycled, or id-addressed like the item pools.
+_Avoid_: acute allocator, petal pool, acute arena
