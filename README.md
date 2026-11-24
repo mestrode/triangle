@@ -15,6 +15,7 @@ The Triangle repository contains the following directory structure:
     src/Triangle                 Original Triangle and aCute code and new Triangle C API
     src/examples/triangle-cli    Command-line interface
     src/examples/triangle-test   Simple test program
+    tools/oracle                 Differential oracle harness and byte-parity corpus
 
 The static library code is based on the following sources:
 
