@@ -14,8 +14,9 @@
 //! NOT landed in this PR (their C rows arrive with the modules that use
 //! them; the chokepoint primitives they reduce to are already in slots.rs):
 //! triangledealloc / triangletraverse, subsegdealloc / subsegtraverse,
-//! vertexdealloc / vertextraverse, badsubsegdealloc / badsubsegtraverse,
-//! getvertex, triangledeinit (triangle.c:1196-1408).
+//! vertexdealloc, badsubsegdealloc / badsubsegtraverse, getvertex,
+//! triangledeinit (triangle.c:1196-1408). vertextraverse (triangle.c:1276)
+//! landed with the delaunay part-1 PR (the divconqdelaunay consumer).
 //!
 //! The behavior fields the init functions read arrive on the normalized
 //! Behavior (options.rs): Mesh::new takes &Behavior exactly where C's
@@ -70,6 +71,22 @@ pub(crate) struct Mesh {
     /// Attributes per triangle (C m->eextras; sizes the triangle row and
     /// bounds tri_attribute).
     pub(crate) eextras: i32,
+    /// Input bounds (C m->xmin, xmax, ymin, ymax; REAL, triangle.h:514):
+    /// written by the transfernodes row (ioarrays.rs, not landed yet) and
+    /// read by boundingbox (delaunay.rs part 1). Zero superset of C's
+    /// uninitialized read-before-write (D11).
+    pub(crate) xmin: f64,
+    pub(crate) xmax: f64,
+    pub(crate) ymin: f64,
+    pub(crate) ymax: f64,
+    /// C m->undeads (triangle.h:520, int to i32): duplicate vertices
+    /// moved to the graveyard (type UNDEADVERTEX); counted by
+    /// divconqdelaunay (delaunay.rs) and later by sweeplinedelaunay and
+    /// the quality rows. Never read before the first write; the
+    /// #[allow(dead_code)] mirrors the hullsize/cyclefail convention (the
+    /// every-build readers land with later rows).
+    #[allow(dead_code)]
+    pub(crate) undeads: i32,
 
     /// Statistics counters, C long fields of struct mesh (triangle.h:538-546:
     /// incirclecount, counterclockcount, orient3dcount, circumcentercount -
@@ -112,11 +129,21 @@ pub(crate) struct Mesh {
     pub(crate) lastflip: u32,
     /// C m->infvertex1, infvertex2, infvertex3 (triangle.h:547): the three
     /// vertices of the incremental/sweepline bounding box, treated as if
-    /// infinitely distant by insertvertex; C NULL (the null row id) until
-    /// the delaunay modules that set them land.
+    /// infinitely distant by insertvertex; NULL (the null row id) until
+    /// boundingbox (delaunay.rs part 1) sets them to the reserved
+    /// out-of-pool INFVERTEX ids (D12, slots.rs); NULL again after
+    /// removebox.
     pub(crate) infvertex1: u32,
     pub(crate) infvertex2: u32,
     pub(crate) infvertex3: u32,
+    /// Deviation D12 (docs/deviation-register.md): C bounds the box with
+    /// three trimalloc'd vertices outside the vertex pool
+    /// (triangle.c:4634-4650); the port's reserved out-of-pool INFVERTEX
+    /// ids (slots.rs) carry the two coordinates of each infinite vertex in
+    /// this owned store, read and written only through the
+    /// vx_real/vx_set_real chokepoint; removebox zeroes it like C's
+    /// trifree (triangle.c:4741-4743).
+    pub(crate) infvertex_store: [[u64; 2]; 3],
     /// C m->recenttri (triangle.h:564): the most recently encountered
     /// triangle of location (struct otri in C, where tri can be NULL;
     /// Option here).
@@ -201,6 +228,11 @@ impl Mesh {
             mesh_dim,
             nextras,
             eextras,
+            xmin: 0.0,
+            xmax: 0.0,
+            ymin: 0.0,
+            ymax: 0.0,
+            undeads: 0,
             incirclecount: 0,
             counterclockcount: 0,
             orient3dcount: 0,
@@ -221,6 +253,7 @@ impl Mesh {
             infvertex1: NULL,
             infvertex2: NULL,
             infvertex3: NULL,
+            infvertex_store: [[0; 2]; 3],
             recenttri: None,
         };
         m.initializevertexpool(b.poly)?;
@@ -463,6 +496,20 @@ impl Mesh {
         }
         self.set_sub_mark(ss, 0);
         Ok(Osub { ss, ssorient: 0 })
+    }
+
+    /// C: vertextraverse (triangle.c:1276-1288). Walk the vertex pool in
+    /// allocation order, skipping DEADVERTEX rows (undead UNDEADVERTEX
+    /// rows come back like every allocated vertex); the end-of-pool NULL
+    /// of C's traverse is the None here. Pool traversal itself walks dead
+    /// rows (D3), so this skip loop is the whole of C's do-while.
+    pub(crate) fn vertextraverse(&self, t: &mut crate::pool::Traversal) -> Option<u32> {
+        loop {
+            let newvertex = self.vertices.traverse_next(t)?;
+            if self.vx_type(newvertex) != crate::slots::DEADVERTEX {
+                return Some(newvertex);
+            }
+        }
     }
 }
 
@@ -814,5 +861,27 @@ mod tests {
         assert_eq!(mp.org(t), v);
         mp.vx_set_2tri(v, crate::handles::encode(t));
         assert_eq!(mp.vx_2tri(v), crate::handles::encode(t));
+    }
+
+    #[test]
+    fn vertextraverse_walks_live_rows_and_skips_the_dead() {
+        // C vertextraverse (triangle.c:1276-1288): allocation order over
+        // the whole vertex pool, DEADVERTEX rows skipped (pool traversal
+        // itself walks dead rows, D3), NULL at the end. vx_dealloc marks
+        // the row DEADVERTEX, so the traversal must skip it.
+        let mut m = plain();
+        let a = m.vx_alloc().expect("alloc");
+        let b = m.vx_alloc().expect("alloc");
+        let c = m.vx_alloc().expect("alloc");
+        let mut t = m.vertices.traversal();
+        assert_eq!(m.vertextraverse(&mut t), Some(a));
+        assert_eq!(m.vertextraverse(&mut t), Some(b));
+        assert_eq!(m.vertextraverse(&mut t), Some(c));
+        assert_eq!(m.vertextraverse(&mut t), None);
+        m.vx_dealloc(b);
+        let mut t = m.vertices.traversal();
+        assert_eq!(m.vertextraverse(&mut t), Some(a));
+        assert_eq!(m.vertextraverse(&mut t), Some(c));
+        assert_eq!(m.vertextraverse(&mut t), None);
     }
 }
