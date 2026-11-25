@@ -24,7 +24,7 @@
 //! modules land.
 #![allow(dead_code)]
 
-use crate::handles::{encode, sencode, Osub, Otri, DUMMY_SUB, DUMMY_TRI};
+use crate::handles::{encode, sencode, Osub, Otri, DUMMY_SUB, DUMMY_TRI, NULL};
 use crate::options::Behavior;
 use crate::pool::{Oom, WordPool};
 use crate::slots::{HalfWord, TriShape, VertexShape};
@@ -81,6 +81,46 @@ pub(crate) struct Mesh {
     pub(crate) counterclockcount: i64,
     pub(crate) orient3dcount: i64,
     pub(crate) circumcentercount: i64,
+
+    /// C m->randomseed (triangle.c:220, unsigned long: u64 on the LP64
+    /// port): the LCG state of randomnation (util.rs). Deviation D10: an
+    /// owned per-run field, never a thread-local; seeded 1 by triangleinit
+    /// (triangle.c:1502), mirrored by Mesh::new.
+    pub(crate) randomseed: u64,
+    /// C m->samples (triangle.h:536): number of random samples for point
+    /// location; starts 1, grows in locate() (triangle.c:2469-2472).
+    pub(crate) samples: i64,
+    /// C m->checksegments (triangle.h:532): are there segments in the
+    /// triangulation yet? (C int 0/1 flag; bool here.)
+    pub(crate) checksegments: bool,
+    /// C m->checkquality (triangle.h:533): has the quality triangulation
+    /// stage begun? Gates the flip-stack bookkeeping of insertvertex.
+    pub(crate) checkquality: bool,
+    /// C m->cyclefail (triangle.h:534): did vertex insertion start
+    /// flipping edges in circles? Set by insertvertex (triangle.c:3165),
+    /// read by the statistics rows when they land.
+    #[allow(dead_code)]
+    pub(crate) cyclefail: bool,
+    /// C m->hullsize (triangle.h:525): number of edges in the convex
+    /// hull; insertvertex increments it on boundary-edge splits
+    /// (triangle.c:3012). Read by the statistics rows when they land.
+    #[allow(dead_code)]
+    pub(crate) hullsize: i64,
+    /// C m->lastflip (triangle.h:509): the head of the stack of recently
+    /// flipped triangles (struct flipstacker *; a flipstackers row id
+    /// here, the null id for the C NULL pointer).
+    pub(crate) lastflip: u32,
+    /// C m->infvertex1, infvertex2, infvertex3 (triangle.h:547): the three
+    /// vertices of the incremental/sweepline bounding box, treated as if
+    /// infinitely distant by insertvertex; C NULL (the null row id) until
+    /// the delaunay modules that set them land.
+    pub(crate) infvertex1: u32,
+    pub(crate) infvertex2: u32,
+    pub(crate) infvertex3: u32,
+    /// C m->recenttri (triangle.h:564): the most recently encountered
+    /// triangle of location (struct otri in C, where tri can be NULL;
+    /// Option here).
+    pub(crate) recenttri: Option<Otri>,
 }
 
 impl Mesh {
@@ -165,6 +205,23 @@ impl Mesh {
             counterclockcount: 0,
             orient3dcount: 0,
             circumcentercount: 0,
+            // C triangleinit (triangle.c:1493-1502): recenttri.tri NULL,
+            // samples 1, checksegments 0, checkquality 0, cyclefail 0,
+            // randomseed 1. hullsize and lastflip are not zeroed by C's
+            // triangleinit (uninitialized struct memory until their
+            // owning algorithms run); the port picks the deterministic
+            // zero superset of that undefined state.
+            randomseed: 1,
+            samples: 1,
+            checksegments: false,
+            checkquality: false,
+            cyclefail: false,
+            hullsize: 0,
+            lastflip: NULL,
+            infvertex1: NULL,
+            infvertex2: NULL,
+            infvertex3: NULL,
+            recenttri: None,
         };
         m.initializevertexpool(b.poly)?;
         m.initializetrisubpools(

@@ -674,6 +674,98 @@ impl Mesh {
         self.vx_set_type(v, DEADVERTEX);
         self.vertices.dealloc(v);
     }
+
+    // -----------------------------------------------------------------------
+    // Flip-stack rows (C struct flipstacker, triangle.h:291-294:
+    // { triangle flippedtri; struct flipstacker *prevflip; }, 2 words).
+    // Written by insertvertex/undovertex (transform.rs) under -q; the
+    // C NULL/`&insertvertex` pointers of prevflip mirror as row ids
+    // (D4), 0 for NULL, transform.rs::INSERTVERTEX_MARKER for the
+    // &(struct flipstacker) &insertvertex end-of-list sentinel.
+    // -----------------------------------------------------------------------
+
+    /// C: poolrestart(&m->flipstackers) (triangle.c:3160, the
+    /// insertvertex bookkeeping of the checkquality stage).
+    pub(crate) fn flip_restart(&mut self) {
+        self.flipstackers.restart();
+    }
+
+    /// C: m->lastflip = (struct flipstacker *) poolalloc(&m->flipstackers):
+    /// the fresh flipstacker row id (INTERIOR hole: D4).
+    pub(crate) fn flip_alloc(&mut self) -> Result<u32, Oom> {
+        self.flipstackers.alloc()
+    }
+
+    /// C: m->lastflip->flippedtri: the stored encode()d triangle handle
+    /// (word 0); the caller decodes through handles.rs.
+    pub(crate) fn flip_flippedtri(&self, id: u32) -> u64 {
+        self.flipstackers.word(id, 0)
+    }
+
+    /// C: m->lastflip->flippedtri = encode(horiz) (triangle.c:3162).
+    pub(crate) fn set_flip_flippedtri(&mut self, id: u32, w: u64) {
+        self.flipstackers.set_word(id, 0, w);
+    }
+
+    /// C: m->lastflip->prevflip: the previous flipstacker (word 1); a
+    /// row id under D4 - the null id is the C NULL pointer, and the
+    /// port mirror of C's `(struct flipstacker *) &insertvertex` marker
+    /// (triangle.c:3163/3770) is the row id that can never be handed out
+    /// (transform.rs::INSERTVERTEX_MARKER).
+    pub(crate) fn flip_prevflip(&self, id: u32) -> u32 {
+        self.flipstackers.word(id, 1) as u32
+    }
+
+    /// C: newflip->prevflip = m->lastflip (triangle.c:3392).
+    pub(crate) fn set_flip_prevflip(&mut self, id: u32, prev: u32) {
+        self.flipstackers.set_word(id, 1, prev as u64);
+    }
+
+    // -----------------------------------------------------------------------
+    // Encroached-subsegment rows (C struct badsubseg, triangle.h:271-274:
+    // { subseg encsubseg; vertex subsegorg, subsegdest; }, 3 words).
+    // Enqueued by insertvertex (transform.rs); the consuming traversal
+    // (badsubsegtraverse/badsubsegdealloc) lands with quality.rs.
+    // -----------------------------------------------------------------------
+
+    /// C: poolalloc(&m->badsubsegs) at insertvertex's encroachment
+    /// enqueue (triangle.c:2975): the fresh badsubseg row id.
+    pub(crate) fn bad_subseg_alloc(&mut self) -> Result<u32, Oom> {
+        self.badsubsegs.alloc()
+    }
+
+    /// C: encroached->encsubseg = sencode(brokensubseg) (triangle.c:2976).
+    pub(crate) fn set_bad_sub_seg_enc(&mut self, id: u32, encsubseg: u64) {
+        self.badsubsegs.set_word(id, 0, encsubseg);
+    }
+
+    /// C: sorg(brokensubseg, encroached->subsegorg) (triangle.c:2977): the
+    /// vertex id of the subsegment's origin (D1: ids replace pointers).
+    pub(crate) fn set_bad_sub_seg_org(&mut self, id: u32, org: u32) {
+        self.badsubsegs.set_word(id, 1, org as u64);
+    }
+
+    /// C: sdest(brokensubseg, encroached->subsegdest) (triangle.c:2978).
+    pub(crate) fn set_bad_sub_seg_dest(&mut self, id: u32, dest: u32) {
+        self.badsubsegs.set_word(id, 2, dest as u64);
+    }
+
+    /// Test-side readers of the badsubseg row (the consuming traversal
+    /// lands with quality.rs; the crate's module tests pin the enqueue).
+    #[cfg(test)]
+    pub(crate) fn bad_sub_seg_enc(&self, id: u32) -> u64 {
+        self.badsubsegs.word(id, 0)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn bad_sub_seg_org(&self, id: u32) -> u32 {
+        self.badsubsegs.word(id, 1) as u32
+    }
+
+    #[cfg(test)]
+    pub(crate) fn bad_sub_seg_dest(&self, id: u32) -> u32 {
+        self.badsubsegs.word(id, 2) as u32
+    }
 }
 
 #[cfg(test)]
