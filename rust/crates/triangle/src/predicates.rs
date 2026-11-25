@@ -2015,7 +2015,10 @@ mod tests {
         // Idempotent (the OnceLock guard makes repeats no-ops).
         tri_exactinit();
         let c = consts();
-        assert_eq!(c.epsilon, 2.0f64.powi(-53));
+        // The exact 2^-53 bit pattern; powi(-53) is not a bit-exact
+        // reference across float implementations and runs 1 ulp off under
+        // miri (#29).
+        assert_eq!(c.epsilon, f64::from_bits(0x3ca0000000000000));
         assert_eq!(c.splitter, 134217729.0);
         assert!(c.resulterrbound > 0.0);
         assert!(c.ccwerrboundA > 0.0 && c.ccwerrboundB > 0.0 && c.ccwerrboundC > 0.0);
