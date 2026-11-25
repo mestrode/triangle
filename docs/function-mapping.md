@@ -51,7 +51,7 @@ side changes; the function names are the stable key).
 
 | C function | C site | Rust module | Rust symbol (stage 1) | Stage | Notes |
 | --- | --- | --- | --- | --- | --- |
-| `interpolate` | triangle.c:238 | `util.rs` | same name (snake_case) | S1 | |
+| `interpolate` | triangle.c:238 | `util.rs` | same name (snake_case) | S1 | landed in PR #30 |
 | `behavior_update` | triangle.c:275 | `options.rs` | same name (snake_case) | S1 shell | Options::defaults and Options::parse; derived-field tail transliterated bit-exact |
 | `triexit` | triangle.c:313 | `error.rs` | same name (snake_case) | S1 shell | funnel: no process exit, no manual alloc/free (D8, D11); trimalloc OOM becomes InternalStatus::Oom |
 | `trimalloc` | triangle.c:318 | `error.rs` | same name (snake_case) | S1 shell | funnel: no process exit, no manual alloc/free (D8, D11); trimalloc OOM becomes InternalStatus::Oom |
@@ -84,7 +84,7 @@ side changes; the function names are the stable key).
 | `maketriangle` | triangle.c:1414 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit) |
 | `makesubseg` | triangle.c:1450 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit) |
 | `triangleinit` | triangle.c:1482 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit) |
-| `randomnation` | triangle.c:1521 | `util.rs` | same name (snake_case) | S1 | seed moves from _Thread_local to a per-run owned field (D10) |
+| `randomnation` | triangle.c:1521 | `util.rs` | same name (snake_case) | S1 | seed moves from _Thread_local to a per-run owned field (D10); landed in PR #30 |
 | `checkmesh` | triangle.c:1537 | `quality.rs` | same name (snake_case) | S1 | testtriangle carries the Unsuitable callback site (D9); quality_statistics moves from the C Array I/O tail for cohesion |
 | `checkdelaunay` | triangle.c:1622 | `quality.rs` | same name (snake_case) | S1 | testtriangle carries the Unsuitable callback site (D9); quality_statistics moves from the C Array I/O tail for cohesion |
 | `enqueuebadtriang` | triangle.c:1714 | `quality.rs` | same name (snake_case) | S1 | testtriangle carries the Unsuitable callback site (D9); quality_statistics moves from the C Array I/O tail for cohesion |
@@ -94,15 +94,15 @@ side changes; the function names are the stable key).
 | `checkseg4encroach` | triangle.c:1925 | `quality.rs` | same name (snake_case) | S1 | testtriangle carries the Unsuitable callback site (D9); quality_statistics moves from the C Array I/O tail for cohesion |
 | `testtriangle` | triangle.c:2001 | `quality.rs` | same name (snake_case) | S1 | testtriangle carries the Unsuitable callback site (D9); quality_statistics moves from the C Array I/O tail for cohesion |
 | `makevertexmap` | triangle.c:2206 | `quality.rs` | same name (snake_case) | S1 | testtriangle carries the Unsuitable callback site (D9); quality_statistics moves from the C Array I/O tail for cohesion |
-| `preciselocate` | triangle.c:2291 | `locate.rs` | same name (snake_case) | S1 | |
-| `locate` | triangle.c:2427 | `locate.rs` | same name (snake_case) | S1 | |
-| `insertsubseg` | triangle.c:2573 | `transform.rs` | same name (snake_case) | S1 | |
-| `flip` | triangle.c:2664 | `transform.rs` | same name (snake_case) | S1 | |
-| `unflip` | triangle.c:2785 | `transform.rs` | same name (snake_case) | S1 | |
-| `insertvertex` | triangle.c:2920 | `transform.rs` | same name (snake_case) | S1 | |
-| `triangulatepolygon` | triangle.c:3559 | `transform.rs` | same name (snake_case) | S1 | |
-| `deletevertex` | triangle.c:3638 | `transform.rs` | same name (snake_case) | S1 | |
-| `undovertex` | triangle.c:3730 | `transform.rs` | same name (snake_case) | S1 | |
+| `preciselocate` | triangle.c:2291 | `locate.rs` | same name (snake_case) | S1 | landed in PR #30 |
+| `locate` | triangle.c:2427 | `locate.rs` | same name (snake_case) | S1 | landed in PR #30 |
+| `insertsubseg` | triangle.c:2573 | `transform.rs` | same name (snake_case) | S1 | landed in PR #30 |
+| `flip` | triangle.c:2664 | `transform.rs` | same name (snake_case) | S1 | landed in PR #30 |
+| `unflip` | triangle.c:2785 | `transform.rs` | same name (snake_case) | S1 | landed in PR #30 |
+| `insertvertex` | triangle.c:2920 | `transform.rs` | same name (snake_case) | S1 | landed in PR #30 |
+| `triangulatepolygon` | triangle.c:3559 | `transform.rs` | same name (snake_case) | S1 | landed in PR #30 |
+| `deletevertex` | triangle.c:3638 | `transform.rs` | same name (snake_case) | S1 | landed in PR #30 |
+| `undovertex` | triangle.c:3730 | `transform.rs` | same name (snake_case) | S1 | landed in PR #30 |
 | `vertexsort` | triangle.c:3870 | `delaunay.rs` | same name (snake_case) | S1 | |
 | `vertexmedian` | triangle.c:3937 | `delaunay.rs` | same name (snake_case) | S1 | |
 | `alternateaxes` | triangle.c:4006 | `delaunay.rs` | same name (snake_case) | S1 | |
