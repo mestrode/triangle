@@ -70,6 +70,17 @@ pub(crate) struct Mesh {
     /// Attributes per triangle (C m->eextras; sizes the triangle row and
     /// bounds tri_attribute).
     pub(crate) eextras: i32,
+
+    /// Statistics counters, C long fields of struct mesh (triangle.h:538-546:
+    /// incirclecount, counterclockcount, orient3dcount, circumcentercount -
+    /// i64 here, the pinned 64-bit port of C long). Iterated by the
+    /// predicates (predicates.rs, one increment per test, plus the
+    /// findcircumcenter decrement mirror of its internal counterclockwise
+    /// call); read by the future statistics rows.
+    pub(crate) incirclecount: i64,
+    pub(crate) counterclockcount: i64,
+    pub(crate) orient3dcount: i64,
+    pub(crate) circumcentercount: i64,
 }
 
 impl Mesh {
@@ -92,6 +103,10 @@ impl Mesh {
         nextras: i32,
         eextras: i32,
     ) -> Result<Mesh, Oom> {
+        // C triangleinit ends with tri_exactinit (triangle.c:1504): the
+        // exact-arithmetic constants are computed before any predicate can
+        // run. Mirrored here (idempotent via its OnceLock guard).
+        crate::predicates::tri_exactinit();
         let mut m = Mesh {
             // poolzero state for the three structural pools (dormant until
             // the init calls below); the small pools take their C geometry
@@ -146,6 +161,10 @@ impl Mesh {
             mesh_dim,
             nextras,
             eextras,
+            incirclecount: 0,
+            counterclockcount: 0,
+            orient3dcount: 0,
+            circumcentercount: 0,
         };
         m.initializevertexpool(b.poly)?;
         m.initializetrisubpools(
