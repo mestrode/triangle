@@ -127,6 +127,30 @@ pub(crate) const FREEVERTEX: i32 = 2;
 pub(crate) const DEADVERTEX: i32 = -32768;
 pub(crate) const UNDEADVERTEX: i32 = -32767;
 
+// Deviation D12 (docs/deviation-register.md): C bounds the box with three
+// trimalloc'd vertices outside the vertex pool (triangle.c:4634-4650) and
+// trifrees them in removebox (triangle.c:4741-4743). The port reserves
+// three ids at the top of the u32 row-id space instead: pool rows start
+// low and grow upward, so these never collide with a real vertex row, and
+// pool allocation and traversal never see them. Their two coordinates
+// live in Mesh::infvertex_store; vx_real/vx_set_real are the only
+// accessors.
+pub(crate) const INFVERTEX1: u32 = 0xFFFF_FFFD;
+pub(crate) const INFVERTEX2: u32 = 0xFFFF_FFFE;
+pub(crate) const INFVERTEX3: u32 = 0xFFFF_FFFF;
+
+/// Map a reserved out-of-pool INFVERTEX id to its Mesh::infvertex_store
+/// slot (0, 1, 2); None for every real vertex row id.
+#[inline]
+fn infvertex_index(v: u32) -> Option<usize> {
+    match v {
+        INFVERTEX1 => Some(0),
+        INFVERTEX2 => Some(1),
+        INFVERTEX3 => Some(2),
+        _ => None,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Raw slot access (the chokepoint's innermost layer; everything below debug
 // asserts the slot-role invariant, ADR 0002 section 3).
@@ -233,6 +257,12 @@ impl Mesh {
     /// A vertex coordinate / attribute word (C: `vx[comp]`, a REAL).
     #[inline]
     pub(crate) fn vx_real(&self, v: u32, comp: usize) -> f64 {
+        // D12 out-of-pool infvertices carry their two coordinates in the
+        // owned store, never in vertex pool rows.
+        if let Some(i) = infvertex_index(v) {
+            debug_assert!(comp < 2, "the infinite vertices carry two coordinates");
+            return f64::from_bits(self.infvertex_store[i][comp]);
+        }
         debug_assert!(
             comp < self.vertex_shape.stride,
             "vertex word {} out of row",
@@ -243,6 +273,14 @@ impl Mesh {
 
     #[inline]
     pub(crate) fn vx_set_real(&mut self, v: u32, comp: usize, x: f64) {
+        // D12 out-of-pool infvertices carry their two coordinates in the
+        // owned store, never in vertex pool rows;
+        // removebox zeroes it like C's trifree.
+        if let Some(i) = infvertex_index(v) {
+            debug_assert!(comp < 2, "the infinite vertices carry two coordinates");
+            self.infvertex_store[i][comp] = x.to_bits();
+            return;
+        }
         debug_assert!(
             comp < self.vertex_shape.stride,
             "vertex word {} out of row",

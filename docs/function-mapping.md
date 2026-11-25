@@ -76,7 +76,7 @@ side changes; the function names are the stable key).
 | `subsegdealloc` | triangle.c:1229 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit) |
 | `subsegtraverse` | triangle.c:1243 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit) |
 | `vertexdealloc` | triangle.c:1262 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit) |
-| `vertextraverse` | triangle.c:1276 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit) |
+| `vertextraverse` | triangle.c:1276 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit); vertextraverse landed in PR #33 (the divconqdelaunay consumer) |
 | `badsubsegdealloc` | triangle.c:1298 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit) |
 | `badsubsegtraverse` | triangle.c:1316 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit) |
 | `getvertex` | triangle.c:1343 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit) |
@@ -103,15 +103,15 @@ side changes; the function names are the stable key).
 | `triangulatepolygon` | triangle.c:3559 | `transform.rs` | same name (snake_case) | S1 | landed in PR #30 |
 | `deletevertex` | triangle.c:3638 | `transform.rs` | same name (snake_case) | S1 | landed in PR #30 |
 | `undovertex` | triangle.c:3730 | `transform.rs` | same name (snake_case) | S1 | landed in PR #30 |
-| `vertexsort` | triangle.c:3870 | `delaunay.rs` | same name (snake_case) | S1 | |
-| `vertexmedian` | triangle.c:3937 | `delaunay.rs` | same name (snake_case) | S1 | |
-| `alternateaxes` | triangle.c:4006 | `delaunay.rs` | same name (snake_case) | S1 | |
-| `mergehulls` | triangle.c:4062 | `delaunay.rs` | same name (snake_case) | S1 | |
-| `divconqrecurse` | triangle.c:4366 | `delaunay.rs` | same name (snake_case) | S1 | |
-| `removeghosts` | triangle.c:4495 | `delaunay.rs` | same name (snake_case) | S1 | |
-| `divconqdelaunay` | triangle.c:4547 | `delaunay.rs` | same name (snake_case) | S1 | |
-| `boundingbox` | triangle.c:4620 | `delaunay.rs` | same name (snake_case) | S1 | |
-| `removebox` | triangle.c:4672 | `delaunay.rs` | same name (snake_case) | S1 | |
+| `vertexsort` | triangle.c:3870 | `delaunay.rs` | same name (snake_case) | S1 | landed in PR #33 |
+| `vertexmedian` | triangle.c:3937 | `delaunay.rs` | same name (snake_case) | S1 | landed in PR #33 |
+| `alternateaxes` | triangle.c:4006 | `delaunay.rs` | same name (snake_case) | S1 | landed in PR #33 |
+| `mergehulls` | triangle.c:4062 | `delaunay.rs` | same name (snake_case) | S1 | landed in PR #33 |
+| `divconqrecurse` | triangle.c:4366 | `delaunay.rs` | same name (snake_case) | S1 | landed in PR #33 |
+| `removeghosts` | triangle.c:4495 | `delaunay.rs` | same name (snake_case) | S1 | landed in PR #33 |
+| `divconqdelaunay` | triangle.c:4547 | `delaunay.rs` | same name (snake_case) | S1 | landed in PR #33 |
+| `boundingbox` | triangle.c:4620 | `delaunay.rs` | same name (snake_case) | S1 | landed in PR #33 (out-of-pool infvertices per D12) |
+| `removebox` | triangle.c:4672 | `delaunay.rs` | same name (snake_case) | S1 | landed in PR #33 (out-of-pool infvertices per D12) |
 | `incrementaldelaunay` | triangle.c:4761 | `delaunay.rs` | same name (snake_case) | S1 | |
 | `eventheapinsert` | triangle.c:4800 | `delaunay.rs` | same name (snake_case) | S1 | |
 | `eventheapify` | triangle.c:4833 | `delaunay.rs` | same name (snake_case) | S1 | |
