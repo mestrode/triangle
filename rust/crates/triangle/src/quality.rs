@@ -57,7 +57,7 @@ pub(crate) fn makevertexmap(m: &mut Mesh, _b: &Behavior) {
     }
 }
 
-/// C: checkmesh (triangle.c:1537-1620). Run through the list of
+/// C: checkmesh (triangle.c:1537-1614). Run through the list of
 /// triangles, checking each one. Each triangle's three edges are checked;
 /// the triangle is tested for inversion once (at orient 0, through
 /// counterclockwise), the neighbor across each edge is checked for
@@ -121,7 +121,7 @@ pub(crate) fn checkmesh(m: &mut Mesh, b: &mut Behavior) -> i32 {
     horrors
 }
 
-/// C: checkdelaunay (triangle.c:1622-1712). Ensure that the mesh is
+/// C: checkdelaunay (triangle.c:1622-1699). Ensure that the mesh is
 /// (constrained) Delaunay: run through the triangles, and where an
 /// adjoining triangle exists, test that the shared edge is locally
 /// Delaunay through nonregular (skipping subsegment-separated pairs
@@ -129,7 +129,7 @@ pub(crate) fn checkmesh(m: &mut Mesh, b: &mut Behavior) -> i32 {
 /// infinite vertices). Returns the number of horrors.
 ///
 /// The C pair-once guard is a raw pointer comparison
-/// (`triangleloop.tri < oppotri.tri`, triangle.c:1639). Under D1 the
+/// (`triangleloop.tri < oppotri.tri`, triangle.c:1655). Under D1 the
 /// mirror compares triangle pool row ids: ids are handed out
 /// monotonically, so each unordered pair satisfies the comparison in
 /// exactly one direction, preserving the guard's only purpose (testing
@@ -171,7 +171,7 @@ pub(crate) fn checkdelaunay(m: &mut Mesh, b: &mut Behavior) -> i32 {
                     shouldbedelaunay = false;
                 }
             }
-            // C-parity: triangle.c:1672-1678 nests the two guards exactly
+            // C-parity: triangle.c:1672-1673 nests the two guards exactly
             // like this.
             #[allow(clippy::collapsible_if)]
             if shouldbedelaunay {
@@ -196,7 +196,7 @@ pub(crate) fn checkdelaunay(m: &mut Mesh, b: &mut Behavior) -> i32 {
     horrors
 }
 
-/// C: enqueuebadtriang (triangle.c:1714-1798). Add a bad triangle data
+/// C: enqueuebadtriang (triangle.c:1714-1795). Add a bad triangle data
 /// structure to the end of a queue. The queue is actually a set of 4096
 /// queues, keyed by the square of the shortest edge length, giving
 /// priority to smaller edges (queue 4095 is the highest priority). The
@@ -282,7 +282,7 @@ pub(crate) fn enqueuebadtriang(m: &mut Mesh, _b: &Behavior, badtri: u32) {
     m.set_bad_tri_next(badtri, NULL);
 }
 
-/// C: enqueuebadtri (triangle.c:1810-1830). Add a bad triangle to the end
+/// C: enqueuebadtri (triangle.c:1810-1823). Add a bad triangle to the end
 /// of a queue: allocate a badtriang row for the triangle, fill it
 /// (poortri, key, apex, org, dest, exactly C's write order), then pass it
 /// to enqueuebadtriang. OOM routes through the pool bridge.
@@ -306,7 +306,7 @@ pub(crate) fn enqueuebadtri(
     Ok(())
 }
 
-/// C: dequeuebadtriang (triangle.c:1835-1862). Remove a triangle from the
+/// C: dequeuebadtriang (triangle.c:1835-1859). Remove a triangle from the
 /// front of the highest-priority queue. The C NULL returns (no queues
 /// nonempty, the out-of-range guards, an empty front) mirror as None;
 /// the row id of the dequeued badtriang row otherwise.
@@ -333,7 +333,7 @@ pub(crate) fn dequeuebadtriang(m: &mut Mesh) -> Option<u32> {
     Some(result)
 }
 
-/// C: inlens (triangle.c:1878-1911). Check whether a vertex lies in the
+/// C: inlens (triangle.c:1878-1896). Check whether a vertex lies in the
 /// diametral lens of the subsegment from `eorg' to `edest' (the diametral
 /// circle if `conformdel' is set). A dot product of two sides of the
 /// triangle the vertex makes with the subsegment is used to check
@@ -364,7 +364,7 @@ pub(crate) fn inlens(b: &Behavior, eorg: Vertex, edest: Vertex, eapex: Vertex) -
     false
 }
 
-/// C: checkseg4encroach (triangle.c:1925-1979). Check a subsegment to see
+/// C: checkseg4encroach (triangle.c:1925-1985). Check a subsegment to see
 /// if it is encroached; add it to the list of encroached subsegments if
 /// it is. A subsegment is encroached if there is a vertex in its
 /// diametral lens (the diametral circle with -D); each of the (at most
@@ -434,7 +434,7 @@ pub(crate) fn checkseg4encroach(m: &mut Mesh, b: &Behavior, testsubseg: Osub) ->
     Ok(encroached)
 }
 
-/// C: testtriangle (triangle.c:2001-2179). Test a triangle for quality
+/// C: testtriangle (triangle.c:2001-2180). Test a triangle for quality
 /// and size: the minimum-angle condition (the angle test against
 /// b.goodangle, plus the aCute max-angle test under the acute feature,
 /// exactly the fork's NO_ACUTE-inverted compile shape), the fixed/area
@@ -560,7 +560,7 @@ pub(crate) fn testtriangle(m: &mut Mesh, b: &Behavior, testtri: Otri) -> Result<
 
     #[cfg(feature = "acute")]
     // find the maximum edge and accordingly the pqr orientation
-    // (C aCute fork, triangle.c:2094-2109; C computes `maxedge' but
+    // (C aCute fork, triangle.c:2096-2114; C computes `maxedge' but
     // never reads it - a dead store, not mirrored - and reads
     // `maxangle' below for the -U test.)
     let maxangle: f64 = {
@@ -580,7 +580,7 @@ pub(crate) fn testtriangle(m: &mut Mesh, b: &Behavior, testtri: Otri) -> Result<
     };
 
     // Check whether the angle is smaller than permitted.
-    // The aCute build (C triangle.c:2114-2118) adds the max-angle test;
+    // The aCute build (C triangle.c:2117-2121) adds the max-angle test;
     // C builds without it when NO_ACUTE is defined, the exact mirror of
     // the crate's `acute` feature (inverted compile switch).
     #[cfg(feature = "acute")]
@@ -664,8 +664,8 @@ pub(crate) fn testtriangle(m: &mut Mesh, b: &Behavior, testtri: Otri) -> Result<
     Ok(())
 }
 
-/// C: quality_statistics (triangle.c:8143-7362... at the cited anchor,
-/// 8143-8400). Measure the mesh: the shortest/longest squared-edge
+/// C: quality_statistics (triangle.c:8143-8312). Measure the mesh: the
+/// shortest/longest squared-edge
 /// extrema, the smallest/biggest doubled areas, the squared-cosine angle
 /// extrema (converted to degrees at the end), the minimum altitude per
 /// longest-edge and the worst aspect ratio, plus the angle histogram

@@ -89,7 +89,7 @@ pub struct BoundingBox {
 }
 
 /// The quality surface (ADR 0004 sections 5.3/5.5): the mirror of
-/// C's struct quality (triangle.h:568-577), filled by Mesh::quality
+/// C's struct quality (triangle.h:568-576), filled by Mesh::quality
 /// (triangle_mesh_quality, which is quality_statistics) with exact C
 /// arithmetic once quality.rs lands.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -175,7 +175,7 @@ impl Mesh {
     }
 }
 
-/// triangle_mesh_create (triangle_api.c:146). The C sequence -
+/// triangle_mesh_create (triangle_api.c:181). The C sequence -
 /// transfernodes, delaunay, formskeleton, carveholes, enforcequality,
 /// highorder - belongs to stage-1 core modules that have not landed
 /// yet; the shell owns its opening (options and input validation, the
@@ -195,7 +195,7 @@ pub fn triangulate(options: Options, input: &MeshInput) -> Result<Mesh, Error> {
 }
 
 impl Mesh {
-    /// triangle_mesh_load (triangle_api.c:190). Calling it implies the
+    /// triangle_mesh_load (triangle_api.c:262). Calling it implies the
     /// refine path in C's API; the same opening validation and pool
     /// geometry, the reconstruct body awaits stage-1.
     ///
@@ -209,7 +209,7 @@ impl Mesh {
         Err(Error::from(InternalStatus::NotImplemented))
     }
 
-    /// triangle_mesh_refine (triangle_api.c:231): enforcequality over
+    /// triangle_mesh_refine (triangle_api.c:332): enforcequality over
     /// the loaded mesh.
     ///
     /// SCAFFOLDING: awaits enforcequality (refine.rs); returns the
@@ -218,7 +218,7 @@ impl Mesh {
         Err(Error::from(InternalStatus::NotImplemented))
     }
 
-    /// triangle_mesh_copy (triangle_api.c:245): the marshalled output
+    /// triangle_mesh_copy (triangle_api.c:362): the marshalled output
     /// (writenodes, writeelements, writepoly, writeedges,
     /// writeneighbors and the pointmarker restore step).
     ///
@@ -230,7 +230,7 @@ impl Mesh {
         Err(Error::from(InternalStatus::NotImplemented))
     }
 
-    /// triangle_mesh_statistics (triangle_api.c:101). The mirror of
+    /// triangle_mesh_statistics (triangle_api.c:111). The mirror of
     /// the C field copy: C reads m->vertices.items, undeads,
     /// triangles.items, hullsize, edges, subsegs (b->poly || b->refine)
     /// and the bounds; the port reads the landed core fields (the pool
@@ -265,7 +265,7 @@ impl Mesh {
         }
     }
 
-    /// triangle_mesh_quality (triangle_api.c:94): the failure-free
+    /// triangle_mesh_quality (triangle_api.c:102): the failure-free
     /// wrapper of quality_statistics. Wired to the landed 1:1
     /// transliteration (the exact-predicate counters advance exactly
     /// like the C call's side effects).
@@ -277,7 +277,7 @@ impl Mesh {
         Ok(q)
     }
 
-    /// triangle_check_mesh (triangle_api.c:127): the failure count of
+    /// triangle_check_mesh (triangle_api.c:163): the failure count of
     /// checkmesh (C semantics: a count, not an error). Wired to the
     /// landed 1:1 transliteration; the noexact save/restore runs
     /// exactly like C's inside the call.
@@ -287,7 +287,7 @@ impl Mesh {
         crate::quality::checkmesh(&mut core, &mut behavior) as usize
     }
 
-    /// triangle_check_delaunay (triangle_api.c:134): the failure count
+    /// triangle_check_delaunay (triangle_api.c:172): the failure count
     /// of checkdelaunay. Wired to the landed 1:1 transliteration.
     pub fn check_delaunay(&self) -> usize {
         let mut core = self.core.borrow_mut();
@@ -295,7 +295,7 @@ impl Mesh {
         crate::quality::checkdelaunay(&mut core, &mut behavior) as usize
     }
 
-    /// triangle_memory (triangle_api.c:113): the mirror of C's
+    /// triangle_memory (triangle_api.c:143): the mirror of C's
     /// maxitems * itembytes sum over the eight pools. Landed for real:
     /// WordPool high_water is the C maxitems mirror and stride * 8 is
     /// itembytes (ADR 0003), so the sum runs over the landed pools.
