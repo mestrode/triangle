@@ -73,12 +73,19 @@ pub(crate) struct Mesh {
     pub(crate) eextras: i32,
     /// Input bounds (C m->xmin, xmax, ymin, ymax; REAL, triangle.h:514):
     /// written by the transfernodes row (ioarrays.rs, not landed yet) and
-    /// read by boundingbox (delaunay.rs part 1). Zero superset of C's
-    /// uninitialized read-before-write (D11).
+    /// read by boundingbox (delaunay.rs part 1) and sweeplinedelaunay
+    /// (part 2). Zero superset of C's uninitialized read-before-write
+    /// (D11).
     pub(crate) xmin: f64,
     pub(crate) xmax: f64,
     pub(crate) ymin: f64,
     pub(crate) ymax: f64,
+    /// C m->xminextreme (triangle.h:517): 10 * xmin - 9 * xmax, written
+    /// by transfernodes (triangle.c:7754, ioarrays.rs, not landed yet)
+    /// and read by sweeplinedelaunay as the circle-event x key
+    /// (triangle.c:5382/5397). Zero superset of C's uninitialized
+    /// read-before-write (D11).
+    pub(crate) xminextreme: f64,
     /// C m->undeads (triangle.h:520, int to i32): duplicate vertices
     /// moved to the graveyard (type UNDEADVERTEX); counted by
     /// divconqdelaunay (delaunay.rs) and later by sweeplinedelaunay and
@@ -89,15 +96,20 @@ pub(crate) struct Mesh {
     pub(crate) undeads: i32,
 
     /// Statistics counters, C long fields of struct mesh (triangle.h:538-546:
-    /// incirclecount, counterclockcount, orient3dcount, circumcentercount -
-    /// i64 here, the pinned 64-bit port of C long). Iterated by the
-    /// predicates (predicates.rs, one increment per test, plus the
-    /// findcircumcenter decrement mirror of its internal counterclockwise
-    /// call); read by the future statistics rows.
+    /// incirclecount, counterclockcount, orient3dcount, hyperbolacount,
+    /// circumcentercount, circletopcount - i64 here, the pinned 64-bit
+    /// port of C long). Iterated by the predicates (predicates.rs, one
+    /// increment per test, plus the findcircumcenter decrement mirror of
+    /// its internal counterclockwise call) and by the sweepline rows
+    /// (delaunay.rs part 2: rightofhyperbola counts every hyperbola test,
+    /// circletop every circle-top test, exactly at the C increment
+    /// sites); read by the future statistics rows.
     pub(crate) incirclecount: i64,
     pub(crate) counterclockcount: i64,
     pub(crate) orient3dcount: i64,
+    pub(crate) hyperbolacount: i64,
     pub(crate) circumcentercount: i64,
+    pub(crate) circletopcount: i64,
 
     /// C m->randomseed (triangle.c:220, unsigned long: u64 on the LP64
     /// port): the LCG state of randomnation (util.rs). Deviation D10: an
@@ -232,11 +244,14 @@ impl Mesh {
             xmax: 0.0,
             ymin: 0.0,
             ymax: 0.0,
+            xminextreme: 0.0,
             undeads: 0,
             incirclecount: 0,
             counterclockcount: 0,
             orient3dcount: 0,
+            hyperbolacount: 0,
             circumcentercount: 0,
+            circletopcount: 0,
             // C triangleinit (triangle.c:1493-1502): recenttri.tri NULL,
             // samples 1, checksegments 0, checkquality 0, cyclefail 0,
             // randomseed 1. hullsize and lastflip are not zeroed by C's
