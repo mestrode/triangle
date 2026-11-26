@@ -30,7 +30,13 @@ jobs:
         run: cargo build
       - name: test
         run: cargo test
+      # The NO_ACUTE mirror must scope to the lib crate: workspace-wide,
+      # triangle-cli's dependency on the triangle lib (default features,
+      # no default-features = false) re-enables the acute feature under
+      # resolver v2, and the mirror would silently test nothing.
       - name: build (NO_ACUTE mirror)
-        run: cargo build --no-default-features
+        run: cargo build -p triangle --no-default-features
       - name: test (NO_ACUTE mirror)
-        run: cargo test --no-default-features
+        run: cargo test -p triangle --no-default-features
+      - name: clippy (NO_ACUTE mirror)
+        run: cargo clippy -p triangle --no-default-features --all-targets -- -D warnings
