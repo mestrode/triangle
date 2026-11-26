@@ -5,10 +5,11 @@
 //! moves from just before the Array I/O banner (triangle.c:7624; the
 //! banner sits at triangle.c:7687) for cohesion with its only callers,
 //! the quality stage of the api. The aCute call site findNewSPLocation
-//! (triangle.c:7437) and the aCute scratch-pool init (triangle.c:7536-
-//! 7540) mirror C's NO_ACUTE compile switch through the crate's 'acute'
-//! feature exactly like quality.rs's testtriangle maxangle block; their
-//! bodies belong to the acute slice (D16). Assignment:
+//! (triangle.c:7437) is live since stage-1 acute C (#43): it routes
+//! through the family's D26 seam (tuple interpolants, the Oom funnel).
+//! The aCute scratch-pool init (triangle.c:7536-7540) stays a
+//! documented no-op: the pool is eager since the D23 dissolution
+//! (Mesh::new always carries it). Assignment:
 //! docs/function-mapping.md.
 
 use std::cmp::Ordering;
@@ -334,8 +335,8 @@ pub(crate) fn tallyfaces(m: &mut Mesh, b: &Behavior) -> Result<(), Oom> {
 /// triangle's circumcenter (or, under the aCute build without an area
 /// constraint, at findNewSPLocation's pick), insert it, and maintain the
 /// Delaunay property. C is void; the port's Err carries the pool OOM
-/// bridge and, until the acute slice lands, the funnel-marked
-/// NotImplemented of the findNewSPLocation call site (D16).
+/// bridge and the findNewSPLocation call's Oom through the same
+/// funnel (D16, superseded by stage-1 acute C #43).
 pub(crate) fn splittriangle(m: &mut Mesh, b: &Behavior, badtri: u32) -> Result<(), InternalStatus> {
     let mut badotri = decode(m.bad_tri_poortri(badtri));
     let borg = m.org(badotri);
@@ -376,13 +377,18 @@ pub(crate) fn splittriangle(m: &mut Mesh, b: &Behavior, badtri: u32) -> Result<(
                 xi = xi_v;
                 eta = eta_v;
             } else {
-                // SCAFFOLDING: findNewSPLocation (triangle.c:7437) is
-                // the acute slice's row (acute.rs, a later stage); the
-                // funnel-marked NotImplemented routes through the
-                // established status funnel, and the just-allocated row
-                // returns to the pool so nothing observable leaks (D16).
-                m.vx_dealloc(newvertex);
-                return Err(InternalStatus::NotImplemented);
+                // C: findNewSPLocation(m, b, borg, bdest, bapex,
+                // newvertex, &xi, &eta, 1, badotri) (triangle.c:7437):
+                // the row stays allocated through the call exactly as
+                // C keeps it, the interpolants return as the tuple
+                // (D26), and the Oom of the funneled deletevertex
+                // inside routes through InternalStatus (D8).
+                let (xi_v, eta_v) = crate::acute::findNewSPLocation(
+                    m, b, borg, bdest, bapex, newvertex, true, badotri,
+                )
+                .map_err(InternalStatus::from)?;
+                xi = xi_v;
+                eta = eta_v;
             }
         }
         #[cfg(not(feature = "acute"))]
@@ -496,14 +502,13 @@ pub(crate) fn enforcequality(
     m.bad_sub_seg_restart();
 
     // C: #ifndef NO_ACUTE (triangle.c:7536-7540): the aCute scratch
-    // pool. SCAFFOLDING: acutepool_init(20, &m->acute_mem) belongs to
-    // the acute slice (acute.rs, a later stage; its only consumer is
-    // findNewSPLocation); the port mirrors the compile shape with an
-    // inert block until that lands (D16).
-    #[cfg(feature = "acute")]
-    {
-        // (acutepool_init awaits the acute slice)
-    }
+    // pool, initialized by acutepool_init(20, &m->acute_mem) at
+    // triangle.c:7538. The port does not re-implement this site: the
+    // D23 dissolution made the pool an eager, always-present part of
+    // Mesh::new (the triangle.c:1507 mapping), so the init is a
+    // documented no-op here (D16, superseded by stage-1 acute C #43;
+    // its only consumer, findNewSPLocation, owns its scratch per
+    // call).
 
     // Test all segments to see if they're encroached
     // (triangle.c:7542).
@@ -1115,19 +1120,25 @@ mod tests {
 
     #[test]
     #[cfg(feature = "acute")]
-    fn splittriangle_marks_the_acute_scaffold_until_acute_rs_lands() {
+    fn splittriangle_routes_through_findnewsplocation_without_an_area_constraint() {
         // Without an area constraint the acute build routes through
-        // findNewSPLocation (triangle.c:7437), the acute slice's row;
-        // the funnel-marked NotImplemented surfaces (D16) and the
-        // allocated row returns to the pool (vertices back to 3).
+        // findNewSPLocation (triangle.c:7437), live since stage-1
+        // acute C (#43). The REALLY BAD triangle ((0,0), (2,0),
+        // (1,0.1)) has orientation 213, so the Ungor off-center
+        // prelude picks the same off-center point the acute.rs
+        // family test pins, the row stays allocated through the
+        // call, and the insertion splits the lone hull triangle.
         let b = behavior_q(20.0);
         let mut m = mesh(&b);
         let t = lone_tri(&mut m, false, (0.0, 0.0), (2.0, 0.0), (1.0, 0.1));
         testtriangle(&mut m, &b, t).expect("testtriangle");
         assert_eq!(m.badtriangles.live_count(), 1);
-        let err = splittriangle(&mut m, &b, 1).expect_err("findNewSPLocation awaits acute.rs");
-        assert_eq!(err, InternalStatus::NotImplemented);
-        assert_eq!(m.vertices.live_count(), 3);
+        splittriangle(&mut m, &b, 1).expect("findNewSPLocation");
+        let nv = find_vertex(&m, 1.2306141135681588, -2.6438588643184127, 1e-12)
+            .expect("offcenter vertex");
+        assert_eq!(m.vx_mark(nv), 0);
+        assert_eq!(m.vx_type(nv), FREEVERTEX);
+        assert_eq!(m.vertices.live_count(), 4);
     }
 
     #[test]
@@ -1178,10 +1189,12 @@ mod tests {
 
     #[test]
     #[cfg(feature = "acute")]
-    fn enforcequality_surfaces_the_acute_scaffold() {
-        // The quality stage reaches splittriangle without an area
-        // constraint, whose findNewSPLocation row (triangle.c:7437)
-        // is the acute slice's funnel-marked NotImplemented (D16).
+    fn enforcequality_refines_skinny_triangles_through_the_acute_path() {
+        // The acute build's twin of the NO_ACUTE test below: the
+        // Ruppert loop runs to completion under a 200-point Steiner
+        // budget, every split goes through findNewSPLocation
+        // (triangle.c:7437), the queue drains, the triangle count
+        // grows, and the funneled status stays Ok.
         let mut b = behavior_q(20.0);
         b.steiner = 200;
         let mut m = Mesh::new(&b, 4, 2, 0, 0).expect("mesh init");
@@ -1189,9 +1202,13 @@ mod tests {
             vxy(&mut m, x, y);
         }
         delaunay(&mut m, &b).expect("delaunay");
+        let before = m.triangles.live_count();
         let mut status = InternalStatus::Ok;
-        let err = enforcequality(&mut m, &b, &mut status).expect_err("acute.rs pending");
-        assert_eq!(err, InternalStatus::NotImplemented);
+        enforcequality(&mut m, &b, &mut status).expect("enforcequality");
+        assert_eq!(status, InternalStatus::Ok);
+        assert!(m.triangles.live_count() > before);
+        assert_eq!(m.badtriangles.live_count(), 0);
+        assert_eq!(m.badsubsegs.live_count(), 0);
     }
 
     #[test]
