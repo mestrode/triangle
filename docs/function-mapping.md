@@ -72,14 +72,14 @@ side changes; the function names are the stable key).
 | `initializevertexpool` | triangle.c:1100 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit) |
 | `initializetrisubpools` | triangle.c:1136 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit) |
 | `triangledealloc` | triangle.c:1196 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit) |
-| `triangletraverse` | triangle.c:1210 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit) |
+| `triangletraverse` | triangle.c:1210 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit); landed in PR #35 (the reconstruct consumer) |
 | `subsegdealloc` | triangle.c:1229 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit) |
-| `subsegtraverse` | triangle.c:1243 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit) |
+| `subsegtraverse` | triangle.c:1243 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit); landed in PR #35 (the reconstruct consumer) |
 | `vertexdealloc` | triangle.c:1262 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit) |
 | `vertextraverse` | triangle.c:1276 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit); vertextraverse landed in PR #33 (the divconqdelaunay consumer) |
 | `badsubsegdealloc` | triangle.c:1298 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit) |
 | `badsubsegtraverse` | triangle.c:1316 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit) |
-| `getvertex` | triangle.c:1343 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit) |
+| `getvertex` | triangle.c:1343 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit); landed in PR #35 (the reconstruct consumer) |
 | `triangledeinit` | triangle.c:1376 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit) |
 | `maketriangle` | triangle.c:1414 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit) |
 | `makesubseg` | triangle.c:1450 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit) |
@@ -93,7 +93,7 @@ side changes; the function names are the stable key).
 | `inlens` | triangle.c:1878 | `quality.rs` | same name (snake_case) | S1 | testtriangle carries the Unsuitable callback site (D9); quality_statistics moves from the C Array I/O tail for cohesion |
 | `checkseg4encroach` | triangle.c:1925 | `quality.rs` | same name (snake_case) | S1 | testtriangle carries the Unsuitable callback site (D9); quality_statistics moves from the C Array I/O tail for cohesion |
 | `testtriangle` | triangle.c:2001 | `quality.rs` | same name (snake_case) | S1 | testtriangle carries the Unsuitable callback site (D9); quality_statistics moves from the C Array I/O tail for cohesion |
-| `makevertexmap` | triangle.c:2206 | `quality.rs` | same name (snake_case) | S1 | testtriangle carries the Unsuitable callback site (D9); quality_statistics moves from the C Array I/O tail for cohesion |
+| `makevertexmap` | triangle.c:2206 | `quality.rs` | same name (snake_case) | S1 | testtriangle carries the Unsuitable callback site (D9); quality_statistics moves from the C Array I/O tail for cohesion; landed in PR #35 (with the formskeleton consumer; the rest of quality.rs lands with refine) |
 | `preciselocate` | triangle.c:2291 | `locate.rs` | same name (snake_case) | S1 | landed in PR #30 |
 | `locate` | triangle.c:2427 | `locate.rs` | same name (snake_case) | S1 | landed in PR #30 |
 | `insertsubseg` | triangle.c:2573 | `transform.rs` | same name (snake_case) | S1 | landed in PR #30 |
@@ -126,20 +126,20 @@ side changes; the function names are the stable key).
 | `frontlocate` | triangle.c:5189 | `delaunay.rs` | same name (snake_case) | S1 | landed in PR #34 |
 | `sweeplinedelaunay` | triangle.c:5212 | `delaunay.rs` | same name (snake_case) | S1 | landed in PR #34 |
 | `delaunay` | triangle.c:5429 | `delaunay.rs` | same name (snake_case) | S1 | landed in PR #34 (dispatcher: incremental/sweepline/divconq per the landed `Behavior` flags) |
-| `reconstruct` | triangle.c:5483 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8) |
-| `finddirection` | triangle.c:5776 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8) |
-| `segmentintersection` | triangle.c:5873 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8) |
-| `scoutsegment` | triangle.c:6003 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8) |
-| `conformingedge` | triangle.c:6089 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8) |
-| `delaunayfixup` | triangle.c:6201 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8) |
-| `constrainededge` | triangle.c:6312 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8) |
-| `insertsegment` | triangle.c:6420 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8) |
-| `markhull` | triangle.c:6517 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8) |
-| `formskeleton` | triangle.c:6554 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8) |
-| `infecthull` | triangle.c:6642 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8) |
-| `plague` | triangle.c:6714 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8) |
-| `regionplague` | triangle.c:6886 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8) |
-| `carveholes` | triangle.c:6964 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8) |
+| `reconstruct` | triangle.c:5483 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8); landed in PR #35 |
+| `finddirection` | triangle.c:5776 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8); landed in PR #35 |
+| `segmentintersection` | triangle.c:5873 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8); landed in PR #35 |
+| `scoutsegment` | triangle.c:6003 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8); landed in PR #35 |
+| `conformingedge` | triangle.c:6089 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8); landed in PR #35 |
+| `delaunayfixup` | triangle.c:6201 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8); landed in PR #35 |
+| `constrainededge` | triangle.c:6312 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8); landed in PR #35 |
+| `insertsegment` | triangle.c:6420 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8); landed in PR #35 |
+| `markhull` | triangle.c:6517 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8); landed in PR #35 |
+| `formskeleton` | triangle.c:6554 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8); landed in PR #35 |
+| `infecthull` | triangle.c:6642 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8); landed in PR #35 |
+| `plague` | triangle.c:6714 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8); landed in PR #35 |
+| `regionplague` | triangle.c:6886 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8); landed in PR #35 |
+| `carveholes` | triangle.c:6964 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8); landed in PR #35 |
 | `tallyencs` | triangle.c:7129 | `refine.rs` | same name (snake_case) | S1 | highorder moves from the C Array I/O tail for cohesion |
 | `precisionerror` | triangle.c:7154 | `refine.rs` | same name (snake_case) | S1 | highorder moves from the C Array I/O tail for cohesion |
 | `splitencsegs` | triangle.c:7183 | `refine.rs` | same name (snake_case) | S1 | highorder moves from the C Array I/O tail for cohesion |
