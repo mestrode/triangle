@@ -187,6 +187,31 @@ pub(crate) struct Mesh {
     /// triangle of location (struct otri in C, where tri can be NULL;
     /// Option here).
     pub(crate) recenttri: Option<Otri>,
+
+    // -----------------------------------------------------------------
+    // The bad-triangle queues (C triangle.h:502-505, the mesh fields the
+    // enqueuebadtriang/dequeuebadtriang rows of quality.rs drive: 4096
+    // queues keyed by the square of the shortest edge, front/tail links
+    // into the badtriangles pool, the nextnonemptyq chain and its head).
+    // D4: the C badtriang pointers mirror as u32 pool row ids, the null
+    // row id 0 marking queue ends; firstnonemptyq -1 marks "all empty",
+    // 4096 the sentinel value dequeue treats as empty.
+    // ----------------------------------------------------------------
+    /// C m->queuefront[4096]: the first badtriang row of each queue (the
+    /// null row id 0 for an empty queue).
+    pub(crate) queuefront: [u32; 4096],
+    /// C m->queuetail[4096]: the last badtriang row of each queue.
+    /// C leaves this uninitialized until an enqueue writes it, and the
+    /// queue discipline never reads it before that first write; the port
+    /// pins the null row id 0 as the deterministic superset.
+    pub(crate) queuetail: [u32; 4096],
+    /// C m->nextnonemptyq[4096]: the next lower-priority nonempty queue
+    /// after each nonempty queue. Same unread-before-write discipline as
+    /// `queuetail`; the port pins -1 as the deterministic superset.
+    pub(crate) nextnonemptyq: [i32; 4096],
+    /// C m->firstnonemptyq: the highest-priority nonempty queue, -1 when
+    /// all queues are empty.
+    pub(crate) firstnonemptyq: i32,
 }
 
 impl Mesh {
@@ -305,6 +330,22 @@ impl Mesh {
             infvertex3: NULL,
             infvertex_store: [[0; 2]; 3],
             recenttri: None,
+            // The bad-triangle queue state (C triangle.h:502-505). C
+            // initializes queuefront[] to NULL and firstnonemptyq to -1
+            // inside enforcequality (triangle.c:7559-7561) right before
+            // tallyfaces fills the queues; queuetail[] and nextnonemptyq[]
+            // are uninitialized struct memory there, never read before
+            // their first enqueue writes them (the queue discipline of
+            // quality.rs). The port pins the whole state at construction:
+            // the enforcequality-init values for the two C-initialized
+            // members and the null superset for the other two, following
+            // the established lazy-pool-init convention (ADR 0003
+            // section 4). When refine.rs lands, its enforcequality row
+            // re-runs the C init loop verbatim over these fields.
+            queuefront: [NULL; 4096],
+            queuetail: [NULL; 4096],
+            nextnonemptyq: [-1; 4096],
+            firstnonemptyq: -1,
         };
         m.initializevertexpool(b.poly)?;
         m.initializetrisubpools(

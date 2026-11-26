@@ -351,7 +351,9 @@ impl Options {
             maxangle: self.maxangle,
             #[cfg(feature = "acute")]
             maxgoodangle: 0.0, // behavior_update computes it
-            user_func: self.user_func,
+            // D13: the RefCell wrap of the callback (Behavior-side only;
+            // the Options shape of D13/D9 stays Option<Box<dyn Unsuitable>>).
+            user_func: self.user_func.map(std::cell::RefCell::new),
         }
     }
 
@@ -610,7 +612,16 @@ pub(crate) struct Behavior {
     pub(crate) maxangle: f64,
     #[cfg(feature = "acute")]
     pub(crate) maxgoodangle: f64,
-    pub(crate) user_func: Option<Box<dyn Unsuitable>>,
+    /// The -u sizing callback (C b->triunsuitable_user_func, invoked at
+    /// testtriangle). Deviation D13 (docs/deviation-register.md): the
+    /// crate-private Behavior stores the box in a RefCell so the
+    /// transliterated core's `&Behavior` plumbing (C's `behavior*`
+    /// read-flow) can invoke the `&mut self` object-safe method inside
+    /// testtriangle; the public Options storage of D9
+    /// (`Option<Box<dyn Unsuitable>>`) is unchanged, and the MT
+    /// milestone (ADR 0005, #12) supersedes the interior shape when the
+    /// storage bound becomes Send + Sync.
+    pub(crate) user_func: Option<std::cell::RefCell<Box<dyn Unsuitable>>>,
 }
 
 impl Behavior {
@@ -922,16 +933,17 @@ mod tests {
     fn user_test_callback_rides_the_behavior() {
         let mut opts = Options::new();
         opts.user_test(Box::new(AlwaysUnsuitable));
-        let mut b = opts.validate().expect("validate");
+        let b = opts.validate().expect("validate");
         assert!(b.usertest);
         assert!(b.quality); // -u sets it
-        let cb = b.user_func.as_mut().expect("callback stored");
+                            // D13: the Behavior-side RefCell wrap carries the stored box.
+        let cb = b.user_func.as_ref().expect("callback stored");
         let s = VertexSample {
             x: 0.0,
             y: 0.0,
             marker: 7,
         };
-        assert!(cb.is_unsuitable(s, s, s, 1.5));
+        assert!(cb.borrow_mut().is_unsuitable(s, s, s, 1.5));
     }
 
     #[test]

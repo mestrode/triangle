@@ -826,6 +826,95 @@ impl Mesh {
     }
 
     // -----------------------------------------------------------------------
+    // Bad-triangle rows (C struct badtriang, triangle.h:277-286:
+    // { triangle poortri; REAL key; vertex triangorg, triangdest,
+    //   triangapex; struct badtriang *nexttriang; }, 6 words:
+    // the encoded poor triangle at word 0, the f64 key at word 1
+    // (slot-1 REAL, the same f64-bits convention as tri_real), the three
+    // vertex ids at words 2-4 (D1: ids replace pointers), the next-row
+    // link at word 5 (D4: the C badtriang* pointer is a u32 pool row id,
+    // the null row id 0 at every queue end). Written by quality.rs
+    // (enqueuebadtri; the readers serve dequeuebadtriang and the
+    // refine.rs drainers, so they are production readers, not
+    // test-side).
+    // -----------------------------------------------------------------------
+
+    /// C: poolalloc(&m->badtriangles) at enqueuebadtri (triangle.c:1820):
+    /// the fresh badtriang row id.
+    pub(crate) fn bad_tri_alloc(&mut self) -> Result<u32, Oom> {
+        self.badtriangles.alloc()
+    }
+
+    /// C: newbad->poortri = encode(*enqtri) (triangle.c:1821): the packed
+    /// handle word of the offending triangle (D1).
+    pub(crate) fn set_bad_tri_poortri(&mut self, id: u32, poortri: u64) {
+        self.badtriangles.set_word(id, 0, poortri);
+    }
+
+    /// C: newbad->key = minedge (triangle.c:1822): the queue key (the
+    /// square of the shortest edge length; the triangle.h comment says
+    /// "cos^2 of smallest (apical) angle", the code stores minedge).
+    pub(crate) fn set_bad_tri_key(&mut self, id: u32, key: f64) {
+        self.badtriangles.set_word(id, 1, key.to_bits());
+    }
+
+    /// C: newbad->triangapex = enqapex (triangle.c:1823; the C writes
+    /// apex before org and dest, mirrored here and in the following two).
+    pub(crate) fn set_bad_tri_apex(&mut self, id: u32, apex: u32) {
+        self.badtriangles.set_word(id, 4, apex as u64);
+    }
+
+    /// C: newbad->triangorg = enqorg (triangle.c:1824).
+    pub(crate) fn set_bad_tri_org(&mut self, id: u32, org: u32) {
+        self.badtriangles.set_word(id, 2, org as u64);
+    }
+
+    /// C: newbad->triangdest = enqdest (triangle.c:1825).
+    pub(crate) fn set_bad_tri_dest(&mut self, id: u32, dest: u32) {
+        self.badtriangles.set_word(id, 3, dest as u64);
+    }
+
+    /// C: badtri->nexttriang = NULL / the tail-link write
+    /// (triangle.c:1791, 1814): the queue link.
+    pub(crate) fn set_bad_tri_next(&mut self, id: u32, next: u32) {
+        self.badtriangles.set_word(id, 5, next as u64);
+    }
+
+    /// C: result->poortri reads (dequeuebadtriang's drainers and the
+    /// quality module's tests; triangle.c:1846-1860 reads the links).
+    pub(crate) fn bad_tri_poortri(&self, id: u32) -> u64 {
+        self.badtriangles.word(id, 0)
+    }
+
+    /// C: badtri->key reads (the queue key arithmetic of enqueuebadtriang,
+    /// triangle.c:1721-1751).
+    pub(crate) fn bad_tri_key(&self, id: u32) -> f64 {
+        f64::from_bits(self.badtriangles.word(id, 1))
+    }
+
+    /// C: badtri->triangapex reads (the apex for the split-site
+    /// circumcenter test; triangle.c:1846ff drainers).
+    pub(crate) fn bad_tri_apex(&self, id: u32) -> u32 {
+        self.badtriangles.word(id, 4) as u32
+    }
+
+    /// C: badtri->triangorg reads.
+    pub(crate) fn bad_tri_org(&self, id: u32) -> u32 {
+        self.badtriangles.word(id, 2) as u32
+    }
+
+    /// C: badtri->triangdest reads.
+    pub(crate) fn bad_tri_dest(&self, id: u32) -> u32 {
+        self.badtriangles.word(id, 3) as u32
+    }
+
+    /// C: badtri->nexttriang reads (dequeuebadtriang's pop,
+    /// triangle.c:1852).
+    pub(crate) fn bad_tri_next(&self, id: u32) -> u32 {
+        self.badtriangles.word(id, 5) as u32
+    }
+
+    // -----------------------------------------------------------------------
     // Splay-node rows (C struct splaynode, triangle.h:323-326:
     // { struct otri keyedge; vertex keydest; struct splaynode *lchild,
     //   *rchild; }, 5 words: keyedge at word 0, keydest at word 1, lchild
