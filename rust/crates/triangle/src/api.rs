@@ -133,9 +133,23 @@ impl Default for Quality {
 /// Stage-1 note: no public constructor succeeds yet (triangulate /
 /// load_mesh await the delaunay/reconstruct modules); the surface is
 /// frozen now so the stage-1 core tickets fill it without churn.
+///
+/// Interior note (serial-era bridge): the frozen `&self` check and
+/// statistics surface needs to run the 1:1 transliterations of
+/// checkmesh/checkdelaunay/quality_statistics, whose C bodies write
+/// through context state (the predicate counters on the core mesh, the
+/// noexact save/restore on the behavior). The two owned fields ride
+/// RefCell so the frozen signatures can borrow them mutably for the
+/// duration of one call; no public method re-enters (a check never
+/// calls back into the surface, and the Unsuitable callback receives
+/// copied values only, D9), so the runtime borrows never overlap. This
+/// rides until the MT milestone (ADR 0005, ticket #12) reworks the
+/// counters and the callback storage for the Send + Sync &self surface
+/// its reentrancy ruling demands (the same rework that replaces the
+/// D13 RefCell on the Behavior).
 pub struct Mesh {
-    pub(crate) core: crate::mesh::Mesh,
-    pub(crate) behavior: Behavior,
+    pub(crate) core: std::cell::RefCell<crate::mesh::Mesh>,
+    pub(crate) behavior: std::cell::RefCell<Behavior>,
 }
 
 impl Mesh {
@@ -154,7 +168,10 @@ impl Mesh {
         let eextras = (input.attributes_per_element + eextras_attribs) as i32;
         let core = crate::mesh::Mesh::new(&behavior, invertices, 2, nextras, eextras)
             .map_err(Error::from)?;
-        Ok(Mesh { core, behavior })
+        Ok(Mesh {
+            core: std::cell::RefCell::new(core),
+            behavior: std::cell::RefCell::new(behavior),
+        })
     }
 }
 
@@ -213,39 +230,69 @@ impl Mesh {
         Err(Error::from(InternalStatus::NotImplemented))
     }
 
-    /// triangle_mesh_statistics (triangle_api.c:101). The counter
-    /// sources (m->vertices.items, undeads, hullsize, edges, subsegs,
-    /// the bounds) live on core fields the statistics epoch fills;
-    /// until then the surface is the frozen zeroed shape.
+    /// triangle_mesh_statistics (triangle_api.c:101). The mirror of
+    /// the C field copy: C reads m->vertices.items, undeads,
+    /// triangles.items, hullsize, edges, subsegs (b->poly || b->refine)
+    /// and the bounds; the port reads the landed core fields (the pool
+    /// live counts are C items, the counters landed with the core).
     pub fn statistics(&self) -> Statistics {
-        Statistics::default()
+        let m = self.core.borrow();
+        let b = self.behavior.borrow();
+        Statistics {
+            vertices: m.vertices.live_count() as usize,
+            undeads: m.undeads as usize,
+            triangles: m.triangles.live_count() as usize,
+            hullsize: m.hullsize as usize,
+            // SCAFFOLDING: C's writer of m->edges is
+            //   (3 * triangles.items + hullsize) / 2, computed in the
+            //   triangle_mesh_create/load_mesh/refine entry points
+            //   (triangle_api.c:252-253, 326-327, 354-355), which
+            //   await the ioarrays/delaunay/construct/refine phase
+            //   entry points; until a landed entry point runs, C's
+            //   uninitialized struct field is zeroed here.
+            edges: 0,
+            subsegs: if b.poly || b.refine {
+                m.subsegs.live_count() as usize
+            } else {
+                0
+            },
+            bounds: BoundingBox {
+                xmin: m.xmin,
+                ymin: m.ymin,
+                xmax: m.xmax,
+                ymax: m.ymax,
+            },
+        }
     }
 
-    /// triangle_mesh_quality (triangle_api.c:94), the mirror of
-    /// quality_statistics.
-    ///
-    /// SCAFFOLDING: awaits quality_statistics (quality.rs); returns
-    /// the funnel-marked InternalStatus::NotImplemented today.
+    /// triangle_mesh_quality (triangle_api.c:94): the failure-free
+    /// wrapper of quality_statistics. Wired to the landed 1:1
+    /// transliteration (the exact-predicate counters advance exactly
+    /// like the C call's side effects).
     pub fn quality(&self) -> Result<Quality, Error> {
-        Err(Error::from(InternalStatus::NotImplemented))
+        let mut q = Quality::default();
+        let mut core = self.core.borrow_mut();
+        let b = self.behavior.borrow();
+        crate::quality::quality_statistics(&mut core, &b, &mut q);
+        Ok(q)
     }
 
     /// triangle_check_mesh (triangle_api.c:127): the failure count of
-    /// checkmesh (C semantics: a count, not an error).
-    ///
-    /// SCAFFOLDING: awaits checkmesh (quality.rs); a count of zero on
-    /// a scaffolded mesh today.
+    /// checkmesh (C semantics: a count, not an error). Wired to the
+    /// landed 1:1 transliteration; the noexact save/restore runs
+    /// exactly like C's inside the call.
     pub fn check_mesh(&self) -> usize {
-        0
+        let mut core = self.core.borrow_mut();
+        let mut behavior = self.behavior.borrow_mut();
+        crate::quality::checkmesh(&mut core, &mut behavior) as usize
     }
 
     /// triangle_check_delaunay (triangle_api.c:134): the failure count
-    /// of checkdelaunay.
-    ///
-    /// SCAFFOLDING: awaits checkdelaunay (quality.rs); a count of
-    /// zero on a scaffolded mesh today.
+    /// of checkdelaunay. Wired to the landed 1:1 transliteration.
     pub fn check_delaunay(&self) -> usize {
-        0
+        let mut core = self.core.borrow_mut();
+        let mut behavior = self.behavior.borrow_mut();
+        crate::quality::checkdelaunay(&mut core, &mut behavior) as usize
     }
 
     /// triangle_memory (triangle_api.c:113): the mirror of C's
@@ -256,7 +303,7 @@ impl Mesh {
         fn pool_bytes(p: &WordPool) -> usize {
             p.high_water() as usize * p.stride() as usize * 8
         }
-        let m = &self.core;
+        let m = self.core.borrow();
         pool_bytes(&m.vertices)
             + pool_bytes(&m.triangles)
             + pool_bytes(&m.subsegs)
@@ -330,12 +377,67 @@ mod tests {
     }
 
     #[test]
-    fn refine_output_quality_are_not_implemented() {
+    fn refine_output_are_not_implemented() {
         let b = Options::new().validate().expect("validate");
         let mut m = scaffold(b, &empty_input());
         assert!(m.refine().is_err());
         assert!(m.output(false, false).is_err());
-        assert!(m.quality().is_err());
+    }
+
+    #[test]
+    fn quality_and_checks_wired_through_the_surface() {
+        // The frozen &self signatures run the landed transliterations
+        // through the RefCell bridge: an empty construction mesh has no
+        // triangle to check (zero horrors), and quality_statistics
+        // reports its all-empty initial shape.
+        let b = Options::new().validate().expect("validate");
+        let m = scaffold(b, &empty_input());
+        assert_eq!(m.check_mesh(), 0);
+        assert_eq!(m.check_delaunay(), 0);
+        let q = m.quality().expect("quality never fails in C");
+        assert_eq!(q.angle_table, [0usize; 18]);
+        assert_eq!(q.aspect_table, [0usize; 16]);
+        // an empty (never-run) mesh keeps C's degenerate extrema: the
+        // zero bounds square to minaltitude 0, so shortest collapses
+        // onto it and biggest_angle stays at its 180.0 init.
+        assert_eq!(q.shortest, 0.0);
+        assert_eq!(q.longest, 0.0);
+        assert_eq!(q.biggest_angle, 180.0);
+    }
+
+    #[test]
+    fn check_mesh_reports_a_hand_broken_mesh_through_the_surface() {
+        // A deliberately inverted triangle inside the core: the
+        // hand-broken construction reports one horror (the inversion
+        // probe; every edge is a hull edge, so nothing else fires).
+        let b = Options::new().validate().expect("validate");
+        let m = scaffold(b, &empty_input());
+        {
+            let core = &mut *m.core.borrow_mut();
+            let v_a = core.vx_alloc().expect("vx");
+            core.vx_set_real(v_a, 0, 0.0);
+            core.vx_set_real(v_a, 1, 0.0);
+            let v_b = core.vx_alloc().expect("vx");
+            core.vx_set_real(v_b, 0, 1.0);
+            core.vx_set_real(v_b, 1, 0.0);
+            let v_c = core.vx_alloc().expect("vx");
+            core.vx_set_real(v_c, 0, 0.0);
+            core.vx_set_real(v_c, 1, -1.0);
+            let t = core.maketriangle(false, false).expect("tri");
+            core.setorg(t, v_a);
+            core.setdest(t, v_b);
+            core.setapex(t, v_c);
+        }
+        // the opaque counters surface: statistics reports the vertices
+        // and the triangle now (edges stays SCAFFOLDING until its
+        // writer lands).
+        let s = m.statistics();
+        assert_eq!(s.vertices, 3);
+        assert_eq!(s.triangles, 1);
+        assert_eq!(s.edges, 0);
+        assert_eq!(m.check_mesh(), 1);
+        // the mesh is otherwise empty-Delaunay: no adjacent pair exists
+        assert_eq!(m.check_delaunay(), 0);
     }
 
     #[test]
@@ -358,12 +460,16 @@ mod tests {
         let mut opts = Options::new();
         opts.pslg().variable_area();
         let b = opts.validate().expect("validate");
-        let mut m = scaffold(b, &empty_input());
+        let m = scaffold(b, &empty_input());
         assert_eq!(m.memory_bytes(), 0);
-        let first = m.core.maketriangle(true, true).expect("alloc");
-        let second = m.core.maketriangle(true, true).expect("alloc");
+        let (first, second, rows) = {
+            let core = &mut *m.core.borrow_mut();
+            let first = core.maketriangle(true, true).expect("alloc");
+            let second = core.maketriangle(true, true).expect("alloc");
+            let rows = core.tri_shape.stride;
+            (first, second, rows)
+        };
         assert!(m.memory_bytes() > 0);
-        let rows = m.core.tri_shape.stride;
         assert!(rows >= 10);
         assert_eq!(m.memory_bytes(), 2 * rows * 8);
         let _ = (first, second);
