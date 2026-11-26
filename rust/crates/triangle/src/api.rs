@@ -131,8 +131,9 @@ impl Default for Quality {
 /// behavior (D8: TRI_NULL and the null-context checks dissolve).
 ///
 /// Stage-1 note: no public constructor succeeds yet (triangulate /
-/// load_mesh await the delaunay/reconstruct modules); the surface is
-/// frozen now so the stage-1 core tickets fill it without churn.
+/// load_mesh await the ioarrays phase, transfernodes / reconstruct);
+/// the surface is frozen now so the stage-1 core tickets fill it
+/// without churn.
 ///
 /// Interior note (serial-era bridge): the frozen `&self` check and
 /// statistics surface needs to run the 1:1 transliterations of
@@ -177,13 +178,12 @@ impl Mesh {
 
 /// triangle_mesh_create (triangle_api.c:181). The C sequence -
 /// transfernodes, delaunay, formskeleton, carveholes, enforcequality,
-/// highorder - belongs to stage-1 core modules that have not landed
-/// yet; the shell owns its opening (options and input validation, the
-/// pool geometry).
+/// highorder - is owned by the stage-1 core modules; the shell owns
+/// its opening (options and input validation, the pool geometry), and
+/// the remaining blocker is transfernodes.
 ///
-/// SCAFFOLDING: awaits transfernodes/delaunay/construct (ioarrays.rs,
-/// delaunay.rs, construct.rs, refine.rs); returns the funnel-marked
-/// InternalStatus::NotImplemented today.
+/// SCAFFOLDING: awaits transfernodes (ioarrays.rs); returns the
+/// funnel-marked InternalStatus::NotImplemented today.
 pub fn triangulate(options: Options, input: &MeshInput) -> Result<Mesh, Error> {
     let behavior = options.validate()?;
     input.check(behavior.firstnumber)?;
@@ -199,7 +199,7 @@ impl Mesh {
     /// refine path in C's API; the same opening validation and pool
     /// geometry, the reconstruct body awaits stage-1.
     ///
-    /// SCAFFOLDING: awaits reconstruct (construct.rs); returns the
+    /// SCAFFOLDING: awaits reconstruct (ioarrays.rs); returns the
     /// funnel-marked InternalStatus::NotImplemented today.
     pub fn load_mesh(options: Options, input: &MeshInput) -> Result<Mesh, Error> {
         let behavior = { options }.validate()?;
@@ -209,13 +209,24 @@ impl Mesh {
         Err(Error::from(InternalStatus::NotImplemented))
     }
 
-    /// triangle_mesh_refine (triangle_api.c:332): enforcequality over
-    /// the loaded mesh.
-    ///
-    /// SCAFFOLDING: awaits enforcequality (refine.rs); returns the
-    /// funnel-marked InternalStatus::NotImplemented today.
+    /// triangle_mesh_refine (triangle_api.c:332-359): enforcequality
+    /// over the loaded mesh. C gates on b->quality with triangles in
+    /// the mesh (triangle_api.c:347), funnels enforcequality's status
+    /// (the funnel item 5 translation, error.rs), and - with a good
+    /// status - refreshes m->edges inside the gate (triangle_api.c:
+    /// 354-355, the (3 * items + hullsize) / 2 arithmetic).
     pub fn refine(&mut self) -> Result<(), Error> {
-        Err(Error::from(InternalStatus::NotImplemented))
+        let behavior = self.behavior.borrow();
+        let mut status = InternalStatus::Ok;
+        let mut core = self.core.borrow_mut();
+        if behavior.quality && core.triangles.live_count() > 0 {
+            crate::refine::enforcequality(&mut core, &behavior, &mut status)?;
+            if (status as i32) < 0 {
+                return Err(Error::from(status));
+            }
+            core.edges = (3 * core.triangles.live_count() as i64 + core.hullsize) / 2;
+        }
+        Ok(())
     }
 
     /// triangle_mesh_copy (triangle_api.c:362): the marshalled output
@@ -243,14 +254,13 @@ impl Mesh {
             undeads: m.undeads as usize,
             triangles: m.triangles.live_count() as usize,
             hullsize: m.hullsize as usize,
-            // SCAFFOLDING: C's writer of m->edges is
-            //   (3 * triangles.items + hullsize) / 2, computed in the
-            //   triangle_mesh_create/load_mesh/refine entry points
-            //   (triangle_api.c:252-253, 326-327, 354-355), which
-            //   await the ioarrays/delaunay/construct/refine phase
-            //   entry points; until a landed entry point runs, C's
-            //   uninitialized struct field is zeroed here.
-            edges: 0,
+            // C's writer of m->edges is (3 * triangles.items +
+            // hullsize) / 2, computed in the
+            // triangle_mesh_create/load_mesh/refine entry points
+            // (triangle_api.c:252-253, 326-327, 354-355). The refine
+            // writer landed (refine.rs); create and load await the
+            // ioarrays phase, so the field stays 0 on their meshes.
+            edges: m.edges as usize,
             subsegs: if b.poly || b.refine {
                 m.subsegs.live_count() as usize
             } else {
@@ -376,12 +386,89 @@ mod tests {
         assert!(matches!(err, Error::Internal(_)));
     }
 
+    /// Hand-insert one triangle into a scaffolded mesh (the landed core
+    /// primitives; the input points stay unloaded pending transfernodes).
+    fn lone_core_triangle(m: &mut Mesh, pa: (f64, f64), pb: (f64, f64), pc: (f64, f64)) {
+        let core = &mut *m.core.borrow_mut();
+        let a = core.vx_alloc().expect("vertex");
+        core.vx_set_real(a, 0, pa.0);
+        core.vx_set_real(a, 1, pa.1);
+        let e = core.vx_alloc().expect("vertex");
+        core.vx_set_real(e, 0, pb.0);
+        core.vx_set_real(e, 1, pb.1);
+        let c = core.vx_alloc().expect("vertex");
+        core.vx_set_real(c, 0, pc.0);
+        core.vx_set_real(c, 1, pc.1);
+        let t = core.maketriangle(false, false).expect("tri");
+        core.setorg(t, a);
+        core.setdest(t, e);
+        core.setapex(t, c);
+    }
+
     #[test]
-    fn refine_output_are_not_implemented() {
+    fn refine_gates_on_quality_and_keeps_edges_at_zero() {
+        // triangle_api.c:347: without -q the stage is a no-op even with
+        // triangles in the mesh, and the m->edges writer
+        // (triangle_api.c:354-355) lives inside the gate, so the
+        // statistics field stays 0; the output scaffolding is
+        // untouched by this slice.
         let b = Options::new().validate().expect("validate");
         let mut m = scaffold(b, &empty_input());
-        assert!(m.refine().is_err());
+        lone_core_triangle(&mut m, (0.0, 0.0), (2.0, 0.0), (1.0, 1.0));
+        assert!(m.refine().is_ok());
+        assert_eq!(m.statistics().edges, 0);
         assert!(m.output(false, false).is_err());
+    }
+
+    #[test]
+    fn refine_runs_the_quality_stage_through_the_surface() {
+        // A 45-45-90 triangle under -q20 has no bad triangle (45 > 20),
+        // so the stage drains an empty queue: Ok, the mesh keeps its
+        // single triangle, and the edges writer computes
+        // (3 * 1 + 0) / 2 = 1 (triangle_api.c:354-355).
+        let mut opts = Options::new();
+        opts.quality();
+        opts.min_angle(20.0);
+        let b = opts.validate().expect("validate");
+        let mut m = scaffold(b, &empty_input());
+        lone_core_triangle(&mut m, (0.0, 0.0), (2.0, 0.0), (1.0, 1.0));
+        assert!(m.refine().is_ok());
+        assert_eq!(m.statistics().triangles, 1);
+        assert_eq!(m.statistics().edges, 1);
+        assert!(m.output(false, false).is_err());
+    }
+
+    #[test]
+    #[cfg(feature = "acute")]
+    fn refine_surfaces_the_acute_scaffold() {
+        // Under the acute feature the quality stage reaches
+        // splittriangle's findNewSPLocation row (triangle.c:7437), the
+        // acute slice's funnel-marked NotImplemented (D16).
+        let mut opts = Options::new();
+        opts.quality();
+        opts.min_angle(20.0);
+        let b = opts.validate().expect("validate");
+        let mut m = scaffold(b, &empty_input());
+        lone_core_triangle(&mut m, (0.0, 0.0), (2.0, 0.0), (1.0, 0.1));
+        let err = m.refine().expect_err("the acute path is scaffolded");
+        assert!(matches!(err, Error::Internal(ref msg) if msg.contains("not implemented")));
+    }
+
+    #[test]
+    #[cfg(not(feature = "acute"))]
+    fn refine_repairs_a_skinny_triangle_through_the_surface() {
+        // The NO_ACUTE compile shape: the same skinny triangle drains
+        // its bad-triangle queue through the Ruppert loop under a
+        // Steiner budget; the mesh grows past the initial triangle.
+        let mut opts = Options::new();
+        opts.quality();
+        opts.min_angle(20.0);
+        opts.steiner_limit(50);
+        let b = opts.validate().expect("validate");
+        let mut m = scaffold(b, &empty_input());
+        lone_core_triangle(&mut m, (0.0, 0.0), (2.0, 0.0), (1.0, 0.1));
+        assert!(m.refine().is_ok());
+        assert!(m.statistics().triangles > 1);
     }
 
     #[test]
@@ -429,8 +516,8 @@ mod tests {
             core.setapex(t, v_c);
         }
         // the opaque counters surface: statistics reports the vertices
-        // and the triangle now (edges stays SCAFFOLDING until its
-        // writer lands).
+        // and the triangle now (edges stays 0 until refine runs its
+        // writer; this mesh never calls refine).
         let s = m.statistics();
         assert_eq!(s.vertices, 3);
         assert_eq!(s.triangles, 1);

@@ -742,8 +742,10 @@ impl Mesh {
     // &(struct flipstacker) &insertvertex end-of-list sentinel.
     // -----------------------------------------------------------------------
 
-    /// C: poolrestart(&m->flipstackers) (triangle.c:3160, the
-    /// insertvertex bookkeeping of the checkquality stage).
+    /// C: poolrestart(&m->flipstackers): the insertvertex bookkeeping
+    /// restarts (triangle.c:3130, 3239) and enforcequality's checkquality
+    /// stage init (triangle.c:7565-7566). (This doc carried a stale 3160
+    /// anchor from before the c-anchor audit; re-measured for refine.rs.)
     pub(crate) fn flip_restart(&mut self) {
         self.flipstackers.restart();
     }
@@ -782,8 +784,9 @@ impl Mesh {
     // -----------------------------------------------------------------------
     // Encroached-subsegment rows (C struct badsubseg, triangle.h:271-274:
     // { subseg encsubseg; vertex subsegorg, subsegdest; }, 3 words).
-    // Enqueued by insertvertex (transform.rs); the consuming traversal
-    // (badsubsegtraverse/badsubsegdealloc) lands with quality.rs.
+    // Enqueued by insertvertex (transform.rs) and checkseg4encroach
+    // (quality.rs); the consuming traversal (badsubsegtraverse /
+    // badsubsegdealloc, mesh.rs) landed with refine.rs.
     // -----------------------------------------------------------------------
 
     /// C: poolalloc(&m->badsubsegs) at insertvertex's encroachment
@@ -808,21 +811,43 @@ impl Mesh {
         self.badsubsegs.set_word(id, 2, dest as u64);
     }
 
-    /// Test-side readers of the badsubseg row (the consuming traversal
-    /// lands with quality.rs; the crate's module tests pin the enqueue).
-    #[cfg(test)]
+    /// C: encroached->encsubseg, read by splitencsegs' sdecode
+    /// (triangle.c:7208); promoted from the test-only readers when
+    /// refine.rs landed (the module tests still pin the enqueue).
     pub(crate) fn bad_sub_seg_enc(&self, id: u32) -> u64 {
         self.badsubsegs.word(id, 0)
     }
 
-    #[cfg(test)]
+    /// C: encroached->subsegorg, read by splitencsegs' identity check
+    /// (triangle.c:7216); the NULL mark of the badsubsegdealloc idiom
+    /// (triangle.c:1302) lives in this word.
     pub(crate) fn bad_sub_seg_org(&self, id: u32) -> u32 {
         self.badsubsegs.word(id, 1) as u32
     }
 
-    #[cfg(test)]
+    /// C: encroached->subsegdest, read by splitencsegs' identity check
+    /// (triangle.c:7216).
     pub(crate) fn bad_sub_seg_dest(&self, id: u32) -> u32 {
         self.badsubsegs.word(id, 2) as u32
+    }
+
+    /// C: poolrestart(&m->badsubsegs) (triangle.c:7533-7534,
+    /// enforcequality's badsubseg pool init).
+    pub(crate) fn bad_sub_seg_restart(&mut self) {
+        self.badsubsegs.restart();
+    }
+
+    /// C: poolrestart(&m->badtriangles) (triangle.c:7555-7556,
+    /// enforcequality's badtriang pool init).
+    pub(crate) fn bad_tri_restart(&mut self) {
+        self.badtriangles.restart();
+    }
+
+    /// C: pooldealloc(&m->badtriangles) in enforcequality's else arm
+    /// (triangle.c:7586; C defines no badtridealloc wrapper for this
+    /// site - the queue empties by dequeue, so no dead-row mark).
+    pub(crate) fn bad_tri_dealloc(&mut self, id: u32) {
+        self.badtriangles.dealloc(id);
     }
 
     // -----------------------------------------------------------------------
