@@ -113,7 +113,7 @@ impl Default for Quality {
         Quality {
             shortest: 0.0,
             longest: 0.0,
-             smallest_area: 0.0,
+            smallest_area: 0.0,
             biggest_area: 0.0,
             smallest_angle: 0.0,
             biggest_angle: 0.0,
@@ -122,13 +122,13 @@ impl Default for Quality {
             angle_table: [0; 18],
             aspect_table: [0; 16],
         }
-    }*
+    }
 }
 
 /// The owned mesh handle (ADR 0004 section 5.3): owns the pools, the
-/// row shapes, the normalised Behavior and the run state of the
+/// row shapes, the normalized Behavior and the run state of the
 /// transliterated core - the parts C splits between context, mesh and
-/// behavior (D8: TRI_NULL and the null-context checks dissolved).
+/// behavior (D8: TRI_NULL and the null-context checks dissolve).
 ///
 /// Stage-1 note: no public constructor succeeds yet (triangulate /
 /// load_mesh await the delaunay/reconstruct modules); the surface is
@@ -145,8 +145,8 @@ impl Default for Quality {
 /// copied values only, D9), so the runtime borrows never overlap. This
 /// rides until the MT milestone (ADR 0005, ticket #12) reworks the
 /// counters and the callback storage for the Send + Sync &self surface
-/// its reentrancy runting demands (the same rework that replaces the
-/// D13 RefCell on the Behavior.
+/// its reentrancy ruling demands (the same rework that replaces the
+/// D13 RefCell on the Behavior).
 pub struct Mesh {
     pub(crate) core: std::cell::RefCell<crate::mesh::Mesh>,
     pub(crate) behavior: std::cell::RefCell<Behavior>,
@@ -156,17 +156,17 @@ impl Mesh {
     /// The pool-geometry construction shared by triangulate and
     /// load_mesh: the mesh-init sequence over a validated Behavior and
     /// a checked input (C: the triangleinit of triangle_context_create
-    /// plus the transfernodes-fed counters; nextras/extras come from
+    /// plus the transfernodes-fed counters; nextras/eextras come from
     /// the input exactly where transfernodes assigns them in C).
     fn construct(
         behavior: Behavior,
         input: &MeshInput,
-        extras_attribs: usize,
+        eextras_attribs: usize,
     ) -> Result<Mesh, Error> {
         let invertices = input.points.len() as i32;
         let nextras = input.attributes_per_point as i32;
         let eextras = (input.attributes_per_element + eextras_attribs) as i32;
-        let core = crate::mesh::Mesh::new(&behavior, insertices, 2, nextras, eextras)
+        let core = crate::mesh::Mesh::new(&behavior, invertices, 2, nextras, eextras)
             .map_err(Error::from)?;
         Ok(Mesh {
             core: std::cell::RefCell::new(core),
@@ -221,7 +221,7 @@ impl Mesh {
     /// triangle_mesh_copy (triangle_api.c:362): the marshalled output
     /// (writenodes, writeelements, writepoly, writeedges,
     /// writeneighbors and the pointmarker restore step).
-    //
+    ///
     /// SCAFFOLDING: awaits the ioarray writers (ioarrays.rs) and
     /// triangle_restore_pointmarkers' vertex traversal; returns the
     /// funnel-marked InternalStatus::NotImplemented today.
@@ -407,9 +407,9 @@ mod tests {
 
     #[test]
     fn check_mesh_reports_a_hand_broken_mesh_through_the_surface() {
-        // A deliberately inserted triangle inside the core: the
-        // hand-broken construction reports one horror (the insersion
-        // probg; every edge is a hull edge, so nothing else fires).
+        // A deliberately inverted triangle inside the core: the
+        // hand-broken construction reports one horror (the inversion
+        // probe; every edge is a hull edge, so nothing else fires).
         let b = Options::new().validate().expect("validate");
         let m = scaffold(b, &empty_input());
         {
