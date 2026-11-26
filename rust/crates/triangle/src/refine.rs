@@ -609,11 +609,17 @@ pub(crate) fn highorder(m: &mut Mesh, b: &Behavior) -> Result<(), Oom> {
         for orient in 0..3u8 {
             let tri_edge = Otri { tri, orient };
             let trisym = m.sym(tri_edge);
-            // C: (trisym.tri == m->dummytri) || (trisym.tri >
-            // triangleloop) (triangle.c:7653); the dummy compare comes
-            // first exactly as C short-circuits it (DUMMY_TRI sits
-            // below the pool's first row and never reaches the oracle
-            // address order).
+            // C: (triangleloop.tri < trisym.tri) ||
+            // (trisym.tri == m->dummytri) (triangle.c:7653), the
+            // address compare first. The port evaluates the dummy
+            // arm first as a deliberate, registered deviation (D18):
+            // the packed row-id decode of the reserved sentinel
+            // cannot feed the address order, so the dummy arm must
+            // short-circuit before it. The boolean is identical (a
+            // hull edge is true through the dummy arm either way; an
+            // interior edge is visited from the same side through
+            // the oracle address order, ADR 0003 section 5, so node
+            // creation order is unchanged).
             if trisym.tri == DUMMY_TRI
                 || m.triangles.oracle_address_order(tri, trisym.tri) == Ordering::Less
             {
