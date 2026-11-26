@@ -440,18 +440,21 @@ mod tests {
 
     #[test]
     #[cfg(feature = "acute")]
-    fn refine_surfaces_the_acute_scaffold() {
-        // Under the acute feature the quality stage reaches
-        // splittriangle's findNewSPLocation row (triangle.c:7437), the
-        // acute slice's funnel-marked NotImplemented (D16).
+    fn refine_repairs_a_skinny_triangle_through_the_acute_path() {
+        // The acute build's twin of the NO_ACUTE test below: the same
+        // skinny triangle drains its bad-triangle queue through the
+        // Ruppert loop, every split through findNewSPLocation
+        // (triangle.c:7437, live since stage-1 acute C #43), under a
+        // Steiner budget; the mesh grows past the initial triangle.
         let mut opts = Options::new();
         opts.quality();
         opts.min_angle(20.0);
+        opts.steiner_limit(50);
         let b = opts.validate().expect("validate");
         let mut m = scaffold(b, &empty_input());
         lone_core_triangle(&mut m, (0.0, 0.0), (2.0, 0.0), (1.0, 0.1));
-        let err = m.refine().expect_err("the acute path is scaffolded");
-        assert!(matches!(err, Error::Internal(ref msg) if msg.contains("not implemented")));
+        assert!(m.refine().is_ok());
+        assert!(m.statistics().triangles > 1);
     }
 
     #[test]

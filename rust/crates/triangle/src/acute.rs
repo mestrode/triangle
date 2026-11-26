@@ -5,21 +5,21 @@
 //! compile switch, so the crate's default build mirrors the fork's
 //! default C build with aCute compiled in.
 //!
-//! This module lands in three PRs. Stage-1 acute A (#40) landed the
+//! The module landed in three PRs. Stage-1 acute A (#40) landed the
 //! pure geometry substrate: the ten acute.c functions whose signatures
 //! carry no mesh, no behavior and no otri - nothing but REAL
-//! coordinates, in C file order. This one (stage-1 acute B) lands the
+//! coordinates, in C file order. Stage-1 acute B (#41) landed the
 //! mesh-coupled helpers and the acutepool as typed Vec scratch owned
 //! by Mesh (the D23 dissolution): the AcutePool of
 //! acutepool_init/resize/deinit, doSmoothing, the star walk of
 //! getStarPoints/getNeighborsVertex, the wedge intersections
 //! getWedgeIntersectionWithoutMaxAngle/getWedgeIntersectionWithMaxAngle,
 //! polygonAngles/testPolygonAngle/testTriangleAngle and
-//! minDistanceToNeigbor. The findNewSPLocation family and the D16 lift
-//! of refine.rs's funnel marker land with the last PR (stage-1 acute
-//! C); doSmoothing and minDistanceToNeigbor stay ahead-of-use until
-//! then, with their site-scoped dead_code allows citing their C
-//! callers.
+//! minDistanceToNeigbor. Stage-1 acute C (#43) lands the
+//! findNewSPLocation family and lifts refine.rs's D16 funnel marker:
+//! the dispatcher and its two variants consume the landed substrate,
+//! splittriangle calls the family live at triangle.c:7437, and the
+//! ahead-of-use dead_code allows of the substrate retire.
 //!
 //! Module-level C state mirrored here: compConst (acute.c:81, the "for
 //! comparing real numbers" epsilon); PI is C's triangle_config.h:159
@@ -33,8 +33,9 @@ use crate::locate::{preciselocate, LocateResult};
 use crate::mesh::Mesh;
 use crate::options::Behavior;
 use crate::pool::Oom;
-use crate::predicates::tri_counterclockwise;
+use crate::predicates::{tri_counterclockwise, tri_findcircumcenter};
 use crate::slots::FREEVERTEX;
+use crate::transform::deletevertex;
 use crate::util::vertex_coords;
 
 // -------------------------------------------------------------------
@@ -220,6 +221,2794 @@ pub(crate) fn acutepool_resize(n: i32, p: &mut AcutePool) {
 #[allow(non_upper_case_globals)] // C-parity: the C name verbatim (acute.c:81)
 pub(crate) const compConst: f64 = 1.0e-80;
 
+// -------------------------------------------------------------------
+// THE findNewSPLocation FAMILY (the "NEW STEINER POINT FUNCTION"
+// banner, acute.c:87-93): the dispatcher at acute.c:95, the two
+// variants in C file order (acute.c:113, 722). The family consumes
+// the landed substrate (longestShortestEdge, doSmoothing,
+// getNeighborsVertex, circleLineIntersection, chooseCorrectPoint,
+// pointBetweenPoints, testTriangleAngle, minDistanceToNeigbor,
+// lineLineIntersection), retiring their ahead-of-use dead_code allows.
+// -------------------------------------------------------------------
+
+/// C: findNewSPLocation (acute.c:95-105; banner at acute.c:87-93:
+/// "Steiner point insertion routine / findNewSPLocation() Find a new
+/// location for a Steiner point"). The -U dispatcher: with no maximum
+/// angle set (b->maxangle == 0.00000) the pick is the Without
+/// variant, otherwise the With variant (acute.c:98-103).
+///
+/// C's own offcenter parameter is never read - both calls pass the
+/// literal 1 (acute.c:100, 102) - so the port keeps the parameter
+/// unread and passes true, C's exact behavior for every caller
+/// (triangle.c:7437 passes 1); the interpolants return as a tuple
+/// where C writes through its REAL pointers (D26).
+#[allow(non_snake_case)] // C-parity: the C name verbatim (acute.c:95)
+#[allow(unused_variables)]
+// C-parity: C's offcenter parameter is
+// never read (acute.c:95-103); the literal 1 of acute.c:100, 102 is
+// passed instead
+#[allow(clippy::too_many_arguments)] // C-parity: the ten-parameter C
+// signature (acute.c:95-97)
+#[allow(clippy::float_cmp)] // C-parity: b->maxangle == 0.00000 verbatim
+                            // (acute.c:99)
+pub(crate) fn findNewSPLocation(
+    m: &mut Mesh,
+    b: &Behavior,
+    torg: u32,
+    tdest: u32,
+    tapex: u32,
+    circumcenter: u32,
+    offcenter: bool,
+    badotri: Otri,
+) -> Result<(f64, f64), Oom> {
+    // Based on using -U switch, call the corresponding function
+    // (acute.c:98)
+    if b.maxangle == 0.00000 {
+        findNewSPLocationWithoutMaxAngle(m, b, torg, tdest, tapex, circumcenter, true, badotri)
+    } else {
+        findNewSPLocationWithMaxAngle(m, b, torg, tdest, tapex, circumcenter, true, badotri)
+    }
+} // end of findNewSPLocation() (acute.c:105)
+
+/// C: findNewSPLocationWithoutMaxAngle (acute.c:113-714; banner at
+/// acute.c:107-112). The Steiner-point pick with no -U bound: the
+/// circumcenter, Ungor's off-center for the REALLY BAD triangle, and
+/// for the ALMOST GOOD triangle the aCute machinery - local smoothing
+/// (doSmoothing, the relocated vertex deleted in place, acute.c:407,
+/// 412, 417) or else the petal construction with its two-direction
+/// Voronoi walk (the first direction along the shortest edge, the
+/// second along the middle edge), every suggestion guarded by
+/// testTriangleAngle and closed by the lengthConst sanity check.
+///
+/// The circumcenter row is written through the vx_set_real chokepoint
+/// exactly where C stores through its vertex pointer (acute.c:704-
+/// 708); the xi/eta interpolants return as a tuple where C writes
+/// through its REAL pointers (acute.c:711-712), the tri_findcircumcenter
+/// precedent, and deletevertex's allocation routes through the D8
+/// funnel, so the C void becomes a Result (D26). The dead stores C
+/// keeps in its orientation switch - xMiddleEdge/yMiddleEdge/
+/// xLongestEdge/yLongestEdge (acute.c:237-238 and the five further
+/// arms) are never read - are dropped per the D19/D24 dead-store rule
+/// (D27); everything else is statement-identical.
+#[allow(non_snake_case)] // C-parity: the C name verbatim (acute.c:113)
+#[allow(clippy::too_many_arguments)] // C-parity: the ten-parameter C
+// signature (acute.c:113-115)
+#[allow(clippy::needless_late_init)]
+// C-parity: Hale's declaration
+// block (acute.c:117-178) keeps C's declaration-then-assignment shape
+#[allow(clippy::assign_op_pattern)] // C-parity: the vector, ax/ay
+                                    // and inter accumulation stores keep C's x = x + y and x = x / y
+                                    // shapes verbatim (acute.c:472-473, 527-531, 584-585, 643-647)
+pub(crate) fn findNewSPLocationWithoutMaxAngle(
+    m: &mut Mesh,
+    b: &Behavior,
+    torg: u32,
+    tdest: u32,
+    tapex: u32,
+    circumcenter: u32,
+    offcenter: bool,
+    badotri: Otri,
+) -> Result<(f64, f64), Oom> {
+    // for calculating the distances of the edges (acute.c:117-119)
+    let xdo: f64;
+    let ydo: f64;
+    let xao: f64;
+    let yao: f64;
+    let xda: f64;
+    let yda: f64;
+    let dodist: f64;
+    let aodist: f64;
+    let dadist: f64;
+    // for exact calculation (acute.c:120-122)
+    let denominator: f64;
+    let mut dx: f64;
+    let mut dy: f64;
+    let dxoff: f64;
+    let dyoff: f64;
+
+    // keeps the difference of coordinates edge (acute.c:125-126). The
+    // xMiddleEdge/yMiddleEdge/xLongestEdge/yLongestEdge stores of C's
+    // switch (acute.c:237-238 and the five further arms) are dead in C
+    // (never read anywhere) and are dropped (D27, the D19/D24
+    // dead-store rule).
+    let xShortestEdge: f64;
+    let yShortestEdge: f64;
+    // keeps the square of edge lengths (acute.c:128-129)
+    let shortestEdgeDist: f64;
+    let middleEdgeDist: f64;
+    let longestEdgeDist: f64;
+    // keeps the vertices according to the angle incident to that
+    // vertex in a triangle (acute.c:131-132); the NULL handles mirror
+    // C's NULL vertex pointers, and the orientation switch below
+    // assigns all three before any read.
+    let smallestAngleCorner: u32;
+    let middleAngleCorner: u32;
+    let largestAngleCorner: u32;
+    // keeps the type of orientation of the triangle (acute.c:134-135)
+    let orientation: i32;
+    // keeps the coordinates of circumcenter of itself and neighbor
+    // triangle circumcenter (acute.c:136-137); zero-init (D27, the D24
+    // pin class): the found-direction findcircumcenter writes
+    // neighborCircumcenter before any read.
+    let mut myCircumcenter = [0.0f64; 2];
+    let mut neighborCircumcenter = [0.0f64; 2];
+    // keeps if bad triangle is almost good or not (acute.c:139-140)
+    let mut almostGood = 0;
+    // keeps the cosine of the largest angle (acute.c:141-142)
+    let cosMaxAngle: f64;
+    let isObtuse: i32; // 1: obtuse 0: nonobtuse (acute.c:143)
+                       // keeps the radius of petal (acute.c:144-145)
+    let petalRadius: f64;
+    // for calculating petal center (acute.c:146-148)
+    let xPetalCtr_1: f64;
+    let yPetalCtr_1: f64;
+    let xPetalCtr_2: f64;
+    let yPetalCtr_2: f64;
+    let xPetalCtr: f64;
+    let yPetalCtr: f64;
+    let xMidOfShortestEdge: f64;
+    let yMidOfShortestEdge: f64;
+    let dxcenter1: f64;
+    let dycenter1: f64;
+    let dxcenter2: f64;
+    let dycenter2: f64;
+    // for finding neighbor (acute.c:149-151); zero-init (D27, the D24
+    // pin class): getNeighborsVertex writes the neighbor handle on
+    // every path (acute.c:2238).
+    let mut neighborotri = Otri {
+        tri: DUMMY_TRI,
+        orient: 0,
+    };
+    let mut thirdPoint = [0.0f64; 2];
+    let mut neighborNotFound: i32;
+    // for keeping the vertices of the neighbor triangle (acute.c:153-
+    // 156); the NULL initializers are dead stores (every read sits
+    // inside the found branch that assigned them first, acute.c:463-
+    // 465) and drop per D27.
+    let mut neighborvertex_1: u32;
+    let mut neighborvertex_2: u32;
+    let mut neighborvertex_3: u32;
+    // dummy variables (acute.c:157-158): C's xi_tmp/eta_tmp catch the
+    // neighbor findcircumcenter's interpolant writes that no one ever
+    // reads; the ignored tuple elements below are their mirror.
+    // for petal intersection (acute.c:159-161); zero-init (D27, the
+    // D24 pin class): the found directions write p and voronoiOrInter
+    // through their intersections before any read.
+    let mut vector_x: f64;
+    let mut vector_y: f64;
+    let xMidOfLongestEdge: f64;
+    let yMidOfLongestEdge: f64;
+    let mut inter_x: f64;
+    let mut inter_y: f64;
+    let mut p = [0.0f64; 5];
+    let mut voronoiOrInter = [0.0f64; 4];
+    let mut isCorrect: i32;
+    // for vector calculations in perturbation (acute.c:163-164)
+    let mut ax: f64;
+    let mut ay: f64;
+    let mut d: f64;
+    let pertConst = 0.06; // perturbation constant (acute.c:165)
+    let lengthConst = 1.0; // used at comparing circumcenter's distance
+                           // to proposed point's distance (acute.c:167)
+    let justAcute = 1.0; // used for making the program working for one
+                         // direction only (acute.c:168)
+                         // for smoothing (acute.c:169-171); zero-init (D27, the D24 pin
+                         // class): the relocated branch writes newloc through doSmoothing
+                         // before the reads.
+    let mut relocated = 0; // used to differentiate between calling
+                           // the deletevertex and just proposing a steiner point (acute.c:170)
+    let mut newloc = [0.0f64; 2]; // new location suggested by smoothing
+                                  // zero-init (D27): C leaves both indeterminate (acute.c:172); the
+                                  // only read (acute.c:707-708) sits behind relocated > 0, which
+                                  // re-stores both first (acute.c:402-403).
+    let mut origin_x: f64 = 0.0; // for keeping torg safe (acute.c:172)
+    let mut origin_y: f64 = 0.0;
+    let mut delotri: Otri; // keeping the original orientation for
+                           // relocation process (acute.c:173)
+                           // keeps the first and second direction suggested points
+                           // (acute.c:174-175)
+    let mut dxFirstSuggestion: f64;
+    let mut dyFirstSuggestion: f64;
+    let mut dxSecondSuggestion: f64;
+    let mut dySecondSuggestion: f64;
+    // second direction variables (acute.c:176-177)
+    let xMidOfMiddleEdge: f64;
+    let yMidOfMiddleEdge: f64;
+    // END OF HALE'S VARIABLES (acute.c:178)
+
+    // C: m->circumcentercount++; (acute.c:180)
+    m.circumcentercount += 1;
+
+    /* Compute the circumcenter of the triangle. */
+    // C: xdo = tdest[0] - torg[0]; ... yda = tapex[1] - tdest[1];
+    // (acute.c:183-188)
+    xdo = m.vx_real(tdest, 0) - m.vx_real(torg, 0);
+    ydo = m.vx_real(tdest, 1) - m.vx_real(torg, 1);
+    xao = m.vx_real(tapex, 0) - m.vx_real(torg, 0);
+    yao = m.vx_real(tapex, 1) - m.vx_real(torg, 1);
+    xda = m.vx_real(tapex, 0) - m.vx_real(tdest, 0);
+    yda = m.vx_real(tapex, 1) - m.vx_real(tdest, 1);
+    // keeps the square of the distances (acute.c:189-193)
+    dodist = xdo * xdo + ydo * ydo;
+    aodist = xao * xao + yao * yao;
+    dadist = (m.vx_real(tdest, 0) - m.vx_real(tapex, 0))
+        * (m.vx_real(tdest, 0) - m.vx_real(tapex, 0))
+        + (m.vx_real(tdest, 1) - m.vx_real(tapex, 1)) * (m.vx_real(tdest, 1) - m.vx_real(tapex, 1));
+    // checking if the user wanted exact arithmetic or not (acute.c:194)
+    if b.noexact {
+        denominator = 0.5 / (xdo * yao - xao * ydo);
+    } else {
+        /* Use the counterclockwise() routine to ensure a positive (and */
+        /*   reasonably accurate) result, avoiding any possibility of   */
+        /*   division by zero.                                          */
+        denominator = 0.5
+            / tri_counterclockwise(
+                m,
+                b,
+                vertex_coords(m, tdest),
+                vertex_coords(m, tapex),
+                vertex_coords(m, torg),
+            );
+        /* Don't count the above as an orientation test. */
+        m.counterclockcount -= 1;
+    }
+    // calculate the circumcenter in terms of distance to origin point
+    // (acute.c:205-207)
+    dx = (yao * dodist - ydo * aodist) * denominator;
+    dy = (xdo * aodist - xao * dodist) * denominator;
+    // for debugging and for keeping circumcenter to use later:
+    // coordinate value of the circumcenter (acute.c:208-211)
+    myCircumcenter[0] = m.vx_real(torg, 0) + dx;
+    myCircumcenter[1] = m.vx_real(torg, 1) + dy;
+
+    delotri = badotri; // save for later (acute.c:213)
+                       /////////////////// FINDING THE ORIENTATION OF TRIANGLE //////////////////
+                       // The shortest-edge comment block (acute.c:215-219) and the
+                       // orientation table (acute.c:223-230) are quoted on
+                       // longestShortestEdge.
+                       // find the orientation of the triangle, basically shortest and
+                       // longest edges (acute.c:221)
+    orientation = longestShortestEdge(aodist, dadist, dodist);
+    match orientation {
+        123 => {
+            // assign necessary information (acute.c:233)
+            // smallest angle corner: dest (acute.c:234)
+            // largest angle corner: apex (acute.c:235)
+            xShortestEdge = xao;
+            yShortestEdge = yao;
+            shortestEdgeDist = aodist;
+            middleEdgeDist = dadist;
+            longestEdgeDist = dodist;
+            smallestAngleCorner = tdest;
+            middleAngleCorner = torg;
+            largestAngleCorner = tapex;
+        }
+        132 => {
+            // assign necessary information (acute.c:249)
+            // smallest angle corner: dest (acute.c:250)
+            // largest angle corner: org (acute.c:251)
+            xShortestEdge = xao;
+            yShortestEdge = yao;
+            shortestEdgeDist = aodist;
+            middleEdgeDist = dodist;
+            longestEdgeDist = dadist;
+            smallestAngleCorner = tdest;
+            middleAngleCorner = tapex;
+            largestAngleCorner = torg;
+        }
+        213 => {
+            // assign necessary information (acute.c:265)
+            // smallest angle corner: org (acute.c:266)
+            // largest angle corner: apex (acute.c:267)
+            xShortestEdge = xda;
+            yShortestEdge = yda;
+            shortestEdgeDist = dadist;
+            middleEdgeDist = aodist;
+            longestEdgeDist = dodist;
+            smallestAngleCorner = torg;
+            middleAngleCorner = tdest;
+            largestAngleCorner = tapex;
+        }
+        231 => {
+            // assign necessary information (acute.c:280)
+            // smallest angle corner: org (acute.c:281)
+            // largest angle corner: dest (acute.c:282)
+            xShortestEdge = xda;
+            yShortestEdge = yda;
+            shortestEdgeDist = dadist;
+            middleEdgeDist = dodist;
+            longestEdgeDist = aodist;
+            smallestAngleCorner = torg;
+            middleAngleCorner = tapex;
+            largestAngleCorner = tdest;
+        }
+        312 => {
+            // assign necessary information (acute.c:295)
+            // smallest angle corner: apex (acute.c:296)
+            // largest angle corner: org (acute.c:297)
+            xShortestEdge = xdo;
+            yShortestEdge = ydo;
+            shortestEdgeDist = dodist;
+            middleEdgeDist = aodist;
+            longestEdgeDist = dadist;
+            smallestAngleCorner = tapex;
+            middleAngleCorner = tdest;
+            largestAngleCorner = torg;
+        }
+        321 => {
+            // assign necessary information (acute.c:310)
+            // smallest angle corner: apex (acute.c:311)
+            // largest angle corner: dest (acute.c:312)
+            xShortestEdge = xdo;
+            yShortestEdge = ydo;
+            shortestEdgeDist = dodist;
+            middleEdgeDist = dadist;
+            longestEdgeDist = aodist;
+            smallestAngleCorner = tapex;
+            middleAngleCorner = torg;
+            largestAngleCorner = tdest;
+        }
+        // C's switch has no default arm (acute.c:232-326); the six
+        // codes are exhaustive over longestShortestEdge's returns
+        // (acute.c:1847).
+        _ => unreachable!("orientation is one of the six codes (acute.c:232)"),
+    } // end of switch (acute.c:326)
+      // check for offcenter condition (acute.c:327-328)
+    if offcenter && b.offconstant > 0.0 {
+        // origin has the smallest angle (acute.c:329-330)
+        if orientation == 213 || orientation == 231 {
+            /* Find the position of the off-center, as described by Alper Ungor. */
+            dxoff = 0.5 * xShortestEdge - b.offconstant * yShortestEdge;
+            dyoff = 0.5 * yShortestEdge + b.offconstant * xShortestEdge;
+            /* If the off-center is closer to destination than the */
+            /*   circumcenter, use the off-center instead.        */
+            // REALLY BAD CASE (acute.c:336-341)
+            if dxoff * dxoff + dyoff * dyoff < (dx - xdo) * (dx - xdo) + (dy - ydo) * (dy - ydo) {
+                dx = xdo + dxoff;
+                dy = ydo + dyoff;
+            }
+            // ALMOST GOOD CASE (acute.c:342-345)
+            else {
+                almostGood = 1;
+            }
+        }
+        // destination has the smallest angle (acute.c:346-347)
+        else if orientation == 123 || orientation == 132 {
+            /* Find the position of the off-center, as described by Alper Ungor. */
+            dxoff = 0.5 * xShortestEdge + b.offconstant * yShortestEdge;
+            dyoff = 0.5 * yShortestEdge - b.offconstant * xShortestEdge;
+            /* If the off-center is closer to the origin than the */
+            /*   circumcenter, use the off-center instead.        */
+            // REALLY BAD CASE (acute.c:353-357)
+            if dxoff * dxoff + dyoff * dyoff < dx * dx + dy * dy {
+                dx = dxoff;
+                dy = dyoff;
+            }
+            // ALMOST GOOD CASE (acute.c:358-361)
+            else {
+                almostGood = 1;
+            }
+        }
+        // apex has the smallest angle: orientation == 312 || 321
+        // (acute.c:362-363)
+        else {
+            /* Find the position of the off-center, as described by Alper Ungor. */
+            dxoff = 0.5 * xShortestEdge - b.offconstant * yShortestEdge;
+            dyoff = 0.5 * yShortestEdge + b.offconstant * xShortestEdge;
+            /* If the off-center is closer to the origin than the */
+            /*   circumcenter, use the off-center instead.        */
+            // REALLY BAD CASE (acute.c:369-373)
+            if dxoff * dxoff + dyoff * dyoff < dx * dx + dy * dy {
+                dx = dxoff;
+                dy = dyoff;
+            }
+            // ALMOST GOOD CASE (acute.c:374-377)
+            else {
+                almostGood = 1;
+            }
+        }
+    }
+    // if the bad triangle is almost good, apply our approach
+    // (acute.c:380-381)
+    if almostGood == 1 {
+        // calculate cosine of largest angle (acute.c:383-384)
+        cosMaxAngle = (middleEdgeDist + shortestEdgeDist - longestEdgeDist)
+            / (2.0 * middleEdgeDist.sqrt() * shortestEdgeDist.sqrt());
+        if cosMaxAngle < 0.0 {
+            // obtuse (acute.c:385-387)
+            isObtuse = 1;
+        } else if (cosMaxAngle - 0.0).abs() <= compConst {
+            // right triangle (largest angle is 90 degrees)
+            // (acute.c:388-390)
+            isObtuse = 1;
+        } else {
+            // nonobtuse (acute.c:391-393)
+            isObtuse = 0;
+        }
+        // RELOCATION (LOCAL SMOOTHING): check for possible relocation
+        // of one of triangle's points (acute.c:395-397)
+        relocated = doSmoothing(m, b, delotri, torg, tdest, tapex, &mut newloc);
+        // if relocation is possible, delete that vertex and insert a
+        // vertex at the new location (acute.c:398-399)
+        if relocated > 0 {
+            dx = newloc[0] - m.vx_real(torg, 0);
+            dy = newloc[1] - m.vx_real(torg, 1);
+            origin_x = m.vx_real(torg, 0); // keep for later use
+            origin_y = m.vx_real(torg, 1); // (acute.c:402-403)
+            match relocated {
+                1 => {
+                    // C: deletevertex(m,b,&delotri); (acute.c:407)
+                    deletevertex(m, b, &mut delotri)?;
+                }
+                2 => {
+                    // C: lnextself(delotri); deletevertex(m,b,&delotri);
+                    // (acute.c:411-412)
+                    delotri.lnextself();
+                    deletevertex(m, b, &mut delotri)?;
+                }
+                3 => {
+                    // C: lprevself(delotri); deletevertex(m,b,&delotri);
+                    // (acute.c:416-417)
+                    delotri.lprevself();
+                    deletevertex(m, b, &mut delotri)?;
+                }
+                // C's switch has no default arm (acute.c:404-420);
+                // doSmoothing returns 0 or the flag values 1, 2, 3
+                // (acute.c:2034).
+                _ => {}
+            }
+        } else {
+            // calculate radius of the petal according to angle
+            // constraint: first find the visible region, PETAL; find
+            // the center of the circle and radius (acute.c:422-425)
+            petalRadius = shortestEdgeDist.sqrt() / (2.0 * (b.minangle * PI / 180.0).sin());
+            // compute two possible centers of the petal: finding the
+            // center, first find the middle point of smallest edge
+            // (acute.c:426-430)
+            xMidOfShortestEdge =
+                (m.vx_real(middleAngleCorner, 0) + m.vx_real(largestAngleCorner, 0)) / 2.0;
+            yMidOfShortestEdge =
+                (m.vx_real(middleAngleCorner, 1) + m.vx_real(largestAngleCorner, 1)) / 2.0;
+            // two possible centers (acute.c:431-440)
+            xPetalCtr_1 = xMidOfShortestEdge
+                + (petalRadius * petalRadius - (shortestEdgeDist / 4.0)).sqrt()
+                    * (m.vx_real(middleAngleCorner, 1) - m.vx_real(largestAngleCorner, 1))
+                    / shortestEdgeDist.sqrt();
+            yPetalCtr_1 = yMidOfShortestEdge
+                + (petalRadius * petalRadius - (shortestEdgeDist / 4.0)).sqrt()
+                    * (m.vx_real(largestAngleCorner, 0) - m.vx_real(middleAngleCorner, 0))
+                    / shortestEdgeDist.sqrt();
+            xPetalCtr_2 = xMidOfShortestEdge
+                - (petalRadius * petalRadius - (shortestEdgeDist / 4.0)).sqrt()
+                    * (m.vx_real(middleAngleCorner, 1) - m.vx_real(largestAngleCorner, 1))
+                    / shortestEdgeDist.sqrt();
+            yPetalCtr_2 = yMidOfShortestEdge
+                - (petalRadius * petalRadius - (shortestEdgeDist / 4.0)).sqrt()
+                    * (m.vx_real(largestAngleCorner, 0) - m.vx_real(middleAngleCorner, 0))
+                    / shortestEdgeDist.sqrt();
+            // find the correct circle since there will be two possible
+            // circles: calculate the distance to smallest angle corner
+            // (acute.c:441-446)
+            dxcenter1 = (xPetalCtr_1 - m.vx_real(smallestAngleCorner, 0))
+                * (xPetalCtr_1 - m.vx_real(smallestAngleCorner, 0));
+            dycenter1 = (yPetalCtr_1 - m.vx_real(smallestAngleCorner, 1))
+                * (yPetalCtr_1 - m.vx_real(smallestAngleCorner, 1));
+            dxcenter2 = (xPetalCtr_2 - m.vx_real(smallestAngleCorner, 0))
+                * (xPetalCtr_2 - m.vx_real(smallestAngleCorner, 0));
+            dycenter2 = (yPetalCtr_2 - m.vx_real(smallestAngleCorner, 1))
+                * (yPetalCtr_2 - m.vx_real(smallestAngleCorner, 1));
+
+            // whichever is closer to smallest angle corner, it must be
+            // the center (acute.c:448-453)
+            if dxcenter1 + dycenter1 <= dxcenter2 + dycenter2 {
+                xPetalCtr = xPetalCtr_1;
+                yPetalCtr = yPetalCtr_1;
+            } else {
+                xPetalCtr = xPetalCtr_2;
+                yPetalCtr = yPetalCtr_2;
+            }
+
+            // find the third point of the neighbor triangle
+            // (acute.c:455-457)
+            neighborNotFound = getNeighborsVertex(
+                m,
+                badotri,
+                m.vx_real(middleAngleCorner, 0),
+                m.vx_real(middleAngleCorner, 1),
+                m.vx_real(smallestAngleCorner, 0),
+                m.vx_real(smallestAngleCorner, 1),
+                &mut thirdPoint,
+                &mut neighborotri,
+            );
+            // find the circumcenter of the neighbor triangle: if we
+            // cannot find any appropriate suggestion, we use
+            // circumcenter (acute.c:458-460)
+            dxFirstSuggestion = dx;
+            dyFirstSuggestion = dy;
+            // if there is a neighbor triangle (acute.c:461-462)
+            if neighborNotFound == 0 {
+                neighborvertex_1 = m.org(neighborotri);
+                neighborvertex_2 = m.dest(neighborotri);
+                neighborvertex_3 = m.apex(neighborotri);
+                // now calculate neighbor's circumcenter which is the
+                // voronoi site (acute.c:466-467); C's dummy xi_tmp/
+                // eta_tmp out-pointers are the ignored tuple elements
+                let (nc_x, nc_y, _xi_tmp, _eta_tmp) = tri_findcircumcenter(
+                    m,
+                    b,
+                    vertex_coords(m, neighborvertex_1),
+                    vertex_coords(m, neighborvertex_2),
+                    vertex_coords(m, neighborvertex_3),
+                    false,
+                );
+                neighborCircumcenter[0] = nc_x;
+                neighborCircumcenter[1] = nc_y;
+                // compute petal and Voronoi edge intersection: in
+                // order to avoid degenerate cases, we need to do a
+                // vector based calculation for line (acute.c:468-473)
+                vector_x = m.vx_real(middleAngleCorner, 1) - m.vx_real(smallestAngleCorner, 1); // (-y, x)
+                vector_y = m.vx_real(smallestAngleCorner, 0) - m.vx_real(middleAngleCorner, 0);
+                vector_x = myCircumcenter[0] + vector_x;
+                vector_y = myCircumcenter[1] + vector_y;
+
+                // by intersecting bisectors you will end up with the
+                // one you want to walk on; then this line and circle
+                // should be intersected (acute.c:476-479)
+                circleLineIntersection(
+                    myCircumcenter[0],
+                    myCircumcenter[1],
+                    vector_x,
+                    vector_y,
+                    xPetalCtr,
+                    yPetalCtr,
+                    petalRadius,
+                    &mut p,
+                );
+                // choose the correct intersection point: calculate
+                // middle point of the longest edge(bisector)
+                // (acute.c:480-483)
+                xMidOfLongestEdge =
+                    (m.vx_real(middleAngleCorner, 0) + m.vx_real(smallestAngleCorner, 0)) / 2.0;
+                yMidOfLongestEdge =
+                    (m.vx_real(middleAngleCorner, 1) + m.vx_real(smallestAngleCorner, 1)) / 2.0;
+                // we need to find correct intersection point, since
+                // line intersects circle twice (acute.c:484-486)
+                isCorrect = chooseCorrectPoint(
+                    xMidOfLongestEdge,
+                    yMidOfLongestEdge,
+                    p[3],
+                    p[4],
+                    myCircumcenter[0],
+                    myCircumcenter[1],
+                    isObtuse,
+                );
+                // make sure which point is the correct one to be
+                // considered (acute.c:487-494)
+                if isCorrect == 1 {
+                    inter_x = p[3];
+                    inter_y = p[4];
+                } else {
+                    inter_x = p[1];
+                    inter_y = p[2];
+                }
+                // check if there is a Voronoi vertex between before
+                // intersection: check if the voronoi vertex is between
+                // the intersection and circumcenter (acute.c:495-498)
+                pointBetweenPoints(
+                    inter_x,
+                    inter_y,
+                    myCircumcenter[0],
+                    myCircumcenter[1],
+                    neighborCircumcenter[0],
+                    neighborCircumcenter[1],
+                    &mut voronoiOrInter,
+                );
+
+                // determine the point to be suggested (acute.c:500-501)
+                if p[0] > 0.0 {
+                    // there is at least one intersection point
+                    // if it is between circumcenter and intersection:
+                    // if it returns 1.0 this means we have a voronoi
+                    // vertex within feasible region (acute.c:502-504)
+                    if (voronoiOrInter[0] - 1.0).abs() <= compConst {
+                        if testTriangleAngle(
+                            b,
+                            m.vx_real(middleAngleCorner, 0),
+                            m.vx_real(middleAngleCorner, 1),
+                            m.vx_real(largestAngleCorner, 0),
+                            m.vx_real(largestAngleCorner, 1),
+                            neighborCircumcenter[0],
+                            neighborCircumcenter[1],
+                        ) != 0
+                        {
+                            // go back to circumcenter (acute.c:506-508)
+                            dxFirstSuggestion = dx;
+                            dyFirstSuggestion = dy;
+                        } else {
+                            // we are not creating a bad triangle:
+                            // neighbor's circumcenter is suggested
+                            // (acute.c:510-513)
+                            dxFirstSuggestion = voronoiOrInter[2] - m.vx_real(torg, 0);
+                            dyFirstSuggestion = voronoiOrInter[3] - m.vx_real(torg, 1);
+                        }
+                    } else {
+                        // there is no voronoi vertex between
+                        // intersection point and circumcenter
+                        // (acute.c:516-517)
+                        if testTriangleAngle(
+                            b,
+                            m.vx_real(largestAngleCorner, 0),
+                            m.vx_real(largestAngleCorner, 1),
+                            m.vx_real(middleAngleCorner, 0),
+                            m.vx_real(middleAngleCorner, 1),
+                            inter_x,
+                            inter_y,
+                        ) != 0
+                        {
+                            // if it is inside feasible region, then
+                            // insert v2; apply perturbation: find the
+                            // distance between circumcenter and
+                            // intersection point (acute.c:518-522)
+                            d = ((inter_x - myCircumcenter[0]) * (inter_x - myCircumcenter[0])
+                                + (inter_y - myCircumcenter[1]) * (inter_y - myCircumcenter[1]))
+                                .sqrt();
+                            // then find the vector going from
+                            // intersection point to circumcenter
+                            // (acute.c:523-525)
+                            ax = myCircumcenter[0] - inter_x;
+                            ay = myCircumcenter[1] - inter_y;
+
+                            ax = ax / d;
+                            ay = ay / d;
+                            // now calculate the new intersection point
+                            // which is perturbated towards the
+                            // circumcenter (acute.c:529-531)
+                            inter_x = inter_x + ax * pertConst * shortestEdgeDist.sqrt();
+                            inter_y = inter_y + ay * pertConst * shortestEdgeDist.sqrt();
+                            if testTriangleAngle(
+                                b,
+                                m.vx_real(middleAngleCorner, 0),
+                                m.vx_real(middleAngleCorner, 1),
+                                m.vx_real(largestAngleCorner, 0),
+                                m.vx_real(largestAngleCorner, 1),
+                                inter_x,
+                                inter_y,
+                            ) != 0
+                            {
+                                // go back to circumcenter
+                                // (acute.c:533-535)
+                                dxFirstSuggestion = dx;
+                                dyFirstSuggestion = dy;
+                            } else {
+                                // intersection point is suggested
+                                // (acute.c:537-540)
+                                dxFirstSuggestion = inter_x - m.vx_real(torg, 0);
+                                dyFirstSuggestion = inter_y - m.vx_real(torg, 1);
+                            }
+                        } else {
+                            // intersection point is suggested
+                            // (acute.c:543-546)
+                            dxFirstSuggestion = inter_x - m.vx_real(torg, 0);
+                            dyFirstSuggestion = inter_y - m.vx_real(torg, 1);
+                        }
+                    }
+                    // if it is an acute triangle, check if it is a
+                    // good enough location: for acute triangle case,
+                    // we need to check if it is ok to use either of
+                    // them (acute.c:549-560)
+                    if (m.vx_real(smallestAngleCorner, 0) - myCircumcenter[0])
+                        * (m.vx_real(smallestAngleCorner, 0) - myCircumcenter[0])
+                        + (m.vx_real(smallestAngleCorner, 1) - myCircumcenter[1])
+                            * (m.vx_real(smallestAngleCorner, 1) - myCircumcenter[1])
+                        > lengthConst
+                            * ((m.vx_real(smallestAngleCorner, 0)
+                                - (dxFirstSuggestion + m.vx_real(torg, 0)))
+                                * (m.vx_real(smallestAngleCorner, 0)
+                                    - (dxFirstSuggestion + m.vx_real(torg, 0)))
+                                + (m.vx_real(smallestAngleCorner, 1)
+                                    - (dyFirstSuggestion + m.vx_real(torg, 1)))
+                                    * (m.vx_real(smallestAngleCorner, 1)
+                                        - (dyFirstSuggestion + m.vx_real(torg, 1))))
+                    {
+                        // use circumcenter (acute.c:557-559)
+                        dxFirstSuggestion = dx;
+                        dyFirstSuggestion = dy;
+                    } // else we stick to what we have found
+                } // intersection point
+
+                // if it is on the boundary, meaning no neighbor
+                // triangle in this direction, try other direction
+                // (acute.c:563)
+            }
+
+            // DO THE SAME THING FOR THE OTHER DIRECTION: find the third
+            // point of the neighbor triangle (acute.c:565-568)
+            neighborNotFound = getNeighborsVertex(
+                m,
+                badotri,
+                m.vx_real(largestAngleCorner, 0),
+                m.vx_real(largestAngleCorner, 1),
+                m.vx_real(smallestAngleCorner, 0),
+                m.vx_real(smallestAngleCorner, 1),
+                &mut thirdPoint,
+                &mut neighborotri,
+            );
+            // find the circumcenter of the neighbor triangle: if we
+            // cannot find any appropriate suggestion, we use
+            // circumcenter (acute.c:569-571)
+            dxSecondSuggestion = dx;
+            dySecondSuggestion = dy;
+            // if there is a neighbor triangle (acute.c:572-573)
+            if neighborNotFound == 0 {
+                neighborvertex_1 = m.org(neighborotri);
+                neighborvertex_2 = m.dest(neighborotri);
+                neighborvertex_3 = m.apex(neighborotri);
+                // now calculate neighbor's circumcenter which is the
+                // voronoi site (acute.c:577-578)
+                let (nc_x, nc_y, _xi_tmp, _eta_tmp) = tri_findcircumcenter(
+                    m,
+                    b,
+                    vertex_coords(m, neighborvertex_1),
+                    vertex_coords(m, neighborvertex_2),
+                    vertex_coords(m, neighborvertex_3),
+                    false,
+                );
+                neighborCircumcenter[0] = nc_x;
+                neighborCircumcenter[1] = nc_y;
+                // compute petal and Voronoi edge intersection: in
+                // order to avoid degenerate cases, we need to do a
+                // vector based calculation for line (acute.c:580-585)
+                vector_x = m.vx_real(largestAngleCorner, 1) - m.vx_real(smallestAngleCorner, 1); // (-y, x)
+                vector_y = m.vx_real(smallestAngleCorner, 0) - m.vx_real(largestAngleCorner, 0);
+                vector_x = myCircumcenter[0] + vector_x;
+                vector_y = myCircumcenter[1] + vector_y;
+
+                // by intersecting bisectors you will end up with the
+                // one you want to walk on; then this line and circle
+                // should be intersected (acute.c:588-591)
+                circleLineIntersection(
+                    myCircumcenter[0],
+                    myCircumcenter[1],
+                    vector_x,
+                    vector_y,
+                    xPetalCtr,
+                    yPetalCtr,
+                    petalRadius,
+                    &mut p,
+                );
+
+                // choose the correct intersection point: calculate
+                // middle point of the longest edge(bisector) (the
+                // variable is C's xMidOfMiddleEdge, acute.c:593-596)
+                xMidOfMiddleEdge =
+                    (m.vx_real(largestAngleCorner, 0) + m.vx_real(smallestAngleCorner, 0)) / 2.0;
+                yMidOfMiddleEdge =
+                    (m.vx_real(largestAngleCorner, 1) + m.vx_real(smallestAngleCorner, 1)) / 2.0;
+                // we need to find correct intersection point, since
+                // line intersects circle twice; this direction is
+                // always ACUTE (acute.c:597-600)
+                isCorrect = chooseCorrectPoint(
+                    xMidOfMiddleEdge,
+                    yMidOfMiddleEdge,
+                    p[3],
+                    p[4],
+                    myCircumcenter[0],
+                    myCircumcenter[1],
+                    0, // (isObtuse+1)%2
+                );
+                // make sure which point is the correct one to be
+                // considered (acute.c:601-608)
+                if isCorrect == 1 {
+                    inter_x = p[3];
+                    inter_y = p[4];
+                } else {
+                    inter_x = p[1];
+                    inter_y = p[2];
+                }
+
+                // check if there is a Voronoi vertex between before
+                // intersection: check if the voronoi vertex is between
+                // the intersection and circumcenter (acute.c:610-613)
+                pointBetweenPoints(
+                    inter_x,
+                    inter_y,
+                    myCircumcenter[0],
+                    myCircumcenter[1],
+                    neighborCircumcenter[0],
+                    neighborCircumcenter[1],
+                    &mut voronoiOrInter,
+                );
+
+                // determine the point to be suggested (acute.c:615-616)
+                if p[0] > 0.0 {
+                    // there is at least one intersection point
+                    // if it is between circumcenter and intersection:
+                    // if it returns 1.0 this means we have a voronoi
+                    // vertex within feasible region (acute.c:617-619)
+                    if (voronoiOrInter[0] - 1.0).abs() <= compConst {
+                        if testTriangleAngle(
+                            b,
+                            m.vx_real(middleAngleCorner, 0),
+                            m.vx_real(middleAngleCorner, 1),
+                            m.vx_real(largestAngleCorner, 0),
+                            m.vx_real(largestAngleCorner, 1),
+                            neighborCircumcenter[0],
+                            neighborCircumcenter[1],
+                        ) != 0
+                        {
+                            // go back to circumcenter (acute.c:621-623)
+                            dxSecondSuggestion = dx;
+                            dySecondSuggestion = dy;
+                        } else {
+                            // we are not creating a bad triangle:
+                            // neighbor's circumcenter is suggested
+                            // (acute.c:625-628)
+                            dxSecondSuggestion = voronoiOrInter[2] - m.vx_real(torg, 0);
+                            dySecondSuggestion = voronoiOrInter[3] - m.vx_real(torg, 1);
+                        }
+                    } else {
+                        // there is no voronoi vertex between
+                        // intersection point and circumcenter
+                        // (acute.c:632-633)
+                        if testTriangleAngle(
+                            b,
+                            m.vx_real(middleAngleCorner, 0),
+                            m.vx_real(middleAngleCorner, 1),
+                            m.vx_real(largestAngleCorner, 0),
+                            m.vx_real(largestAngleCorner, 1),
+                            inter_x,
+                            inter_y,
+                        ) != 0
+                        {
+                            // if it is inside feasible region, then
+                            // insert v2; apply perturbation: find the
+                            // distance between circumcenter and
+                            // intersection point (acute.c:634-638)
+                            d = ((inter_x - myCircumcenter[0]) * (inter_x - myCircumcenter[0])
+                                + (inter_y - myCircumcenter[1]) * (inter_y - myCircumcenter[1]))
+                                .sqrt();
+                            // then find the vector going from
+                            // intersection point to circumcenter
+                            // (acute.c:639-641)
+                            ax = myCircumcenter[0] - inter_x;
+                            ay = myCircumcenter[1] - inter_y;
+
+                            ax = ax / d;
+                            ay = ay / d;
+                            // now calculate the new intersection point
+                            // which is perturbated towards the
+                            // circumcenter (acute.c:645-647)
+                            inter_x = inter_x + ax * pertConst * shortestEdgeDist.sqrt();
+                            inter_y = inter_y + ay * pertConst * shortestEdgeDist.sqrt();
+                            if testTriangleAngle(
+                                b,
+                                m.vx_real(middleAngleCorner, 0),
+                                m.vx_real(middleAngleCorner, 1),
+                                m.vx_real(largestAngleCorner, 0),
+                                m.vx_real(largestAngleCorner, 1),
+                                inter_x,
+                                inter_y,
+                            ) != 0
+                            {
+                                // go back to circumcenter
+                                // (acute.c:649-651)
+                                dxSecondSuggestion = dx;
+                                dySecondSuggestion = dy;
+                            } else {
+                                // intersection point is suggested
+                                // (acute.c:653-656)
+                                dxSecondSuggestion = inter_x - m.vx_real(torg, 0);
+                                dySecondSuggestion = inter_y - m.vx_real(torg, 1);
+                            }
+                        } else {
+                            // intersection point is suggested
+                            // (acute.c:658-662)
+                            dxSecondSuggestion = inter_x - m.vx_real(torg, 0);
+                            dySecondSuggestion = inter_y - m.vx_real(torg, 1);
+                        }
+                    }
+                    // if it is an acute triangle, check if it is a
+                    // good enough location: for acute triangle case,
+                    // we need to check if it is ok to use either of
+                    // them (acute.c:665-676)
+                    if (m.vx_real(smallestAngleCorner, 0) - myCircumcenter[0])
+                        * (m.vx_real(smallestAngleCorner, 0) - myCircumcenter[0])
+                        + (m.vx_real(smallestAngleCorner, 1) - myCircumcenter[1])
+                            * (m.vx_real(smallestAngleCorner, 1) - myCircumcenter[1])
+                        > lengthConst
+                            * ((m.vx_real(smallestAngleCorner, 0)
+                                - (dxSecondSuggestion + m.vx_real(torg, 0)))
+                                * (m.vx_real(smallestAngleCorner, 0)
+                                    - (dxSecondSuggestion + m.vx_real(torg, 0)))
+                                + (m.vx_real(smallestAngleCorner, 1)
+                                    - (dySecondSuggestion + m.vx_real(torg, 1)))
+                                    * (m.vx_real(smallestAngleCorner, 1)
+                                        - (dySecondSuggestion + m.vx_real(torg, 1))))
+                    {
+                        // use circumcenter (acute.c:673-675)
+                        dxSecondSuggestion = dx;
+                        dySecondSuggestion = dy;
+                    } // else we stick on what we have found
+                } // if it is on the boundary, meaning no neighbor
+                  // triangle in this direction, the other direction
+                  // might be ok (acute.c:678)
+            }
+            if isObtuse == 1 {
+                // obtuse: do nothing (acute.c:679-682)
+                dx = dxFirstSuggestion;
+                dy = dyFirstSuggestion;
+            } else {
+                // acute: consider other direction (acute.c:683-697)
+                if justAcute
+                    * ((m.vx_real(smallestAngleCorner, 0)
+                        - (dxSecondSuggestion + m.vx_real(torg, 0)))
+                        * (m.vx_real(smallestAngleCorner, 0)
+                            - (dxSecondSuggestion + m.vx_real(torg, 0)))
+                        + (m.vx_real(smallestAngleCorner, 1)
+                            - (dySecondSuggestion + m.vx_real(torg, 1)))
+                            * (m.vx_real(smallestAngleCorner, 1)
+                                - (dySecondSuggestion + m.vx_real(torg, 1))))
+                    > (m.vx_real(smallestAngleCorner, 0) - (dxFirstSuggestion + m.vx_real(torg, 0)))
+                        * (m.vx_real(smallestAngleCorner, 0)
+                            - (dxFirstSuggestion + m.vx_real(torg, 0)))
+                        + (m.vx_real(smallestAngleCorner, 1)
+                            - (dyFirstSuggestion + m.vx_real(torg, 1)))
+                            * (m.vx_real(smallestAngleCorner, 1)
+                                - (dyFirstSuggestion + m.vx_real(torg, 1)))
+                {
+                    dx = dxSecondSuggestion;
+                    dy = dySecondSuggestion;
+                } else {
+                    dx = dxFirstSuggestion;
+                    dy = dyFirstSuggestion;
+                }
+            } // end if obtuse
+        } // end of relocation (acute.c:700)
+    } // end of almostGood (acute.c:701)
+
+    if relocated <= 0 {
+        // (acute.c:703-705)
+        m.vx_set_real(circumcenter, 0, m.vx_real(torg, 0) + dx);
+        m.vx_set_real(circumcenter, 1, m.vx_real(torg, 1) + dy);
+    } else {
+        // (acute.c:706-708)
+        m.vx_set_real(circumcenter, 0, origin_x + dx);
+        m.vx_set_real(circumcenter, 1, origin_y + dy);
+    }
+
+    // (acute.c:711-712)
+    let xi = (yao * dx - xao * dy) * (2.0 * denominator);
+    let eta = (xdo * dy - ydo * dx) * (2.0 * denominator);
+
+    Ok((xi, eta))
+} // end of findNewSPLocationWithoutMaxAngle() (acute.c:714)
+/// C: findNewSPLocationWithMaxAngle (acute.c:722-1801; banner at
+/// acute.c:716-721). The -U bounded Steiner pick: the same offcenter
+/// prelude and the same smoothing/petal fork as the Without variant,
+/// with three aCute additions - the petal radius follows the max of
+/// the angle bound and the triangle's own middle angle (the minangle
+/// pick, acute.c:1048-1053), the petal-slab intersection points bound
+/// the walk (the alpha rotations, acute.c:1089-1121), and each
+/// found-direction suggestion is tested against the slab line's
+/// Voronoi intersection (lineLineIntersection) plus the
+/// minDistanceToNeigbor neighbor ring, with the exact-objective
+/// petal-slab-vs-line-inter distance comparisons (acute.c:1196-1203,
+/// 1273-1280, 1463-1470, 1535-1542).
+///
+/// The same D26 seam mapping as the Without variant applies (the
+/// circumcenter row through the vx_set_real chokepoint, the xi/eta
+/// interpolants as the tuple return, the deletevertex funnel), plus
+/// these D27 pins: C's line_inter_x/line_inter_y are read at
+/// acute.c:1191 and 1458 by pointBetweenPoints even when line_p[0]
+/// <= 0.0 - the intersection was never computed - unobservably,
+/// because the only consumers of those reads sit behind the
+/// line_p[0] > 0.0-gated conjunctions (acute.c:1192-1203, 1270-1280,
+/// 1459-1470, 1532-1542), so the port pins the deterministic zero;
+/// and the line_vector_x/line_vector_y stores at acute.c:1159-1160
+/// and 1428-1429 are dead in C (lineLineIntersection reads
+/// vector_x/vector_y, nothing reads line_vector afterwards) and are
+/// dropped per the D19/D24 dead-store rule, as are the Without
+/// variant's dead switch stores.
+#[allow(non_snake_case)] // C-parity: the C name verbatim (acute.c:722)
+#[allow(clippy::too_many_arguments)] // C-parity: the ten-parameter C
+// signature (acute.c:722-724)
+#[allow(clippy::needless_late_init)]
+// C-parity: Hale's declaration
+// block (acute.c:726-801) keeps C's declaration-then-assignment shape
+#[allow(clippy::if_same_then_else)]
+// C-parity: the final obtuse and
+// acute arms carry verbatim identical bodies (acute.c:1638-1709 vs
+// 1712-1785)
+#[allow(clippy::assign_op_pattern)] // C-parity: the minangle, vector,
+                                    // ax/ay and inter accumulation stores keep C's x = x + y and
+                                    // x = x / y shapes verbatim (acute.c:1052, 1137-1138, 1220-1224,
+                                    // 1295-1299, 1335-1339, 1402-1403, 1486-1490, 1557-1561, 1595-1599)
+pub(crate) fn findNewSPLocationWithMaxAngle(
+    m: &mut Mesh,
+    b: &Behavior,
+    torg: u32,
+    tdest: u32,
+    tapex: u32,
+    circumcenter: u32,
+    offcenter: bool,
+    badotri: Otri,
+) -> Result<(f64, f64), Oom> {
+    // for calculating the distances of the edges (acute.c:726-728)
+    let xdo: f64;
+    let ydo: f64;
+    let xao: f64;
+    let yao: f64;
+    let xda: f64;
+    let yda: f64;
+    let dodist: f64;
+    let aodist: f64;
+    let dadist: f64;
+    // for exact calculation (acute.c:729-731)
+    let denominator: f64;
+    let mut dx: f64;
+    let mut dy: f64;
+    let dxoff: f64;
+    let dyoff: f64;
+
+    // keeps the difference of coordinates edge (acute.c:734-735). The
+    // xMiddleEdge/yMiddleEdge/xLongestEdge/yLongestEdge stores of C's
+    // switch (acute.c:846-848 and the five further arms) are dead in C
+    // (never read anywhere) and are dropped (D27, the D19/D24
+    // dead-store rule).
+    let xShortestEdge: f64;
+    let yShortestEdge: f64;
+    // keeps the square of edge lengths (acute.c:737-738)
+    let shortestEdgeDist: f64;
+    let middleEdgeDist: f64;
+    let longestEdgeDist: f64;
+    // keeps the vertices according to the angle incident to that
+    // vertex in a triangle (acute.c:740-741); the NULL handles mirror
+    // C's NULL vertex pointers, and the orientation switch below
+    // assigns all three before any read.
+    let smallestAngleCorner: u32;
+    let middleAngleCorner: u32;
+    let largestAngleCorner: u32;
+    // keeps the type of orientation of the triangle (acute.c:743-744)
+    let orientation: i32;
+    // keeps the coordinates of circumcenter of itself and neighbor
+    // triangle circumcenter (acute.c:745-746); zero-init (D27, the D24
+    // pin class): the found-direction findcircumcenter writes
+    // neighborCircumcenter before any read.
+    let mut myCircumcenter = [0.0f64; 2];
+    let mut neighborCircumcenter = [0.0f64; 2];
+    // keeps if bad triangle is almost good or not (acute.c:748-749)
+    let mut almostGood = 0;
+    // keeps the cosine of the largest angle (acute.c:750-751)
+    let cosMaxAngle: f64;
+    let isObtuse: i32; // 1: obtuse 0: nonobtuse (acute.c:752)
+                       // keeps the radius of petal (acute.c:753-754)
+    let petalRadius: f64;
+    // in order to make sure that the circumcircle of the bad triangle
+    // is greater than petal (acute.c:787): the minangle pick of the
+    // petal block
+    let mut minangle: f64;
+    // for calculating petal center (acute.c:755-757)
+    let xPetalCtr_1: f64;
+    let yPetalCtr_1: f64;
+    let xPetalCtr_2: f64;
+    let yPetalCtr_2: f64;
+    let xPetalCtr: f64;
+    let yPetalCtr: f64;
+    let xMidOfShortestEdge: f64;
+    let yMidOfShortestEdge: f64;
+    let dxcenter1: f64;
+    let dycenter1: f64;
+    let dxcenter2: f64;
+    let dycenter2: f64;
+    // for finding neighbor (acute.c:758-760); zero-init (D27, the D24
+    // pin class): getNeighborsVertex writes the neighbor handle on
+    // every path (acute.c:2238).
+    let mut neighborotri = Otri {
+        tri: DUMMY_TRI,
+        orient: 0,
+    };
+    let mut thirdPoint = [0.0f64; 2];
+    // the two-direction hull flags (acute.c:798-799)
+    let neighborNotFound_first: i32;
+    let neighborNotFound_second: i32;
+    // for keeping the vertices of the neighbor triangle (acute.c:761-
+    // 764); the NULL initializers are dead stores (every read sits
+    // inside the found branches that assigned them first, acute.c:
+    // 1130-1132, 1394-1396) and drop per D27.
+    let mut neighborvertex_1: u32;
+    let mut neighborvertex_2: u32;
+    let mut neighborvertex_3: u32;
+    // dummy variables (acute.c:766-767): C's xi_tmp/eta_tmp catch the
+    // neighbor findcircumcenter's interpolant writes that no one ever
+    // reads; the ignored tuple elements below are their mirror.
+    // for petal intersection (acute.c:768-770); zero-init (D27, the
+    // D24 pin class): the found directions write p and voronoiOrInter
+    // through their intersections before any read.
+    let mut vector_x: f64;
+    let mut vector_y: f64;
+    let xMidOfLongestEdge: f64;
+    let yMidOfLongestEdge: f64;
+    let mut inter_x: f64;
+    let mut inter_y: f64;
+    let mut p = [0.0f64; 5];
+    let mut voronoiOrInter = [0.0f64; 4];
+    let mut isCorrect: i32;
+    // for vector calculations in perturbation (acute.c:772-773)
+    let mut ax: f64;
+    let mut ay: f64;
+    let mut d: f64;
+    let pertConst = 0.06; // perturbation constant (acute.c:774)
+    let lengthConst = 1.0; // used at comparing circumcenter's distance
+                           // to proposed point's distance (acute.c:776)
+    let justAcute = 1.0; // used for making the program working for one
+                         // direction only (acute.c:777)
+                         // for smoothing (acute.c:778-780); zero-init (D27, the D24 pin
+                         // class): the relocated branch writes newloc through doSmoothing
+                         // before the reads.
+    let mut relocated = 0; // used to differentiate between calling
+                           // the deletevertex and just proposing a steiner point (acute.c:779)
+    let mut newloc = [0.0f64; 2]; // new location suggested by smoothing
+                                  // zero-init (D27): C leaves both indeterminate (acute.c:781); the
+                                  // only read (acute.c:1795-1796) sits behind relocated > 0, which
+                                  // re-stores both first (acute.c:1024-1025).
+    let mut origin_x: f64 = 0.0; // for keeping torg safe (acute.c:781)
+    let mut origin_y: f64 = 0.0;
+    let mut delotri: Otri; // keeping the original orientation for
+                           // relocation process (acute.c:782)
+                           // keeps the first and second direction suggested points
+                           // (acute.c:783-784)
+    let mut dxFirstSuggestion: f64;
+    let mut dyFirstSuggestion: f64;
+    let mut dxSecondSuggestion: f64;
+    let mut dySecondSuggestion: f64;
+    // second direction variables (acute.c:785-786)
+    let xMidOfMiddleEdge: f64;
+    let yMidOfMiddleEdge: f64;
+
+    // for calculating the slab: two points of the line (acute.c:788-789)
+    let mut linepnt1_x: f64;
+    let mut linepnt1_y: f64;
+    let mut linepnt2_x: f64;
+    let mut linepnt2_y: f64;
+    // C leaves line_inter_x/line_inter_y indeterminate at the
+    // declaration (acute.c:790); the found-direction pointBetweenPoints
+    // reads them at acute.c:1191 and 1458 even when line_p[0] <= 0.0
+    // (the intersection was never computed), unobservably - their only
+    // consumers sit behind the line_p[0] > 0.0-gated conjunctions - so
+    // the port pins the deterministic zero (D27, the D24 pin class).
+    let mut line_inter_x = 0.0f64;
+    let mut line_inter_y = 0.0f64;
+    // used for getting the return values of functions related to line
+    // intersection (acute.c:792); zero-init (D27, the D24 pin class):
+    // line_p[0] guards the reads of its slots.
+    let mut line_p = [0.0f64; 3];
+    let mut line_result = [0.0f64; 4];
+    // intersection of slab and the petal (acute.c:794-796)
+    let petal_slab_inter_x_first: f64;
+    let petal_slab_inter_y_first: f64;
+    let petal_slab_inter_x_second: f64;
+    let petal_slab_inter_y_second: f64;
+    // the petal bisector tip and its two slab rotations, plus the
+    // slab block's distance/angle scratch (acute.c:797-801)
+    let x_1: f64;
+    let y_1: f64;
+    let x_2: f64;
+    let y_2: f64;
+    let petal_bisector_x: f64;
+    let petal_bisector_y: f64;
+    let dist: f64;
+    let alpha: f64;
+    // the slab block's unit vector (acute.c:791); C's later stores at
+    // acute.c:1159-1160 and 1428-1429 are dead (dropped, D27), so the
+    // pair needs no mut.
+    let line_vector_x: f64;
+    let line_vector_y: f64;
+    // END OF HALE'S VARIABLES (acute.c:801)
+
+    // C: m->circumcentercount++; (acute.c:803)
+    m.circumcentercount += 1;
+
+    /* Compute the circumcenter of the triangle. */
+    // C: xdo = tdest[0] - torg[0]; ... yda = tapex[1] - tdest[1];
+    // (acute.c:806-811)
+    xdo = m.vx_real(tdest, 0) - m.vx_real(torg, 0);
+    ydo = m.vx_real(tdest, 1) - m.vx_real(torg, 1);
+    xao = m.vx_real(tapex, 0) - m.vx_real(torg, 0);
+    yao = m.vx_real(tapex, 1) - m.vx_real(torg, 1);
+    xda = m.vx_real(tapex, 0) - m.vx_real(tdest, 0);
+    yda = m.vx_real(tapex, 1) - m.vx_real(tdest, 1);
+    // keeps the square of the distances (acute.c:812-816)
+    dodist = xdo * xdo + ydo * ydo;
+    aodist = xao * xao + yao * yao;
+    dadist = (m.vx_real(tdest, 0) - m.vx_real(tapex, 0))
+        * (m.vx_real(tdest, 0) - m.vx_real(tapex, 0))
+        + (m.vx_real(tdest, 1) - m.vx_real(tapex, 1)) * (m.vx_real(tdest, 1) - m.vx_real(tapex, 1));
+    // checking if the user wanted exact arithmetic or not (acute.c:817)
+    if b.noexact {
+        denominator = 0.5 / (xdo * yao - xao * ydo);
+    } else {
+        /* Use the counterclockwise() routine to ensure a positive (and */
+        /*   reasonably accurate) result, avoiding any possibility of   */
+        /*   division by zero.                                          */
+        denominator = 0.5
+            / tri_counterclockwise(
+                m,
+                b,
+                vertex_coords(m, tdest),
+                vertex_coords(m, tapex),
+                vertex_coords(m, torg),
+            );
+        /* Don't count the above as an orientation test. */
+        m.counterclockcount -= 1;
+    }
+    // calculate the circumcenter in terms of distance to origin point
+    // (acute.c:828-830)
+    dx = (yao * dodist - ydo * aodist) * denominator;
+    dy = (xdo * aodist - xao * dodist) * denominator;
+    // for debugging and for keeping circumcenter to use later:
+    // coordinate value of the circumcenter (acute.c:831-834)
+    myCircumcenter[0] = m.vx_real(torg, 0) + dx;
+    myCircumcenter[1] = m.vx_real(torg, 1) + dy;
+
+    delotri = badotri; // save for later (acute.c:836)
+                       // FINDING THE ORIENTATION OF TRIANGLE: find the orientation of
+                       // the triangle, basically shortest and longest edges (acute.c:843)
+    orientation = longestShortestEdge(aodist, dadist, dodist);
+    match orientation {
+        123 => {
+            // assign necessary information (acute.c:842)
+            // smallest angle corner: dest
+            // largest angle corner: apex
+            xShortestEdge = xao;
+            yShortestEdge = yao;
+            shortestEdgeDist = aodist;
+            middleEdgeDist = dadist;
+            longestEdgeDist = dodist;
+            smallestAngleCorner = tdest;
+            middleAngleCorner = torg;
+            largestAngleCorner = tapex;
+        }
+        132 => {
+            // assign necessary information (acute.c:858)
+            // smallest angle corner: dest
+            // largest angle corner: org
+            xShortestEdge = xao;
+            yShortestEdge = yao;
+            shortestEdgeDist = aodist;
+            middleEdgeDist = dodist;
+            longestEdgeDist = dadist;
+            smallestAngleCorner = tdest;
+            middleAngleCorner = tapex;
+            largestAngleCorner = torg;
+        }
+        213 => {
+            // assign necessary information (acute.c:874)
+            // smallest angle corner: org
+            // largest angle corner: apex
+            xShortestEdge = xda;
+            yShortestEdge = yda;
+            shortestEdgeDist = dadist;
+            middleEdgeDist = aodist;
+            longestEdgeDist = dodist;
+            smallestAngleCorner = torg;
+            middleAngleCorner = tdest;
+            largestAngleCorner = tapex;
+        }
+        231 => {
+            // assign necessary information (acute.c:889)
+            // smallest angle corner: org
+            // largest angle corner: dest
+            xShortestEdge = xda;
+            yShortestEdge = yda;
+            shortestEdgeDist = dadist;
+            middleEdgeDist = dodist;
+            longestEdgeDist = aodist;
+            smallestAngleCorner = torg;
+            middleAngleCorner = tapex;
+            largestAngleCorner = tdest;
+        }
+        312 => {
+            // assign necessary information (acute.c:904)
+            // smallest angle corner: apex
+            // largest angle corner: org
+            xShortestEdge = xdo;
+            yShortestEdge = ydo;
+            shortestEdgeDist = dodist;
+            middleEdgeDist = aodist;
+            longestEdgeDist = dadist;
+            smallestAngleCorner = tapex;
+            middleAngleCorner = tdest;
+            largestAngleCorner = torg;
+        }
+        321 => {
+            // assign necessary information (acute.c:919)
+            // smallest angle corner: apex
+            // largest angle corner: dest
+            xShortestEdge = xdo;
+            yShortestEdge = ydo;
+            shortestEdgeDist = dodist;
+            middleEdgeDist = dadist;
+            longestEdgeDist = aodist;
+            smallestAngleCorner = tapex;
+            middleAngleCorner = torg;
+            largestAngleCorner = tdest;
+        }
+        // C's switch has no default arm (acute.c:841-935); the six
+        // codes are exhaustive over longestShortestEdge's returns
+        // (acute.c:1847).
+        _ => unreachable!("orientation is one of the six codes (acute.c:841)"),
+    } // end of switch (acute.c:935)
+      // check for offcenter condition (acute.c:936-937)
+    if offcenter && b.offconstant > 0.0 {
+        // origin has the smallest angle (acute.c:938-939)
+        if orientation == 213 || orientation == 231 {
+            /* Find the position of the off-center, as described by Alper Ungor. */
+            dxoff = 0.5 * xShortestEdge - b.offconstant * yShortestEdge;
+            dyoff = 0.5 * yShortestEdge + b.offconstant * xShortestEdge;
+            /* If the off-center is closer to destination than the */
+            /*   circumcenter, use the off-center instead.        */
+            // REALLY BAD CASE (acute.c:945-950)
+            if dxoff * dxoff + dyoff * dyoff < (dx - xdo) * (dx - xdo) + (dy - ydo) * (dy - ydo) {
+                dx = xdo + dxoff;
+                dy = ydo + dyoff;
+            }
+            // ALMOST GOOD CASE (acute.c:951-954)
+            else {
+                almostGood = 1;
+            }
+        }
+        // destination has the smallest angle (acute.c:955-956)
+        else if orientation == 123 || orientation == 132 {
+            /* Find the position of the off-center, as described by Alper Ungor. */
+            dxoff = 0.5 * xShortestEdge + b.offconstant * yShortestEdge;
+            dyoff = 0.5 * yShortestEdge - b.offconstant * xShortestEdge;
+            /* If the off-center is closer to the origin than the */
+            /*   circumcenter, use the off-center instead.        */
+            // REALLY BAD CASE (acute.c:962-966)
+            if dxoff * dxoff + dyoff * dyoff < dx * dx + dy * dy {
+                dx = dxoff;
+                dy = dyoff;
+            }
+            // ALMOST GOOD CASE (acute.c:967-970)
+            else {
+                almostGood = 1;
+            }
+        }
+        // apex has the smallest angle: orientation == 312 || 321
+        // (acute.c:971-972)
+        else {
+            /* Find the position of the off-center, as described by Alper Ungor. */
+            dxoff = 0.5 * xShortestEdge - b.offconstant * yShortestEdge;
+            dyoff = 0.5 * yShortestEdge + b.offconstant * xShortestEdge;
+            /* If the off-center is closer to the origin than the */
+            /*   circumcenter, use the off-center instead.        */
+            // REALLY BAD CASE (acute.c:978-982)
+            if dxoff * dxoff + dyoff * dyoff < dx * dx + dy * dy {
+                dx = dxoff;
+                dy = dyoff;
+            }
+            // ALMOST GOOD CASE (acute.c:983-986)
+            else {
+                almostGood = 1;
+            }
+        }
+    }
+    // if the bad triangle is almost good, apply our approach
+    // (acute.c:989-990)
+    if almostGood == 1 {
+        // calculate cosine of largest angle (acute.c:992-993)
+        cosMaxAngle = (middleEdgeDist + shortestEdgeDist - longestEdgeDist)
+            / (2.0 * middleEdgeDist.sqrt() * shortestEdgeDist.sqrt());
+        if cosMaxAngle < 0.0 {
+            // obtuse (acute.c:994-996)
+            isObtuse = 1;
+        } else if (cosMaxAngle - 0.0).abs() <= compConst {
+            // right triangle (largest angle is 90 degrees)
+            // (acute.c:997-999)
+            isObtuse = 1;
+        } else {
+            // nonobtuse (acute.c:1000-1002)
+            isObtuse = 0;
+        }
+        // RELOCATION (LOCAL SMOOTHING): check for possible relocation
+        // of one of triangle's points (acute.c:1004-1019)
+        relocated = doSmoothing(m, b, delotri, torg, tdest, tapex, &mut newloc);
+        // if relocation is possible, delete that vertex and insert a
+        // vertex at the new location (acute.c:1020-1021)
+        if relocated > 0 {
+            dx = newloc[0] - m.vx_real(torg, 0);
+            dy = newloc[1] - m.vx_real(torg, 1);
+            origin_x = m.vx_real(torg, 0); // keep for later use
+            origin_y = m.vx_real(torg, 1); // (acute.c:1024-1025)
+            match relocated {
+                1 => {
+                    // C: deletevertex(m,b,&delotri); (acute.c:1029)
+                    deletevertex(m, b, &mut delotri)?;
+                }
+                2 => {
+                    // C: lnextself(delotri); deletevertex(m,b,&delotri);
+                    // (acute.c:1033-1034)
+                    delotri.lnextself();
+                    deletevertex(m, b, &mut delotri)?;
+                }
+                3 => {
+                    // C: lprevself(delotri); deletevertex(m,b,&delotri);
+                    // (acute.c:1038-1039)
+                    delotri.lprevself();
+                    deletevertex(m, b, &mut delotri)?;
+                }
+                // C's switch has no default arm (acute.c:1026-1042);
+                // doSmoothing returns 0 or the flag values 1, 2, 3
+                // (acute.c:2034).
+                _ => {}
+            }
+        } else {
+            // calculate radius of the petal according to angle
+            // constraint: first find the visible region, PETAL; find
+            // the center of the circle and radius (acute.c:1044-1046)
+            // choose minimum angle as the maximum of quality angle
+            // and the minimum angle of the bad triangle: if the
+            // triangle's own middle angle wins, add the 0.5 guard
+            // (acute.c:1047-1053)
+            minangle = ((middleEdgeDist + longestEdgeDist - shortestEdgeDist)
+                / (2.0 * middleEdgeDist.sqrt() * longestEdgeDist.sqrt()))
+            .acos()
+                * 180.0
+                / PI;
+            if b.minangle > minangle {
+                minangle = b.minangle;
+            } else {
+                minangle = minangle + 0.5;
+            }
+            petalRadius = shortestEdgeDist.sqrt() / (2.0 * (minangle * PI / 180.0).sin()); // (acute.c:1054)
+                                                                                           // compute two possible centers of the petal: finding the
+                                                                                           // center, first find the middle point of smallest edge
+                                                                                           // (acute.c:1055-1059)
+            xMidOfShortestEdge =
+                (m.vx_real(middleAngleCorner, 0) + m.vx_real(largestAngleCorner, 0)) / 2.0;
+            yMidOfShortestEdge =
+                (m.vx_real(middleAngleCorner, 1) + m.vx_real(largestAngleCorner, 1)) / 2.0;
+            // two possible centers (acute.c:1060-1069)
+            xPetalCtr_1 = xMidOfShortestEdge
+                + (petalRadius * petalRadius - (shortestEdgeDist / 4.0)).sqrt()
+                    * (m.vx_real(middleAngleCorner, 1) - m.vx_real(largestAngleCorner, 1))
+                    / shortestEdgeDist.sqrt();
+            yPetalCtr_1 = yMidOfShortestEdge
+                + (petalRadius * petalRadius - (shortestEdgeDist / 4.0)).sqrt()
+                    * (m.vx_real(largestAngleCorner, 0) - m.vx_real(middleAngleCorner, 0))
+                    / shortestEdgeDist.sqrt();
+            xPetalCtr_2 = xMidOfShortestEdge
+                - (petalRadius * petalRadius - (shortestEdgeDist / 4.0)).sqrt()
+                    * (m.vx_real(middleAngleCorner, 1) - m.vx_real(largestAngleCorner, 1))
+                    / shortestEdgeDist.sqrt();
+            yPetalCtr_2 = yMidOfShortestEdge
+                - (petalRadius * petalRadius - (shortestEdgeDist / 4.0)).sqrt()
+                    * (m.vx_real(largestAngleCorner, 0) - m.vx_real(middleAngleCorner, 0))
+                    / shortestEdgeDist.sqrt();
+            // find the correct circle since there will be two possible
+            // circles: calculate the distance to smallest angle corner
+            // (acute.c:1070-1075)
+            dxcenter1 = (xPetalCtr_1 - m.vx_real(smallestAngleCorner, 0))
+                * (xPetalCtr_1 - m.vx_real(smallestAngleCorner, 0));
+            dycenter1 = (yPetalCtr_1 - m.vx_real(smallestAngleCorner, 1))
+                * (yPetalCtr_1 - m.vx_real(smallestAngleCorner, 1));
+            dxcenter2 = (xPetalCtr_2 - m.vx_real(smallestAngleCorner, 0))
+                * (xPetalCtr_2 - m.vx_real(smallestAngleCorner, 0));
+            dycenter2 = (yPetalCtr_2 - m.vx_real(smallestAngleCorner, 1))
+                * (yPetalCtr_2 - m.vx_real(smallestAngleCorner, 1));
+
+            // whichever is closer to smallest angle corner, it must be
+            // the center (acute.c:1077-1082)
+            if dxcenter1 + dycenter1 <= dxcenter2 + dycenter2 {
+                xPetalCtr = xPetalCtr_1;
+                yPetalCtr = yPetalCtr_1;
+            } else {
+                xPetalCtr = xPetalCtr_2;
+                yPetalCtr = yPetalCtr_2;
+            }
+
+            // find the third point of the neighbor triangle
+            // (acute.c:1084-1085)
+            neighborNotFound_first = getNeighborsVertex(
+                m,
+                badotri,
+                m.vx_real(middleAngleCorner, 0),
+                m.vx_real(middleAngleCorner, 1),
+                m.vx_real(smallestAngleCorner, 0),
+                m.vx_real(smallestAngleCorner, 1),
+                &mut thirdPoint,
+                &mut neighborotri,
+            );
+            // find the circumcenter of the neighbor triangle: if we
+            // cannot find any appropriate suggestion, we use
+            // circumcenter (acute.c:1087-1088)
+            dxFirstSuggestion = dx;
+            dyFirstSuggestion = dy;
+
+            // before checking the neighbor, find the petal and slab
+            // intersections (acute.c:1090): calculate the intersection
+            // point of the petal and the slab lines; first find the
+            // vector: distance between xmid and petal center
+            // (acute.c:1091-1093)
+            dist = ((xPetalCtr - xMidOfShortestEdge) * (xPetalCtr - xMidOfShortestEdge)
+                + (yPetalCtr - yMidOfShortestEdge) * (yPetalCtr - yMidOfShortestEdge))
+                .sqrt();
+            // find the unit vector goes from mid point to petal center
+            // (acute.c:1094-1096)
+            line_vector_x = (xPetalCtr - xMidOfShortestEdge) / dist;
+            line_vector_y = (yPetalCtr - yMidOfShortestEdge) / dist;
+            // find the third point other than p and q (acute.c:1097-1099)
+            petal_bisector_x = xPetalCtr + line_vector_x * petalRadius;
+            petal_bisector_y = yPetalCtr + line_vector_y * petalRadius;
+            // the slab half-angle in radians (acute.c:1100)
+            alpha = (2.0 * b.maxangle + minangle - 180.0) * PI / 180.0;
+            // rotate the vector cw around the petal center
+            // (acute.c:1101-1103)
+            x_1 = petal_bisector_x * alpha.cos() + petal_bisector_y * alpha.sin() + xPetalCtr
+                - xPetalCtr * alpha.cos()
+                - yPetalCtr * alpha.sin();
+            y_1 = -petal_bisector_x * alpha.sin()
+                + petal_bisector_y * alpha.cos()
+                + yPetalCtr
+                + xPetalCtr * alpha.sin()
+                - yPetalCtr * alpha.cos();
+            // rotate the vector ccw around the petal center
+            // (acute.c:1104-1106)
+            x_2 = petal_bisector_x * alpha.cos() - petal_bisector_y * alpha.sin() + xPetalCtr
+                - xPetalCtr * alpha.cos()
+                + yPetalCtr * alpha.sin();
+            y_2 = petal_bisector_x * alpha.sin() + petal_bisector_y * alpha.cos() + yPetalCtr
+                - xPetalCtr * alpha.sin()
+                - yPetalCtr * alpha.cos();
+            // we need to find correct intersection point, since there
+            // are two possibilities; weather it is obtuse/acute the one
+            // closer to the minimum angle corner is the first direction
+            // (acute.c:1107-1109)
+            isCorrect = chooseCorrectPoint(
+                x_2,
+                y_2,
+                m.vx_real(middleAngleCorner, 0),
+                m.vx_real(middleAngleCorner, 1),
+                x_1,
+                y_1,
+                1,
+            );
+            // make sure which point is the correct one to be
+            // considered (acute.c:1110-1121)
+            if isCorrect == 1 {
+                petal_slab_inter_x_first = x_1;
+                petal_slab_inter_y_first = y_1;
+                petal_slab_inter_x_second = x_2;
+                petal_slab_inter_y_second = y_2;
+            } else {
+                petal_slab_inter_x_first = x_2;
+                petal_slab_inter_y_first = y_2;
+                petal_slab_inter_x_second = x_1;
+                petal_slab_inter_y_second = y_1;
+            }
+            // choose the correct intersection point: calculate middle
+            // point of the longest edge(bisector) (acute.c:1122-1125)
+            xMidOfLongestEdge =
+                (m.vx_real(middleAngleCorner, 0) + m.vx_real(smallestAngleCorner, 0)) / 2.0;
+            yMidOfLongestEdge =
+                (m.vx_real(middleAngleCorner, 1) + m.vx_real(smallestAngleCorner, 1)) / 2.0;
+            // if there is a neighbor triangle (acute.c:1126-1127)
+            if neighborNotFound_first == 0 {
+                neighborvertex_1 = m.org(neighborotri);
+                neighborvertex_2 = m.dest(neighborotri);
+                neighborvertex_3 = m.apex(neighborotri);
+                // now calculate neighbor's circumcenter which is the
+                // voronoi site (acute.c:1130-1131); C's dummy xi_tmp/
+                // eta_tmp out-pointers are the ignored tuple elements
+                let (nc_x, nc_y, _xi_tmp, _eta_tmp) = tri_findcircumcenter(
+                    m,
+                    b,
+                    vertex_coords(m, neighborvertex_1),
+                    vertex_coords(m, neighborvertex_2),
+                    vertex_coords(m, neighborvertex_3),
+                    false,
+                );
+                neighborCircumcenter[0] = nc_x;
+                neighborCircumcenter[1] = nc_y;
+                // compute petal and Voronoi edge intersection: in
+                // order to avoid degenerate cases, we need to do a
+                // vector based calculation for line (acute.c:1134-1138)
+                vector_x = m.vx_real(middleAngleCorner, 1) - m.vx_real(smallestAngleCorner, 1); // (-y, x)
+                vector_y = m.vx_real(smallestAngleCorner, 0) - m.vx_real(middleAngleCorner, 0);
+                vector_x = myCircumcenter[0] + vector_x;
+                vector_y = myCircumcenter[1] + vector_y;
+
+                // by intersecting bisectors you will end up with the
+                // one you want to walk on; then this line and circle
+                // should be intersected (acute.c:1139-1142)
+                circleLineIntersection(
+                    myCircumcenter[0],
+                    myCircumcenter[1],
+                    vector_x,
+                    vector_y,
+                    xPetalCtr,
+                    yPetalCtr,
+                    petalRadius,
+                    &mut p,
+                );
+                // we need to find correct intersection point, since
+                // line intersects circle twice (acute.c:1143-1145)
+                isCorrect = chooseCorrectPoint(
+                    xMidOfLongestEdge,
+                    yMidOfLongestEdge,
+                    p[3],
+                    p[4],
+                    myCircumcenter[0],
+                    myCircumcenter[1],
+                    isObtuse,
+                );
+                // make sure which point is the correct one to be
+                // considered (acute.c:1147-1153)
+                if isCorrect == 1 {
+                    inter_x = p[3];
+                    inter_y = p[4];
+                } else {
+                    inter_x = p[1];
+                    inter_y = p[2];
+                }
+
+                // calculate the intersection of angle lines and Voronoi:
+                // for slab calculation (acute.c:1154-1157)
+                linepnt1_x = m.vx_real(middleAngleCorner, 0);
+                linepnt1_y = m.vx_real(middleAngleCorner, 1);
+                // C: line_vector_x = largestAngleCorner[0] -
+                // middleAngleCorner[0]; line_vector_y =
+                // largestAngleCorner[1] - middleAngleCorner[1];
+                // (acute.c:1159-1160): both stores are dead in C - the
+                // lineLineIntersection below reads vector_x/vector_y
+                // and nothing reads line_vector afterwards - and are
+                // dropped (D27, the D19/D24 dead-store rule).
+                linepnt2_x = petal_slab_inter_x_first;
+                linepnt2_y = petal_slab_inter_y_first;
+                // now calculate the intersection of two lines: lines
+                // are given with a point and a vector respectively
+                // (acute.c:1165)
+                lineLineIntersection(
+                    myCircumcenter[0],
+                    myCircumcenter[1],
+                    vector_x,
+                    vector_y,
+                    linepnt1_x,
+                    linepnt1_y,
+                    linepnt2_x,
+                    linepnt2_y,
+                    &mut line_p,
+                );
+                // check if there is a suitable intersection
+                // (acute.c:1166-1169): C's else arm (acute.c:1170-1176)
+                // is the _DEBUG printf pair, compiled out of the
+                // pinned oracle build
+                if line_p[0] > 0.0 {
+                    line_inter_x = line_p[1];
+                    line_inter_y = line_p[2];
+                }
+                // check if there is a Voronoi vertex between before
+                // intersection: check if the voronoi vertex is between
+                // the intersection and circumcenter (acute.c:1179-1182)
+                pointBetweenPoints(
+                    inter_x,
+                    inter_y,
+                    myCircumcenter[0],
+                    myCircumcenter[1],
+                    neighborCircumcenter[0],
+                    neighborCircumcenter[1],
+                    &mut voronoiOrInter,
+                );
+
+                // determine the point to be suggested (acute.c:1184-1185)
+                if p[0] > 0.0 {
+                    // there is at least one intersection point
+                    // if it is between circumcenter and intersection:
+                    // if it returns 1.0 this means we have a voronoi
+                    // vertex within feasible region (acute.c:1186-1188)
+                    if (voronoiOrInter[0] - 1.0).abs() <= compConst {
+                        // now check if the line intersection is
+                        // between circumcenter and voronoi
+                        // (acute.c:1189-1191)
+                        pointBetweenPoints(
+                            voronoiOrInter[2],
+                            voronoiOrInter[3],
+                            myCircumcenter[0],
+                            myCircumcenter[1],
+                            line_inter_x,
+                            line_inter_y,
+                            &mut line_result,
+                        );
+                        // now check if we can go further by picking the
+                        // slab line and petal intersection
+                        // (acute.c:1192)
+                        if (line_result[0] - 1.0).abs() <= compConst && line_p[0] > 0.0 {
+                            // calculate the distance to the smallest
+                            // angle corner; check if we create a bad
+                            // triangle or not (acute.c:1193-1203)
+                            if ((m.vx_real(smallestAngleCorner, 0) - petal_slab_inter_x_first)
+                                * (m.vx_real(smallestAngleCorner, 0) - petal_slab_inter_x_first)
+                                + (m.vx_real(smallestAngleCorner, 1) - petal_slab_inter_y_first)
+                                    * (m.vx_real(smallestAngleCorner, 1)
+                                        - petal_slab_inter_y_first)
+                                > lengthConst
+                                    * ((m.vx_real(smallestAngleCorner, 0) - line_inter_x)
+                                        * (m.vx_real(smallestAngleCorner, 0) - line_inter_x)
+                                        + (m.vx_real(smallestAngleCorner, 1) - line_inter_y)
+                                            * (m.vx_real(smallestAngleCorner, 1) - line_inter_y)))
+                                && testTriangleAngle(
+                                    b,
+                                    m.vx_real(middleAngleCorner, 0),
+                                    m.vx_real(middleAngleCorner, 1),
+                                    m.vx_real(largestAngleCorner, 0),
+                                    m.vx_real(largestAngleCorner, 1),
+                                    petal_slab_inter_x_first,
+                                    petal_slab_inter_y_first,
+                                ) != 0
+                                && minDistanceToNeigbor(
+                                    m,
+                                    b,
+                                    petal_slab_inter_x_first,
+                                    petal_slab_inter_y_first,
+                                    &mut neighborotri,
+                                )? > minDistanceToNeigbor(
+                                    m,
+                                    b,
+                                    line_inter_x,
+                                    line_inter_y,
+                                    &mut neighborotri,
+                                )?
+                            {
+                                // check the neighbor's vertices also,
+                                // which one if better: slab and petal
+                                // intersection is advised
+                                // (acute.c:1205-1209)
+                                dxFirstSuggestion = petal_slab_inter_x_first - m.vx_real(torg, 0);
+                                dyFirstSuggestion = petal_slab_inter_y_first - m.vx_real(torg, 1);
+                            } else {
+                                // slab intersection point is further
+                                // away (acute.c:1210-1211)
+                                if testTriangleAngle(
+                                    b,
+                                    m.vx_real(middleAngleCorner, 0),
+                                    m.vx_real(middleAngleCorner, 1),
+                                    m.vx_real(largestAngleCorner, 0),
+                                    m.vx_real(largestAngleCorner, 1),
+                                    line_inter_x,
+                                    line_inter_y,
+                                ) != 0
+                                {
+                                    // apply perturbation: find the
+                                    // distance between circumcenter
+                                    // and intersection point
+                                    // (acute.c:1212-1216)
+                                    d = ((line_inter_x - myCircumcenter[0])
+                                        * (line_inter_x - myCircumcenter[0])
+                                        + (line_inter_y - myCircumcenter[1])
+                                            * (line_inter_y - myCircumcenter[1]))
+                                        .sqrt();
+                                    // then find the vector going from
+                                    // intersection point to
+                                    // circumcenter (acute.c:1217-1219)
+                                    ax = myCircumcenter[0] - line_inter_x;
+                                    ay = myCircumcenter[1] - line_inter_y;
+
+                                    ax = ax / d;
+                                    ay = ay / d;
+                                    // now calculate the new
+                                    // intersection point which is
+                                    // perturbated towards the
+                                    // circumcenter (acute.c:1223-1224)
+                                    line_inter_x =
+                                        line_inter_x + ax * pertConst * shortestEdgeDist.sqrt();
+                                    line_inter_y =
+                                        line_inter_y + ay * pertConst * shortestEdgeDist.sqrt();
+                                    if testTriangleAngle(
+                                        b,
+                                        m.vx_real(middleAngleCorner, 0),
+                                        m.vx_real(middleAngleCorner, 1),
+                                        m.vx_real(largestAngleCorner, 0),
+                                        m.vx_real(largestAngleCorner, 1),
+                                        line_inter_x,
+                                        line_inter_y,
+                                    ) != 0
+                                    {
+                                        // go back to circumcenter
+                                        // (acute.c:1226-1228)
+                                        dxFirstSuggestion = dx;
+                                        dyFirstSuggestion = dy;
+                                    } else {
+                                        // intersection point is
+                                        // suggested (acute.c:1230-1234)
+                                        dxFirstSuggestion = line_inter_x - m.vx_real(torg, 0);
+                                        dyFirstSuggestion = line_inter_y - m.vx_real(torg, 1);
+                                    }
+                                } else {
+                                    // we are not creating a bad
+                                    // triangle: slab intersection is
+                                    // advised (acute.c:1240-1243):
+                                    // C assigns line_result[2]/[3] -
+                                    // the pointBetweenPoints output,
+                                    // not the slab intersection
+                                    dxFirstSuggestion = line_result[2] - m.vx_real(torg, 0);
+                                    dyFirstSuggestion = line_result[3] - m.vx_real(torg, 1);
+                                }
+                            }
+                        } else {
+                            // NOW APPLY A BREADTH-FIRST SEARCH ON THE
+                            // VORONOI (acute.c:1248-1263)
+                            if testTriangleAngle(
+                                b,
+                                m.vx_real(middleAngleCorner, 0),
+                                m.vx_real(middleAngleCorner, 1),
+                                m.vx_real(largestAngleCorner, 0),
+                                m.vx_real(largestAngleCorner, 1),
+                                neighborCircumcenter[0],
+                                neighborCircumcenter[1],
+                            ) != 0
+                            {
+                                dxFirstSuggestion = dx;
+                                dyFirstSuggestion = dy;
+                            } else {
+                                dxFirstSuggestion = voronoiOrInter[2] - m.vx_real(torg, 0);
+                                dyFirstSuggestion = voronoiOrInter[3] - m.vx_real(torg, 1);
+                            }
+                        }
+                    } else {
+                        // there is no voronoi vertex between
+                        // intersection point and circumcenter
+                        // (acute.c:1266-1269)
+                        pointBetweenPoints(
+                            inter_x,
+                            inter_y,
+                            myCircumcenter[0],
+                            myCircumcenter[1],
+                            line_inter_x,
+                            line_inter_y,
+                            &mut line_result,
+                        );
+                        // check if we can go further by picking the
+                        // slab line and petal intersection
+                        // (acute.c:1270)
+                        if (line_result[0] - 1.0).abs() <= compConst && line_p[0] > 0.0 {
+                            // calculate the distance to the smallest
+                            // angle corner; check if we create a bad
+                            // triangle or not (acute.c:1271-1280)
+                            if ((m.vx_real(smallestAngleCorner, 0) - petal_slab_inter_x_first)
+                                * (m.vx_real(smallestAngleCorner, 0) - petal_slab_inter_x_first)
+                                + (m.vx_real(smallestAngleCorner, 1) - petal_slab_inter_y_first)
+                                    * (m.vx_real(smallestAngleCorner, 1)
+                                        - petal_slab_inter_y_first)
+                                > lengthConst
+                                    * ((m.vx_real(smallestAngleCorner, 0) - line_inter_x)
+                                        * (m.vx_real(smallestAngleCorner, 0) - line_inter_x)
+                                        + (m.vx_real(smallestAngleCorner, 1) - line_inter_y)
+                                            * (m.vx_real(smallestAngleCorner, 1) - line_inter_y)))
+                                && testTriangleAngle(
+                                    b,
+                                    m.vx_real(middleAngleCorner, 0),
+                                    m.vx_real(middleAngleCorner, 1),
+                                    m.vx_real(largestAngleCorner, 0),
+                                    m.vx_real(largestAngleCorner, 1),
+                                    petal_slab_inter_x_first,
+                                    petal_slab_inter_y_first,
+                                ) != 0
+                                && minDistanceToNeigbor(
+                                    m,
+                                    b,
+                                    petal_slab_inter_x_first,
+                                    petal_slab_inter_y_first,
+                                    &mut neighborotri,
+                                )? > minDistanceToNeigbor(
+                                    m,
+                                    b,
+                                    line_inter_x,
+                                    line_inter_y,
+                                    &mut neighborotri,
+                                )?
+                            {
+                                // check the neighbor's vertices also,
+                                // which one if better: slab and petal
+                                // intersection is advised
+                                // (acute.c:1282-1283)
+                                dxFirstSuggestion = petal_slab_inter_x_first - m.vx_real(torg, 0);
+                                dyFirstSuggestion = petal_slab_inter_y_first - m.vx_real(torg, 1);
+                            } else {
+                                // slab intersection point is further
+                                // away (acute.c:1285-1286)
+                                if testTriangleAngle(
+                                    b,
+                                    m.vx_real(largestAngleCorner, 0),
+                                    m.vx_real(largestAngleCorner, 1),
+                                    m.vx_real(middleAngleCorner, 0),
+                                    m.vx_real(middleAngleCorner, 1),
+                                    line_inter_x,
+                                    line_inter_y,
+                                ) != 0
+                                {
+                                    // apply perturbation: find the
+                                    // distance between circumcenter
+                                    // and intersection point
+                                    // (acute.c:1287-1291)
+                                    d = ((line_inter_x - myCircumcenter[0])
+                                        * (line_inter_x - myCircumcenter[0])
+                                        + (line_inter_y - myCircumcenter[1])
+                                            * (line_inter_y - myCircumcenter[1]))
+                                        .sqrt();
+                                    // then find the vector going from
+                                    // intersection point to
+                                    // circumcenter (acute.c:1292-1294)
+                                    ax = myCircumcenter[0] - line_inter_x;
+                                    ay = myCircumcenter[1] - line_inter_y;
+
+                                    ax = ax / d;
+                                    ay = ay / d;
+                                    // now calculate the new
+                                    // intersection point which is
+                                    // perturbated towards the
+                                    // circumcenter (acute.c:1298-1299)
+                                    line_inter_x =
+                                        line_inter_x + ax * pertConst * shortestEdgeDist.sqrt();
+                                    line_inter_y =
+                                        line_inter_y + ay * pertConst * shortestEdgeDist.sqrt();
+                                    if testTriangleAngle(
+                                        b,
+                                        m.vx_real(middleAngleCorner, 0),
+                                        m.vx_real(middleAngleCorner, 1),
+                                        m.vx_real(largestAngleCorner, 0),
+                                        m.vx_real(largestAngleCorner, 1),
+                                        line_inter_x,
+                                        line_inter_y,
+                                    ) != 0
+                                    {
+                                        // go back to circumcenter
+                                        // (acute.c:1301-1303)
+                                        dxFirstSuggestion = dx;
+                                        dyFirstSuggestion = dy;
+                                    } else {
+                                        // intersection point is
+                                        // suggested (acute.c:1305-1308)
+                                        dxFirstSuggestion = line_inter_x - m.vx_real(torg, 0);
+                                        dyFirstSuggestion = line_inter_y - m.vx_real(torg, 1);
+                                    }
+                                } else {
+                                    // we are not creating a bad
+                                    // triangle: slab intersection is
+                                    // advised (acute.c:1313-1316):
+                                    // C assigns line_result[2]/[3] -
+                                    // the pointBetweenPoints output,
+                                    // not the slab intersection
+                                    dxFirstSuggestion = line_result[2] - m.vx_real(torg, 0);
+                                    dyFirstSuggestion = line_result[3] - m.vx_real(torg, 1);
+                                }
+                            }
+                        } else {
+                            // (acute.c:1322-1324)
+                            if testTriangleAngle(
+                                b,
+                                m.vx_real(largestAngleCorner, 0),
+                                m.vx_real(largestAngleCorner, 1),
+                                m.vx_real(middleAngleCorner, 0),
+                                m.vx_real(middleAngleCorner, 1),
+                                inter_x,
+                                inter_y,
+                            ) != 0
+                            {
+                                // apply perturbation: find the
+                                // distance between circumcenter and
+                                // intersection point (acute.c:1327-1331)
+                                d = ((inter_x - myCircumcenter[0]) * (inter_x - myCircumcenter[0])
+                                    + (inter_y - myCircumcenter[1])
+                                        * (inter_y - myCircumcenter[1]))
+                                    .sqrt();
+                                // then find the vector going from
+                                // intersection point to circumcenter
+                                // (acute.c:1332-1334)
+                                ax = myCircumcenter[0] - inter_x;
+                                ay = myCircumcenter[1] - inter_y;
+
+                                ax = ax / d;
+                                ay = ay / d;
+                                // now calculate the new intersection
+                                // point which is perturbated towards
+                                // the circumcenter (acute.c:1338-1339)
+                                inter_x = inter_x + ax * pertConst * shortestEdgeDist.sqrt();
+                                inter_y = inter_y + ay * pertConst * shortestEdgeDist.sqrt();
+                                if testTriangleAngle(
+                                    b,
+                                    m.vx_real(middleAngleCorner, 0),
+                                    m.vx_real(middleAngleCorner, 1),
+                                    m.vx_real(largestAngleCorner, 0),
+                                    m.vx_real(largestAngleCorner, 1),
+                                    inter_x,
+                                    inter_y,
+                                ) != 0
+                                {
+                                    // go back to circumcenter
+                                    // (acute.c:1341-1343)
+                                    dxFirstSuggestion = dx;
+                                    dyFirstSuggestion = dy;
+                                } else {
+                                    // intersection point is suggested
+                                    // (acute.c:1345-1350)
+                                    dxFirstSuggestion = inter_x - m.vx_real(torg, 0);
+                                    dyFirstSuggestion = inter_y - m.vx_real(torg, 1);
+                                }
+                            } else {
+                                // intersection point is suggested
+                                // (acute.c:1353-1356)
+                                dxFirstSuggestion = inter_x - m.vx_real(torg, 0);
+                                dyFirstSuggestion = inter_y - m.vx_real(torg, 1);
+                            }
+                        }
+                    }
+                    // if it is an acute triangle, check if it is a
+                    // good enough location: for acute triangle case,
+                    // we need to check if it is ok to use either of
+                    // them (acute.c:1361-1373)
+                    if (m.vx_real(smallestAngleCorner, 0) - myCircumcenter[0])
+                        * (m.vx_real(smallestAngleCorner, 0) - myCircumcenter[0])
+                        + (m.vx_real(smallestAngleCorner, 1) - myCircumcenter[1])
+                            * (m.vx_real(smallestAngleCorner, 1) - myCircumcenter[1])
+                        > lengthConst
+                            * ((m.vx_real(smallestAngleCorner, 0)
+                                - (dxFirstSuggestion + m.vx_real(torg, 0)))
+                                * (m.vx_real(smallestAngleCorner, 0)
+                                    - (dxFirstSuggestion + m.vx_real(torg, 0)))
+                                + (m.vx_real(smallestAngleCorner, 1)
+                                    - (dyFirstSuggestion + m.vx_real(torg, 1)))
+                                    * (m.vx_real(smallestAngleCorner, 1)
+                                        - (dyFirstSuggestion + m.vx_real(torg, 1))))
+                    {
+                        // use circumcenter (acute.c:1370-1372)
+                        dxFirstSuggestion = dx;
+                        dyFirstSuggestion = dy;
+                    } // else we stick on what we have found
+                } // intersection point
+
+                // if it is on the boundary, meaning no neighbor
+                // triangle in this direction, try other direction
+                // (acute.c:1374)
+            }
+
+            // DO THE SAME THING FOR THE OTHER DIRECTION: find the third
+            // point of the neighbor triangle (acute.c:1378-1381)
+            neighborNotFound_second = getNeighborsVertex(
+                m,
+                badotri,
+                m.vx_real(largestAngleCorner, 0),
+                m.vx_real(largestAngleCorner, 1),
+                m.vx_real(smallestAngleCorner, 0),
+                m.vx_real(smallestAngleCorner, 1),
+                &mut thirdPoint,
+                &mut neighborotri,
+            );
+            // find the circumcenter of the neighbor triangle: if we
+            // cannot find any appropriate suggestion, we use
+            // circumcenter (acute.c:1386-1387)
+            dxSecondSuggestion = dx;
+            dySecondSuggestion = dy;
+            // choose the correct intersection point: calculate middle
+            // point of the longest edge(bisector) (the variable is C's
+            // xMidOfMiddleEdge, acute.c:1388-1389)
+            xMidOfMiddleEdge =
+                (m.vx_real(largestAngleCorner, 0) + m.vx_real(smallestAngleCorner, 0)) / 2.0;
+            yMidOfMiddleEdge =
+                (m.vx_real(largestAngleCorner, 1) + m.vx_real(smallestAngleCorner, 1)) / 2.0;
+            // if there is a neighbor triangle (acute.c:1390-1391)
+            if neighborNotFound_second == 0 {
+                neighborvertex_1 = m.org(neighborotri);
+                neighborvertex_2 = m.dest(neighborotri);
+                neighborvertex_3 = m.apex(neighborotri);
+                // now calculate neighbor's circumcenter which is the
+                // voronoi site (acute.c:1394-1395)
+                let (nc_x, nc_y, _xi_tmp, _eta_tmp) = tri_findcircumcenter(
+                    m,
+                    b,
+                    vertex_coords(m, neighborvertex_1),
+                    vertex_coords(m, neighborvertex_2),
+                    vertex_coords(m, neighborvertex_3),
+                    false,
+                );
+                neighborCircumcenter[0] = nc_x;
+                neighborCircumcenter[1] = nc_y;
+                // compute petal and Voronoi edge intersection: in
+                // order to avoid degenerate cases, we need to do a
+                // vector based calculation for line (acute.c:1398-1403)
+                vector_x = m.vx_real(largestAngleCorner, 1) - m.vx_real(smallestAngleCorner, 1); // (-y, x)
+                vector_y = m.vx_real(smallestAngleCorner, 0) - m.vx_real(largestAngleCorner, 0);
+                vector_x = myCircumcenter[0] + vector_x;
+                vector_y = myCircumcenter[1] + vector_y;
+
+                // by intersecting bisectors you will end up with the
+                // one you want to walk on; then this line and circle
+                // should be intersected (acute.c:1404-1408)
+                circleLineIntersection(
+                    myCircumcenter[0],
+                    myCircumcenter[1],
+                    vector_x,
+                    vector_y,
+                    xPetalCtr,
+                    yPetalCtr,
+                    petalRadius,
+                    &mut p,
+                );
+                // we need to find correct intersection point, since
+                // line intersects circle twice; this direction is
+                // always ACUTE (acute.c:1409-1413)
+                isCorrect = chooseCorrectPoint(
+                    xMidOfMiddleEdge,
+                    yMidOfMiddleEdge,
+                    p[3],
+                    p[4],
+                    myCircumcenter[0],
+                    myCircumcenter[1],
+                    0, // (isObtuse+1)%2
+                );
+                // make sure which point is the correct one to be
+                // considered (acute.c:1415-1422)
+                if isCorrect == 1 {
+                    inter_x = p[3];
+                    inter_y = p[4];
+                } else {
+                    inter_x = p[1];
+                    inter_y = p[2];
+                }
+
+                // calculate the intersection of angle lines and Voronoi:
+                // for slab calculation (acute.c:1424-1426)
+                linepnt1_x = m.vx_real(largestAngleCorner, 0);
+                linepnt1_y = m.vx_real(largestAngleCorner, 1);
+                // C: line_vector_x = middleAngleCorner[0] -
+                // largestAngleCorner[0]; line_vector_y =
+                // middleAngleCorner[1] - largestAngleCorner[1];
+                // (acute.c:1428-1429): both stores are dead in C - the
+                // lineLineIntersection below reads vector_x/vector_y
+                // and nothing reads line_vector afterwards - and are
+                // dropped (D27, the D19/D24 dead-store rule).
+                linepnt2_x = petal_slab_inter_x_second;
+                linepnt2_y = petal_slab_inter_y_second;
+                // now calculate the intersection of two lines: lines
+                // are given with a point and a vector respectively
+                // (acute.c:1434)
+                lineLineIntersection(
+                    myCircumcenter[0],
+                    myCircumcenter[1],
+                    vector_x,
+                    vector_y,
+                    linepnt1_x,
+                    linepnt1_y,
+                    linepnt2_x,
+                    linepnt2_y,
+                    &mut line_p,
+                );
+                // check if there is a suitable intersection
+                // (acute.c:1435-1438): C's else arm (acute.c:1439-1445)
+                // is the _DEBUG printf pair, compiled out of the
+                // pinned oracle build
+                if line_p[0] > 0.0 {
+                    line_inter_x = line_p[1];
+                    line_inter_y = line_p[2];
+                }
+                // check if there is a Voronoi vertex between before
+                // intersection: check if the voronoi vertex is between
+                // the intersection and circumcenter (acute.c:1447-1450)
+                pointBetweenPoints(
+                    inter_x,
+                    inter_y,
+                    myCircumcenter[0],
+                    myCircumcenter[1],
+                    neighborCircumcenter[0],
+                    neighborCircumcenter[1],
+                    &mut voronoiOrInter,
+                );
+
+                // determine the point to be suggested (acute.c:1452)
+                if p[0] > 0.0 {
+                    // there is at least one intersection point
+                    // if it is between circumcenter and intersection:
+                    // if it returns 1.0 this means we have a voronoi
+                    // vertex within feasible region (acute.c:1453-1455)
+                    if (voronoiOrInter[0] - 1.0).abs() <= compConst {
+                        // now check if the line intersection is
+                        // between circumcenter and voronoi
+                        // (acute.c:1457-1458)
+                        pointBetweenPoints(
+                            voronoiOrInter[2],
+                            voronoiOrInter[3],
+                            myCircumcenter[0],
+                            myCircumcenter[1],
+                            line_inter_x,
+                            line_inter_y,
+                            &mut line_result,
+                        );
+                        // now check if we can go further by picking the
+                        // slab line and petal intersection
+                        // (acute.c:1459)
+                        if (line_result[0] - 1.0).abs() <= compConst && line_p[0] > 0.0 {
+                            // calculate the distance to the smallest
+                            // angle corner; check if we create a bad
+                            // triangle or not (acute.c:1460-1470)
+                            if ((m.vx_real(smallestAngleCorner, 0) - petal_slab_inter_x_second)
+                                * (m.vx_real(smallestAngleCorner, 0) - petal_slab_inter_x_second)
+                                + (m.vx_real(smallestAngleCorner, 1) - petal_slab_inter_y_second)
+                                    * (m.vx_real(smallestAngleCorner, 1)
+                                        - petal_slab_inter_y_second)
+                                > lengthConst
+                                    * ((m.vx_real(smallestAngleCorner, 0) - line_inter_x)
+                                        * (m.vx_real(smallestAngleCorner, 0) - line_inter_x)
+                                        + (m.vx_real(smallestAngleCorner, 1) - line_inter_y)
+                                            * (m.vx_real(smallestAngleCorner, 1) - line_inter_y)))
+                                && testTriangleAngle(
+                                    b,
+                                    m.vx_real(middleAngleCorner, 0),
+                                    m.vx_real(middleAngleCorner, 1),
+                                    m.vx_real(largestAngleCorner, 0),
+                                    m.vx_real(largestAngleCorner, 1),
+                                    petal_slab_inter_x_second,
+                                    petal_slab_inter_y_second,
+                                ) != 0
+                                && minDistanceToNeigbor(
+                                    m,
+                                    b,
+                                    petal_slab_inter_x_second,
+                                    petal_slab_inter_y_second,
+                                    &mut neighborotri,
+                                )? > minDistanceToNeigbor(
+                                    m,
+                                    b,
+                                    line_inter_x,
+                                    line_inter_y,
+                                    &mut neighborotri,
+                                )?
+                            {
+                                // check the neighbor's vertices also,
+                                // which one if better: slab and petal
+                                // intersection is advised
+                                // (acute.c:1472-1473)
+                                dxSecondSuggestion = petal_slab_inter_x_second - m.vx_real(torg, 0);
+                                dySecondSuggestion = petal_slab_inter_y_second - m.vx_real(torg, 1);
+                            } else {
+                                // slab intersection point is further
+                                // away (acute.c:1477)
+                                if testTriangleAngle(
+                                    b,
+                                    m.vx_real(middleAngleCorner, 0),
+                                    m.vx_real(middleAngleCorner, 1),
+                                    m.vx_real(largestAngleCorner, 0),
+                                    m.vx_real(largestAngleCorner, 1),
+                                    line_inter_x,
+                                    line_inter_y,
+                                ) != 0
+                                {
+                                    // apply perturbation: find the
+                                    // distance between circumcenter
+                                    // and intersection point
+                                    // (acute.c:1480-1484)
+                                    d = ((line_inter_x - myCircumcenter[0])
+                                        * (line_inter_x - myCircumcenter[0])
+                                        + (line_inter_y - myCircumcenter[1])
+                                            * (line_inter_y - myCircumcenter[1]))
+                                        .sqrt();
+                                    // then find the vector going from
+                                    // intersection point to
+                                    // circumcenter (acute.c:1485-1487)
+                                    ax = myCircumcenter[0] - line_inter_x;
+                                    ay = myCircumcenter[1] - line_inter_y;
+
+                                    ax = ax / d;
+                                    ay = ay / d;
+                                    // now calculate the new
+                                    // intersection point which is
+                                    // perturbated towards the
+                                    // circumcenter (acute.c:1491-1492)
+                                    line_inter_x =
+                                        line_inter_x + ax * pertConst * shortestEdgeDist.sqrt();
+                                    line_inter_y =
+                                        line_inter_y + ay * pertConst * shortestEdgeDist.sqrt();
+                                    if testTriangleAngle(
+                                        b,
+                                        m.vx_real(middleAngleCorner, 0),
+                                        m.vx_real(middleAngleCorner, 1),
+                                        m.vx_real(largestAngleCorner, 0),
+                                        m.vx_real(largestAngleCorner, 1),
+                                        line_inter_x,
+                                        line_inter_y,
+                                    ) != 0
+                                    {
+                                        // go back to circumcenter
+                                        // (acute.c:1494-1496)
+                                        dxSecondSuggestion = dx;
+                                        dySecondSuggestion = dy;
+                                    } else {
+                                        // intersection point is
+                                        // suggested (acute.c:1498-1500)
+                                        dxSecondSuggestion = line_inter_x - m.vx_real(torg, 0);
+                                        dySecondSuggestion = line_inter_y - m.vx_real(torg, 1);
+                                    }
+                                } else {
+                                    // we are not creating a bad
+                                    // triangle: slab intersection is
+                                    // advised (acute.c:1505-1508):
+                                    // C assigns line_result[2]/[3] -
+                                    // the pointBetweenPoints output,
+                                    // not the slab intersection
+                                    dxSecondSuggestion = line_result[2] - m.vx_real(torg, 0);
+                                    dySecondSuggestion = line_result[3] - m.vx_real(torg, 1);
+                                }
+                            }
+                        } else {
+                            // NOW APPLY A BREADTH-FIRST SEARCH ON THE
+                            // VORONOI (acute.c:1513-1526)
+                            if testTriangleAngle(
+                                b,
+                                m.vx_real(middleAngleCorner, 0),
+                                m.vx_real(middleAngleCorner, 1),
+                                m.vx_real(largestAngleCorner, 0),
+                                m.vx_real(largestAngleCorner, 1),
+                                neighborCircumcenter[0],
+                                neighborCircumcenter[1],
+                            ) != 0
+                            {
+                                dxSecondSuggestion = dx;
+                                dySecondSuggestion = dy;
+                            } else {
+                                dxSecondSuggestion = voronoiOrInter[2] - m.vx_real(torg, 0);
+                                dySecondSuggestion = voronoiOrInter[3] - m.vx_real(torg, 1);
+                            }
+                        }
+                    } else {
+                        // there is no voronoi vertex between
+                        // intersection point and circumcenter
+                        // (acute.c:1528-1531)
+                        pointBetweenPoints(
+                            inter_x,
+                            inter_y,
+                            myCircumcenter[0],
+                            myCircumcenter[1],
+                            line_inter_x,
+                            line_inter_y,
+                            &mut line_result,
+                        );
+                        // check if we can go further by picking the
+                        // slab line and petal intersection
+                        // (acute.c:1532)
+                        if (line_result[0] - 1.0).abs() <= compConst && line_p[0] > 0.0 {
+                            // calculate the distance to the smallest
+                            // angle corner; check if we create a bad
+                            // triangle or not (acute.c:1533-1542)
+                            if ((m.vx_real(smallestAngleCorner, 0) - petal_slab_inter_x_second)
+                                * (m.vx_real(smallestAngleCorner, 0) - petal_slab_inter_x_second)
+                                + (m.vx_real(smallestAngleCorner, 1) - petal_slab_inter_y_second)
+                                    * (m.vx_real(smallestAngleCorner, 1)
+                                        - petal_slab_inter_y_second)
+                                > lengthConst
+                                    * ((m.vx_real(smallestAngleCorner, 0) - line_inter_x)
+                                        * (m.vx_real(smallestAngleCorner, 0) - line_inter_x)
+                                        + (m.vx_real(smallestAngleCorner, 1) - line_inter_y)
+                                            * (m.vx_real(smallestAngleCorner, 1) - line_inter_y)))
+                                && testTriangleAngle(
+                                    b,
+                                    m.vx_real(middleAngleCorner, 0),
+                                    m.vx_real(middleAngleCorner, 1),
+                                    m.vx_real(largestAngleCorner, 0),
+                                    m.vx_real(largestAngleCorner, 1),
+                                    petal_slab_inter_x_second,
+                                    petal_slab_inter_y_second,
+                                ) != 0
+                                && minDistanceToNeigbor(
+                                    m,
+                                    b,
+                                    petal_slab_inter_x_second,
+                                    petal_slab_inter_y_second,
+                                    &mut neighborotri,
+                                )? > minDistanceToNeigbor(
+                                    m,
+                                    b,
+                                    line_inter_x,
+                                    line_inter_y,
+                                    &mut neighborotri,
+                                )?
+                            {
+                                // check the neighbor's vertices also,
+                                // which one if better: slab and petal
+                                // intersection is advised
+                                // (acute.c:1544-1545)
+                                dxSecondSuggestion = petal_slab_inter_x_second - m.vx_real(torg, 0);
+                                dySecondSuggestion = petal_slab_inter_y_second - m.vx_real(torg, 1);
+                            } else {
+                                // slab intersection point is further
+                                // away (acute.c:1548)
+                                if testTriangleAngle(
+                                    b,
+                                    m.vx_real(largestAngleCorner, 0),
+                                    m.vx_real(largestAngleCorner, 1),
+                                    m.vx_real(middleAngleCorner, 0),
+                                    m.vx_real(middleAngleCorner, 1),
+                                    line_inter_x,
+                                    line_inter_y,
+                                ) != 0
+                                {
+                                    // apply perturbation: find the
+                                    // distance between circumcenter
+                                    // and intersection point
+                                    // (acute.c:1551-1555)
+                                    d = ((line_inter_x - myCircumcenter[0])
+                                        * (line_inter_x - myCircumcenter[0])
+                                        + (line_inter_y - myCircumcenter[1])
+                                            * (line_inter_y - myCircumcenter[1]))
+                                        .sqrt();
+                                    // then find the vector going from
+                                    // intersection point to
+                                    // circumcenter (acute.c:1556-1558)
+                                    ax = myCircumcenter[0] - line_inter_x;
+                                    ay = myCircumcenter[1] - line_inter_y;
+
+                                    ax = ax / d;
+                                    ay = ay / d;
+                                    // now calculate the new
+                                    // intersection point which is
+                                    // perturbated towards the
+                                    // circumcenter (acute.c:1562-1563)
+                                    line_inter_x =
+                                        line_inter_x + ax * pertConst * shortestEdgeDist.sqrt();
+                                    line_inter_y =
+                                        line_inter_y + ay * pertConst * shortestEdgeDist.sqrt();
+                                    if testTriangleAngle(
+                                        b,
+                                        m.vx_real(middleAngleCorner, 0),
+                                        m.vx_real(middleAngleCorner, 1),
+                                        m.vx_real(largestAngleCorner, 0),
+                                        m.vx_real(largestAngleCorner, 1),
+                                        line_inter_x,
+                                        line_inter_y,
+                                    ) != 0
+                                    {
+                                        // go back to circumcenter
+                                        // (acute.c:1565-1567)
+                                        dxSecondSuggestion = dx;
+                                        dySecondSuggestion = dy;
+                                    } else {
+                                        // intersection point is
+                                        // suggested (acute.c:1569-1570)
+                                        dxSecondSuggestion = line_inter_x - m.vx_real(torg, 0);
+                                        dySecondSuggestion = line_inter_y - m.vx_real(torg, 1);
+                                    }
+                                } else {
+                                    // we are not creating a bad
+                                    // triangle: slab intersection is
+                                    // advised (acute.c:1575-1578):
+                                    // C assigns line_result[2]/[3] -
+                                    // the pointBetweenPoints output,
+                                    // not the slab intersection
+                                    dxSecondSuggestion = line_result[2] - m.vx_real(torg, 0);
+                                    dySecondSuggestion = line_result[3] - m.vx_real(torg, 1);
+                                }
+                            }
+                        } else {
+                            // (acute.c:1584-1585): C tests the middle
+                            // corner first here, where the first
+                            // direction's counterpart tests the
+                            // largest corner first (acute.c:1324)
+                            if testTriangleAngle(
+                                b,
+                                m.vx_real(middleAngleCorner, 0),
+                                m.vx_real(middleAngleCorner, 1),
+                                m.vx_real(largestAngleCorner, 0),
+                                m.vx_real(largestAngleCorner, 1),
+                                inter_x,
+                                inter_y,
+                            ) != 0
+                            {
+                                // apply perturbation: find the
+                                // distance between circumcenter and
+                                // intersection point (acute.c:1589-1593)
+                                d = ((inter_x - myCircumcenter[0]) * (inter_x - myCircumcenter[0])
+                                    + (inter_y - myCircumcenter[1])
+                                        * (inter_y - myCircumcenter[1]))
+                                    .sqrt();
+                                // then find the vector going from
+                                // intersection point to circumcenter
+                                // (acute.c:1594-1596)
+                                ax = myCircumcenter[0] - inter_x;
+                                ay = myCircumcenter[1] - inter_y;
+
+                                ax = ax / d;
+                                ay = ay / d;
+                                // now calculate the new intersection
+                                // point which is perturbated towards
+                                // the circumcenter (acute.c:1600-1601)
+                                inter_x = inter_x + ax * pertConst * shortestEdgeDist.sqrt();
+                                inter_y = inter_y + ay * pertConst * shortestEdgeDist.sqrt();
+                                if testTriangleAngle(
+                                    b,
+                                    m.vx_real(middleAngleCorner, 0),
+                                    m.vx_real(middleAngleCorner, 1),
+                                    m.vx_real(largestAngleCorner, 0),
+                                    m.vx_real(largestAngleCorner, 1),
+                                    inter_x,
+                                    inter_y,
+                                ) != 0
+                                {
+                                    // go back to circumcenter
+                                    // (acute.c:1603-1605)
+                                    dxSecondSuggestion = dx;
+                                    dySecondSuggestion = dy;
+                                } else {
+                                    // intersection point is suggested
+                                    // (acute.c:1607-1609)
+                                    dxSecondSuggestion = inter_x - m.vx_real(torg, 0);
+                                    dySecondSuggestion = inter_y - m.vx_real(torg, 1);
+                                }
+                            } else {
+                                // intersection point is suggested
+                                // (acute.c:1612-1616)
+                                dxSecondSuggestion = inter_x - m.vx_real(torg, 0);
+                                dySecondSuggestion = inter_y - m.vx_real(torg, 1);
+                            }
+                        }
+                    }
+                    // if it is an acute triangle, check if it is a
+                    // good enough location: for acute triangle case,
+                    // we need to check if it is ok to use either of
+                    // them (acute.c:1622-1634)
+                    if (m.vx_real(smallestAngleCorner, 0) - myCircumcenter[0])
+                        * (m.vx_real(smallestAngleCorner, 0) - myCircumcenter[0])
+                        + (m.vx_real(smallestAngleCorner, 1) - myCircumcenter[1])
+                            * (m.vx_real(smallestAngleCorner, 1) - myCircumcenter[1])
+                        > lengthConst
+                            * ((m.vx_real(smallestAngleCorner, 0)
+                                - (dxSecondSuggestion + m.vx_real(torg, 0)))
+                                * (m.vx_real(smallestAngleCorner, 0)
+                                    - (dxSecondSuggestion + m.vx_real(torg, 0)))
+                                + (m.vx_real(smallestAngleCorner, 1)
+                                    - (dySecondSuggestion + m.vx_real(torg, 1)))
+                                    * (m.vx_real(smallestAngleCorner, 1)
+                                        - (dySecondSuggestion + m.vx_real(torg, 1))))
+                    {
+                        // use circumcenter (acute.c:1631-1633)
+                        dxSecondSuggestion = dx;
+                        dySecondSuggestion = dy;
+                    } // else we stick on what we have found
+                } // intersection point
+
+                // if it is on the boundary, meaning no neighbor
+                // triangle in this direction, then just use
+                // circumcenter (acute.c:1635)
+            }
+            if isObtuse == 1 {
+                // obtuse: check if the other direction works
+                // (acute.c:1637-1638)
+                if neighborNotFound_first == 1 && neighborNotFound_second == 1 {
+                    // both directions are on the boundary: compare the
+                    // two edge-midpoint distances (acute.c:1638-1655)
+                    if justAcute
+                        * ((m.vx_real(smallestAngleCorner, 0) - xMidOfMiddleEdge)
+                            * (m.vx_real(smallestAngleCorner, 0) - xMidOfMiddleEdge)
+                            + (m.vx_real(smallestAngleCorner, 1) - yMidOfMiddleEdge)
+                                * (m.vx_real(smallestAngleCorner, 1) - yMidOfMiddleEdge))
+                        > (m.vx_real(smallestAngleCorner, 0) - xMidOfLongestEdge)
+                            * (m.vx_real(smallestAngleCorner, 0) - xMidOfLongestEdge)
+                            + (m.vx_real(smallestAngleCorner, 1) - yMidOfLongestEdge)
+                                * (m.vx_real(smallestAngleCorner, 1) - yMidOfLongestEdge)
+                    {
+                        dx = dxSecondSuggestion;
+                        dy = dySecondSuggestion;
+                    } else {
+                        dx = dxFirstSuggestion;
+                        dy = dyFirstSuggestion;
+                    }
+                } else if neighborNotFound_first == 1 {
+                    // the first direction is on the boundary
+                    // (acute.c:1656-1673)
+                    if justAcute
+                        * ((m.vx_real(smallestAngleCorner, 0)
+                            - (dxSecondSuggestion + m.vx_real(torg, 0)))
+                            * (m.vx_real(smallestAngleCorner, 0)
+                                - (dxSecondSuggestion + m.vx_real(torg, 0)))
+                            + (m.vx_real(smallestAngleCorner, 1)
+                                - (dySecondSuggestion + m.vx_real(torg, 1)))
+                                * (m.vx_real(smallestAngleCorner, 1)
+                                    - (dySecondSuggestion + m.vx_real(torg, 1))))
+                        > (m.vx_real(smallestAngleCorner, 0) - xMidOfLongestEdge)
+                            * (m.vx_real(smallestAngleCorner, 0) - xMidOfLongestEdge)
+                            + (m.vx_real(smallestAngleCorner, 1) - yMidOfLongestEdge)
+                                * (m.vx_real(smallestAngleCorner, 1) - yMidOfLongestEdge)
+                    {
+                        dx = dxSecondSuggestion;
+                        dy = dySecondSuggestion;
+                    } else {
+                        dx = dxFirstSuggestion;
+                        dy = dyFirstSuggestion;
+                    }
+                } else if neighborNotFound_second == 1 {
+                    // the second direction is on the boundary
+                    // (acute.c:1674-1691)
+                    if justAcute
+                        * ((m.vx_real(smallestAngleCorner, 0) - xMidOfMiddleEdge)
+                            * (m.vx_real(smallestAngleCorner, 0) - xMidOfMiddleEdge)
+                            + (m.vx_real(smallestAngleCorner, 1) - yMidOfMiddleEdge)
+                                * (m.vx_real(smallestAngleCorner, 1) - yMidOfMiddleEdge))
+                        > (m.vx_real(smallestAngleCorner, 0)
+                            - (dxFirstSuggestion + m.vx_real(torg, 0)))
+                            * (m.vx_real(smallestAngleCorner, 0)
+                                - (dxFirstSuggestion + m.vx_real(torg, 0)))
+                            + (m.vx_real(smallestAngleCorner, 1)
+                                - (dyFirstSuggestion + m.vx_real(torg, 1)))
+                                * (m.vx_real(smallestAngleCorner, 1)
+                                    - (dyFirstSuggestion + m.vx_real(torg, 1)))
+                    {
+                        dx = dxSecondSuggestion;
+                        dy = dySecondSuggestion;
+                    } else {
+                        dx = dxFirstSuggestion;
+                        dy = dyFirstSuggestion;
+                    }
+                } else {
+                    // both directions have neighbors: compare the two
+                    // suggestions (acute.c:1692-1709)
+                    if justAcute
+                        * ((m.vx_real(smallestAngleCorner, 0)
+                            - (dxSecondSuggestion + m.vx_real(torg, 0)))
+                            * (m.vx_real(smallestAngleCorner, 0)
+                                - (dxSecondSuggestion + m.vx_real(torg, 0)))
+                            + (m.vx_real(smallestAngleCorner, 1)
+                                - (dySecondSuggestion + m.vx_real(torg, 1)))
+                                * (m.vx_real(smallestAngleCorner, 1)
+                                    - (dySecondSuggestion + m.vx_real(torg, 1))))
+                        > (m.vx_real(smallestAngleCorner, 0)
+                            - (dxFirstSuggestion + m.vx_real(torg, 0)))
+                            * (m.vx_real(smallestAngleCorner, 0)
+                                - (dxFirstSuggestion + m.vx_real(torg, 0)))
+                            + (m.vx_real(smallestAngleCorner, 1)
+                                - (dyFirstSuggestion + m.vx_real(torg, 1)))
+                                * (m.vx_real(smallestAngleCorner, 1)
+                                    - (dyFirstSuggestion + m.vx_real(torg, 1)))
+                    {
+                        dx = dxSecondSuggestion;
+                        dy = dySecondSuggestion;
+                    } else {
+                        dx = dxFirstSuggestion;
+                        dy = dyFirstSuggestion;
+                    }
+                }
+            } else {
+                // acute : consider other direction (acute.c:1712-1785):
+                // C carries the four subcases verbatim from the
+                // obtuse arm above (acute.c:1638-1709)
+                if neighborNotFound_first == 1 && neighborNotFound_second == 1 {
+                    // both directions are on the boundary
+                    // (acute.c:1713-1730)
+                    if justAcute
+                        * ((m.vx_real(smallestAngleCorner, 0) - xMidOfMiddleEdge)
+                            * (m.vx_real(smallestAngleCorner, 0) - xMidOfMiddleEdge)
+                            + (m.vx_real(smallestAngleCorner, 1) - yMidOfMiddleEdge)
+                                * (m.vx_real(smallestAngleCorner, 1) - yMidOfMiddleEdge))
+                        > (m.vx_real(smallestAngleCorner, 0) - xMidOfLongestEdge)
+                            * (m.vx_real(smallestAngleCorner, 0) - xMidOfLongestEdge)
+                            + (m.vx_real(smallestAngleCorner, 1) - yMidOfLongestEdge)
+                                * (m.vx_real(smallestAngleCorner, 1) - yMidOfLongestEdge)
+                    {
+                        dx = dxSecondSuggestion;
+                        dy = dySecondSuggestion;
+                    } else {
+                        dx = dxFirstSuggestion;
+                        dy = dyFirstSuggestion;
+                    }
+                } else if neighborNotFound_first == 1 {
+                    // the first direction is on the boundary
+                    // (acute.c:1731-1748)
+                    if justAcute
+                        * ((m.vx_real(smallestAngleCorner, 0)
+                            - (dxSecondSuggestion + m.vx_real(torg, 0)))
+                            * (m.vx_real(smallestAngleCorner, 0)
+                                - (dxSecondSuggestion + m.vx_real(torg, 0)))
+                            + (m.vx_real(smallestAngleCorner, 1)
+                                - (dySecondSuggestion + m.vx_real(torg, 1)))
+                                * (m.vx_real(smallestAngleCorner, 1)
+                                    - (dySecondSuggestion + m.vx_real(torg, 1))))
+                        > (m.vx_real(smallestAngleCorner, 0) - xMidOfLongestEdge)
+                            * (m.vx_real(smallestAngleCorner, 0) - xMidOfLongestEdge)
+                            + (m.vx_real(smallestAngleCorner, 1) - yMidOfLongestEdge)
+                                * (m.vx_real(smallestAngleCorner, 1) - yMidOfLongestEdge)
+                    {
+                        dx = dxSecondSuggestion;
+                        dy = dySecondSuggestion;
+                    } else {
+                        dx = dxFirstSuggestion;
+                        dy = dyFirstSuggestion;
+                    }
+                } else if neighborNotFound_second == 1 {
+                    // the second direction is on the boundary
+                    // (acute.c:1749-1766)
+                    if justAcute
+                        * ((m.vx_real(smallestAngleCorner, 0) - xMidOfMiddleEdge)
+                            * (m.vx_real(smallestAngleCorner, 0) - xMidOfMiddleEdge)
+                            + (m.vx_real(smallestAngleCorner, 1) - yMidOfMiddleEdge)
+                                * (m.vx_real(smallestAngleCorner, 1) - yMidOfMiddleEdge))
+                        > (m.vx_real(smallestAngleCorner, 0)
+                            - (dxFirstSuggestion + m.vx_real(torg, 0)))
+                            * (m.vx_real(smallestAngleCorner, 0)
+                                - (dxFirstSuggestion + m.vx_real(torg, 0)))
+                            + (m.vx_real(smallestAngleCorner, 1)
+                                - (dyFirstSuggestion + m.vx_real(torg, 1)))
+                                * (m.vx_real(smallestAngleCorner, 1)
+                                    - (dyFirstSuggestion + m.vx_real(torg, 1)))
+                    {
+                        dx = dxSecondSuggestion;
+                        dy = dySecondSuggestion;
+                    } else {
+                        dx = dxFirstSuggestion;
+                        dy = dyFirstSuggestion;
+                    }
+                } else {
+                    // both directions have neighbors (acute.c:1767-1784)
+                    if justAcute
+                        * ((m.vx_real(smallestAngleCorner, 0)
+                            - (dxSecondSuggestion + m.vx_real(torg, 0)))
+                            * (m.vx_real(smallestAngleCorner, 0)
+                                - (dxSecondSuggestion + m.vx_real(torg, 0)))
+                            + (m.vx_real(smallestAngleCorner, 1)
+                                - (dySecondSuggestion + m.vx_real(torg, 1)))
+                                * (m.vx_real(smallestAngleCorner, 1)
+                                    - (dySecondSuggestion + m.vx_real(torg, 1))))
+                        > (m.vx_real(smallestAngleCorner, 0)
+                            - (dxFirstSuggestion + m.vx_real(torg, 0)))
+                            * (m.vx_real(smallestAngleCorner, 0)
+                                - (dxFirstSuggestion + m.vx_real(torg, 0)))
+                            + (m.vx_real(smallestAngleCorner, 1)
+                                - (dyFirstSuggestion + m.vx_real(torg, 1)))
+                                * (m.vx_real(smallestAngleCorner, 1)
+                                    - (dyFirstSuggestion + m.vx_real(torg, 1)))
+                    {
+                        dx = dxSecondSuggestion;
+                        dy = dySecondSuggestion;
+                    } else {
+                        dx = dxFirstSuggestion;
+                        dy = dyFirstSuggestion;
+                    }
+                }
+            } // end if obtuse
+        } // end of relocation (acute.c:1788)
+    } // end of almostGood (acute.c:1789)
+
+    if relocated <= 0 {
+        // (acute.c:1791-1793)
+        m.vx_set_real(circumcenter, 0, m.vx_real(torg, 0) + dx);
+        m.vx_set_real(circumcenter, 1, m.vx_real(torg, 1) + dy);
+    } else {
+        // (acute.c:1795-1796)
+        m.vx_set_real(circumcenter, 0, origin_x + dx);
+        m.vx_set_real(circumcenter, 1, origin_y + dy);
+    }
+
+    // (acute.c:1798-1799)
+    let xi = (yao * dx - xao * dy) * (2.0 * denominator);
+    let eta = (xdo * dy - ydo * dx) * (2.0 * denominator);
+
+    Ok((xi, eta))
+} // end of findNewSPLocationWithMaxAngle() (acute.c:1801)
+
 /// C: longestShortestEdge (acute.c:1816-1850). Given the squares of the
 /// three edge lengths of a triangle (aodist, dadist, dodist), determine
 /// its orientation: the returned code packs which edge is shortest,
@@ -227,11 +3016,7 @@ pub(crate) const compConst: f64 = 1.0e-80;
 /// 1804-1815; e.g. 123: shortest aodist, middle dadist, longest dodist).
 ///
 /// The only C call sites sit in the findNewSPLocation family (acute.c:
-/// 221 and 843), which lands with stage-1 acute C; the 1:1 body is
-/// ahead-of-use until then.
-#[allow(dead_code)]
-// C-parity: the call sites (acute.c:221, 843) belong
-// to the findNewSPLocation family, stage-1 acute C.
+/// 221 and 843), landed with stage-1 acute C (#43).
 #[allow(non_snake_case)] // C-parity: the C name verbatim (acute.c:1816)
 pub(crate) fn longestShortestEdge(aodist: f64, dadist: f64, dodist: f64) -> i32 {
     // C: int max = 0, min = 0, mid = 0,minMidMax; (acute.c:1818). The
@@ -287,8 +3072,7 @@ pub(crate) fn longestShortestEdge(aodist: f64, dadist: f64, dodist: f64) -> i32 
 /// through the vx_type chokepoint).
 ///
 /// Its only C callers are the findNewSPLocation variants (acute.c:397,
-/// 1019), which land with the last acute PR; the body is ahead-of-use
-/// until then.
+/// 1019), landed with stage-1 acute C (#43).
 ///
 /// C's aliasing (acute.c:1877-1879: points_p = m->acute_mem->points_p
 /// and the like, alongside the mesh reads of the star walk and the
@@ -299,9 +3083,6 @@ pub(crate) fn longestShortestEdge(aodist: f64, dadist: f64, dodist: f64) -> i32 
 /// returns (acute.c:2013, 2019, 2025, 2032, 2034) become breaks out
 /// of a labeled block so the restore runs on every path.
 #[allow(non_snake_case)] // C-parity: the C name verbatim (acute.c:1858)
-#[allow(dead_code)]
-// C-parity: the callers (acute.c:397, 1019) belong to the
-// findNewSPLocation family, the last acute PR.
 #[allow(clippy::too_many_arguments)] // C-parity: the seven-parameter C
 // signature (acute.c:1858-1863)
 #[allow(clippy::float_cmp)] // C-parity: b->maxangle == 0.0 verbatim
@@ -2353,12 +5134,7 @@ pub(crate) fn findPolyCentroid(numpoints: i32, points: &[f64], centroid: &mut [f
 /// (acute.c:3351).
 ///
 /// The C call sites sit in the findNewSPLocation family (acute.c:478,
-/// 590, 1141, 1408), which lands with stage-1 acute C; the 1:1 body
-/// is ahead-of-use until then.
-#[allow(dead_code)]
-// C-parity: the call sites (acute.c:478, 590, 1141,
-// 1408) belong to the findNewSPLocation family,
-// stage-1 acute C.
+/// 590, 1141, 1408), landed with stage-1 acute C (#43).
 #[allow(non_snake_case)] // C-parity: the C name verbatim (acute.c:3354)
 #[allow(clippy::too_many_arguments)] // C-parity: the eight-parameter C
 // signature (acute.c:3354-3357)
@@ -2433,12 +5209,7 @@ pub(crate) fn circleLineIntersection(
 /// and between bisector point and intersection point, acute.c:3430).
 ///
 /// The C call sites sit in the findNewSPLocation family (acute.c:485,
-/// 599, 1109, 1144, 1413), which lands with stage-1 acute C; the 1:1
-/// body is ahead-of-use until then.
-#[allow(dead_code)]
-// C-parity: the call sites (acute.c:485, 599, 1109,
-// 1144, 1413) belong to the findNewSPLocation
-// family, stage-1 acute C.
+/// 599, 1109, 1144, 1413), landed with stage-1 acute C (#43).
 #[allow(non_snake_case)] // C-parity: the C name verbatim (acute.c:3411)
 #[allow(clippy::needless_late_init)] // C-parity: C's declaration block
                                      // (acute.c:3424-3425) keeps its
@@ -2498,12 +5269,8 @@ pub(crate) fn chooseCorrectPoint(
 /// zero).
 ///
 /// The C call sites sit in the findNewSPLocation family (acute.c:497,
-/// 612, 1181, 1191, 1269, 1449, 1458, 1531), which lands with stage-1
-/// acute C; the 1:1 body is ahead-of-use until then.
-#[allow(dead_code)]
-// C-parity: the call sites (acute.c:497, 612, 1181,
-// 1191, 1269, 1449, 1458, 1531) belong to the
-// findNewSPLocation family, stage-1 acute C.
+/// 612, 1181, 1191, 1269, 1449, 1458, 1531), landed with
+/// stage-1 acute C (#43).
 #[allow(non_snake_case)] // C-parity: the C name verbatim (acute.c:3458)
 pub(crate) fn pointBetweenPoints(
     x1: f64,
@@ -2552,7 +5319,7 @@ pub(crate) fn pointBetweenPoints(
 /// read) and are dropped (D24, the D14 precedent). The in-PR callers
 /// are the getWedgeIntersectionWithMaxAngle scans (acute.c:2849,
 /// 2853, 2881, 2885); the findNewSPLocation family calls (first at
-/// acute.c:505) land with the last acute PR.
+/// acute.c:505) landed with stage-1 acute C (#43).
 #[allow(non_snake_case)] // C-parity: the C name verbatim (acute.c:3493)
 #[allow(clippy::too_many_arguments)] // C-parity: the seven-parameter C
 // signature (acute.c:3493-3496)
@@ -2679,13 +5446,9 @@ pub(crate) fn testTriangleAngle(
 /// (D25).
 ///
 /// The only C callers are the findNewSPLocation variants (acute.c:
-/// 1203, 1280, 1470, 1542), which land with the last acute PR; the
-/// body is ahead-of-use until then.
+/// 1203, 1280, 1470, 1542), landed with stage-1 acute C (#43).
 #[allow(non_snake_case)] // C-parity: the C name verbatim, typo included
 // (acute.c:3584)
-#[allow(dead_code)]
-// C-parity: the callers (acute.c:1203, 1280, 1470, 1542) belong to
-// the findNewSPLocation family, the last acute PR.
 #[allow(clippy::float_cmp)]
 // C-parity: the torg/tdest coordinate
 // equality tests verbatim (acute.c:3607, 3611) and the ahead == 0.0
@@ -3625,5 +6388,177 @@ mod tests {
             doSmoothing(&mut m, &b, tris[0], torg, tdest, tapex, &mut newloc2),
             0
         );
+    }
+
+    #[test]
+    fn find_new_sp_location_dispatches_on_the_maxangle_switch() {
+        // The dispatcher's -U switch (acute.c:98-103): maxangle == 0
+        // picks the Without variant, a set maxangle the With variant.
+        // The fixture is REALLY BAD at -q20 (the off-center wins), so
+        // both variants land on the shared offcenter prelude and the
+        // four results coincide; the dispatch pins relationally, each
+        // dispatcher call against its variant's own direct result.
+        fn run_dispatch(b: &Behavior) -> (f64, f64) {
+            let mut m = mesh(b);
+            let (t, torg, tdest, tapex) = lone_tri(&mut m, (0.0, 0.0), (2.0, 0.0), (1.0, 0.1));
+            let cc = vxy(&mut m, 99.0, 99.0);
+            findNewSPLocation(&mut m, b, torg, tdest, tapex, cc, true, t)
+                .expect("findNewSPLocation")
+        }
+        fn run_without(b: &Behavior) -> (f64, f64) {
+            let mut m = mesh(b);
+            let (t, torg, tdest, tapex) = lone_tri(&mut m, (0.0, 0.0), (2.0, 0.0), (1.0, 0.1));
+            let cc = vxy(&mut m, 99.0, 99.0);
+            findNewSPLocationWithoutMaxAngle(&mut m, b, torg, tdest, tapex, cc, true, t)
+                .expect("findNewSPLocationWithoutMaxAngle")
+        }
+        fn run_with(b: &Behavior) -> (f64, f64) {
+            let mut m = mesh(b);
+            let (t, torg, tdest, tapex) = lone_tri(&mut m, (0.0, 0.0), (2.0, 0.0), (1.0, 0.1));
+            let cc = vxy(&mut m, 99.0, 99.0);
+            findNewSPLocationWithMaxAngle(&mut m, b, torg, tdest, tapex, cc, true, t)
+                .expect("findNewSPLocationWithMaxAngle")
+        }
+        let b_q = behavior_q(20.0);
+        let b_u = behavior_q_u(20.0, 120.0);
+        let (xi_q, eta_q) = run_dispatch(&b_q);
+        let (xi_u, eta_u) = run_dispatch(&b_u);
+        let (xi_wo, eta_wo) = run_without(&b_q);
+        let (xi_wi, eta_wi) = run_with(&b_u);
+        assert!((xi_q - xi_wo).abs() <= 1e-12 && (eta_q - eta_wo).abs() <= 1e-12);
+        assert!((xi_u - xi_wi).abs() <= 1e-12 && (eta_u - eta_wi).abs() <= 1e-12);
+        // The shared prelude: all four coincide on this fixture.
+        assert!((xi_q - xi_u).abs() <= 1e-12 && (eta_q - eta_u).abs() <= 1e-12);
+    }
+
+    #[test]
+    fn find_new_sp_location_really_bad_uses_the_ungor_offcenter() {
+        // (0,0), (2,0), (1,0.1) at -q20: aodist = dadist = 1.01,
+        // dodist = 4, orientation 213 (the longestShortestEdge tie
+        // picks the da edge as shortest), so the origin-smallest arm
+        // of the offcenter block computes the Ungor off-center
+        // dxoff = 0.5*xda - offconstant*yda, dyoff = 0.5*yda +
+        // offconstant*xda (acute.c:329-335); its squared distance to
+        // the dest corner (7.58) beats the circumcenter's (25.50):
+        // REALLY BAD, dx = xdo + dxoff, dy = ydo + dyoff (acute.c:
+        // 336-341), almostGood stays 0, and the tail writes the row
+        // at torg + (dx, dy) = (2 + dxoff, dyoff) with the D26 tuple
+        // interpolants (acute.c:711-712). offconstant(20) =
+        // 0.475*sqrt((1+cos 20)/(1-cos 20)) = 2.6938588643184125,
+        // denominator = 0.5/counterclockwise(dest, apex, org) = 2.5.
+        let b = behavior_q(20.0);
+        let mut m = mesh(&b);
+        let (t, torg, tdest, tapex) = lone_tri(&mut m, (0.0, 0.0), (2.0, 0.0), (1.0, 0.1));
+        let cc = vxy(&mut m, 99.0, 99.0);
+        let (xi, eta) = findNewSPLocation(&mut m, &b, torg, tdest, tapex, cc, true, t)
+            .expect("findNewSPLocation");
+        assert!((m.vx_real(cc, 0) - 1.2306141135681588).abs() <= 1e-12);
+        assert!((m.vx_real(cc, 1) + 2.6438588643184127).abs() <= 1e-12);
+        assert!((xi - 13.834601378376144).abs() <= 1e-12);
+        assert!((eta + 26.438588643184126).abs() <= 1e-12);
+    }
+
+    #[test]
+    fn find_new_sp_location_with_max_angle_shares_the_offcenter_prelude() {
+        // The same REALLY BAD fixture under -q20 -u120: the dispatcher
+        // takes the With variant (maxangle set), whose offcenter
+        // prelude is the same block verbatim (acute.c:936-986); the
+        // off-center wins again, almostGood stays 0, and the petal
+        // machinery with the slab walk never engages - the row and
+        // the interpolants land exactly where the Without variant put
+        // them (the prelude parity of the two variants).
+        let b = behavior_q_u(20.0, 120.0);
+        let mut m = mesh(&b);
+        let (t, torg, tdest, tapex) = lone_tri(&mut m, (0.0, 0.0), (2.0, 0.0), (1.0, 0.1));
+        let cc = vxy(&mut m, 99.0, 99.0);
+        let (xi, eta) = findNewSPLocation(&mut m, &b, torg, tdest, tapex, cc, true, t)
+            .expect("findNewSPLocation");
+        assert!((m.vx_real(cc, 0) - 1.2306141135681588).abs() <= 1e-12);
+        assert!((m.vx_real(cc, 1) + 2.6438588643184127).abs() <= 1e-12);
+        assert!((xi - 13.834601378376144).abs() <= 1e-12);
+        assert!((eta + 26.438588643184126).abs() <= 1e-12);
+    }
+
+    #[test]
+    fn find_new_sp_location_hull_almost_good_proposes_the_circumcenter() {
+        // (0,0), (1,0), (0,1.2) at -q20: scalene (dodist = 1,
+        // aodist = 1.44, dadist = 2.44), orientation 312, so the
+        // apex-smallest arm computes the off-center (0.5, 2.6938),
+        // whose squared distance (7.51) loses to the circumcenter
+        // offset's (0.61): ALMOST GOOD (acute.c:374-377). The largest
+        // angle is exactly right (cosMaxAngle = 0), isObtuse = 1.
+        // All three corners are pinned non-free, so doSmoothing
+        // reports 0 (the FREEVERTEX gate, acute.c:1916) and the petal
+        // block runs on a hull triangle: both directions find no
+        // neighbor (getNeighborsVertex not-found), both suggestions
+        // stay at the circumcenter, and the obtuse pick takes the
+        // first one (acute.c:679-682). The tail writes the row at the
+        // circumcenter (0.5, 0.6) with interpolants (0.5, 0.5):
+        // denominator = 0.5/1.2, xi = (yao*dx - xao*dy)*2*denominator
+        // = 1.2*0.5*0.8333333333333334, eta likewise (acute.c:703-
+        // 712).
+        let b = behavior_q(20.0);
+        let mut m = mesh(&b);
+        let (t, torg, tdest, tapex) = lone_tri(&mut m, (0.0, 0.0), (1.0, 0.0), (0.0, 1.2));
+        for v in [torg, tdest, tapex] {
+            m.vx_set_type(v, crate::slots::SEGMENTVERTEX);
+        }
+        let cc = vxy(&mut m, 99.0, 99.0);
+        let (xi, eta) = findNewSPLocation(&mut m, &b, torg, tdest, tapex, cc, true, t)
+            .expect("findNewSPLocation");
+        assert!((m.vx_real(cc, 0) - 0.5).abs() <= 1e-12);
+        assert!((m.vx_real(cc, 1) - 0.6).abs() <= 1e-12);
+        assert!((xi - 0.5).abs() <= 1e-12);
+        assert!((eta - 0.5).abs() <= 1e-12);
+    }
+
+    #[test]
+    fn find_new_sp_location_relocated_smoothing_deletes_the_vertex_and_writes_newloc() {
+        // The relocation funnel of the With variant: the star-fan
+        // center is FREEVERTEX, so on this right-isosceles ALMOST
+        // GOOD triangle doSmoothing returns flag 1 with the feasible-
+        // region centroid (acute.c:1004-1025); the relocated branch
+        // deletes the center through the D8 deletevertex funnel
+        // (acute.c:1029, degree 4: two triangles survive) and the
+        // tail writes the row at origin + (newloc - torg) =
+        // newloc (acute.c:1795-1796). The twin fixture pins the
+        // centroid: the same deterministic input produces the same
+        // newloc, and the interpolants reduce to (newloc_x, newloc_y)
+        // because the star triangle has denominator 0.5 with xdo =
+        // 1, ydo = 0, xao = 0, yao = 1 (acute.c:1798-1799).
+        let b = behavior_q_u(20.0, 120.0);
+        let ring = [(1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0)];
+        // The twin: doSmoothing's newloc for the free center.
+        let mut m0 = mesh(&b);
+        let (c0, _r0, tris0) = star_fan(&mut m0, (0.0, 0.0), &ring);
+        m0.vx_set_type(c0, crate::slots::FREEVERTEX);
+        let tdest0 = m0.dest(tris0[0]);
+        let tapex0 = m0.apex(tris0[0]);
+        let mut newloc = [0.0f64; 2];
+        assert_eq!(
+            doSmoothing(&mut m0, &b, tris0[0], c0, tdest0, tapex0, &mut newloc),
+            1
+        );
+        // The dispatcher call on the identical fixture: maxangle is
+        // set, so the With variant runs, relocates, and deletes.
+        let mut m = mesh(&b);
+        let (c, _r, tris) = star_fan(&mut m, (0.0, 0.0), &ring);
+        m.vx_set_type(c, crate::slots::FREEVERTEX);
+        let cc = vxy(&mut m, 99.0, 99.0);
+        let tdest = m.dest(tris[0]);
+        let tapex = m.apex(tris[0]);
+        let (xi, eta) = findNewSPLocation(&mut m, &b, c, tdest, tapex, cc, true, tris[0])
+            .expect("findNewSPLocation");
+        // The center is gone: the relocated branch's deletevertex.
+        assert_eq!(m.vx_type(c), crate::slots::DEADVERTEX);
+        // Degree-4 deletion retriangulates the diamond into two
+        // triangles (the 45-45-90 halves pass -q20 -u120, so the
+        // quality flank of deletevertex adds no Steiner).
+        assert_eq!(m.triangles.live_count(), 2);
+        // The row and the interpolants sit at the smoothed location.
+        assert!((m.vx_real(cc, 0) - newloc[0]).abs() <= 1e-12);
+        assert!((m.vx_real(cc, 1) - newloc[1]).abs() <= 1e-12);
+        assert!((xi - newloc[0]).abs() <= 1e-12);
+        assert!((eta - newloc[1]).abs() <= 1e-12);
     }
 }
