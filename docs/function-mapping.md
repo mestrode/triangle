@@ -112,20 +112,20 @@ side changes; the function names are the stable key).
 | `divconqdelaunay` | triangle.c:4547 | `delaunay.rs` | same name (snake_case) | S1 | landed in PR #33 |
 | `boundingbox` | triangle.c:4620 | `delaunay.rs` | same name (snake_case) | S1 | landed in PR #33 (out-of-pool infvertices per D12) |
 | `removebox` | triangle.c:4672 | `delaunay.rs` | same name (snake_case) | S1 | landed in PR #33 (out-of-pool infvertices per D12) |
-| `incrementaldelaunay` | triangle.c:4761 | `delaunay.rs` | same name (snake_case) | S1 | |
-| `eventheapinsert` | triangle.c:4800 | `delaunay.rs` | same name (snake_case) | S1 | |
-| `eventheapify` | triangle.c:4833 | `delaunay.rs` | same name (snake_case) | S1 | |
-| `eventheapdelete` | triangle.c:4881 | `delaunay.rs` | same name (snake_case) | S1 | |
-| `createeventheap` | triangle.c:4916 | `delaunay.rs` | same name (snake_case) | S1 | |
-| `rightofhyperbola` | triangle.c:4946 | `delaunay.rs` | same name (snake_case) | S1 | |
-| `circletop` | triangle.c:4977 | `delaunay.rs` | same name (snake_case) | S1 | |
-| `check4deadevent` | triangle.c:5001 | `delaunay.rs` | same name (snake_case) | S1 | |
-| `splay` | triangle.c:5024 | `delaunay.rs` | same name (snake_case) | S1 | |
-| `splayinsert` | triangle.c:5134 | `delaunay.rs` | same name (snake_case) | S1 | |
-| `circletopinsert` | triangle.c:5161 | `delaunay.rs` | same name (snake_case) | S1 | |
-| `frontlocate` | triangle.c:5189 | `delaunay.rs` | same name (snake_case) | S1 | |
-| `sweeplinedelaunay` | triangle.c:5212 | `delaunay.rs` | same name (snake_case) | S1 | |
-| `delaunay` | triangle.c:5429 | `delaunay.rs` | same name (snake_case) | S1 | |
+| `incrementaldelaunay` | triangle.c:4761 | `delaunay.rs` | same name (snake_case) | S1 | landed in PR #34 |
+| `eventheapinsert` | triangle.c:4800 | `delaunay.rs` | same name (snake_case) | S1 | landed in PR #34 |
+| `eventheapify` | triangle.c:4833 | `delaunay.rs` | same name (snake_case) | S1 | landed in PR #34 |
+| `eventheapdelete` | triangle.c:4881 | `delaunay.rs` | same name (snake_case) | S1 | landed in PR #34 |
+| `createeventheap` | triangle.c:4916 | `delaunay.rs` | same name (snake_case) | S1 | landed in PR #34 (event arena transliterates as an owned Vec + `EventPtr` free list) |
+| `rightofhyperbola` | triangle.c:4946 | `delaunay.rs` | same name (snake_case) | S1 | landed in PR #34 (carries `hyperbolacount`) |
+| `circletop` | triangle.c:4977 | `delaunay.rs` | same name (snake_case) | S1 | landed in PR #34 (carries `circletopcount`) |
+| `check4deadevent` | triangle.c:5001 | `delaunay.rs` | same name (snake_case) | S1 | landed in PR #34 |
+| `splay` | triangle.c:5024 | `delaunay.rs` | same name (snake_case) | S1 | landed in PR #34 |
+| `splayinsert` | triangle.c:5134 | `delaunay.rs` | same name (snake_case) | S1 | landed in PR #34 (allocates from the `splaynodes` WordPool) |
+| `circletopinsert` | triangle.c:5161 | `delaunay.rs` | same name (snake_case) | S1 | landed in PR #34 |
+| `frontlocate` | triangle.c:5189 | `delaunay.rs` | same name (snake_case) | S1 | landed in PR #34 |
+| `sweeplinedelaunay` | triangle.c:5212 | `delaunay.rs` | same name (snake_case) | S1 | landed in PR #34 |
+| `delaunay` | triangle.c:5429 | `delaunay.rs` | same name (snake_case) | S1 | landed in PR #34 (dispatcher: incremental/sweepline/divconq per the landed `Behavior` flags) |
 | `reconstruct` | triangle.c:5483 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8) |
 | `finddirection` | triangle.c:5776 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8) |
 | `segmentintersection` | triangle.c:5873 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8) |
@@ -300,4 +300,5 @@ side changes; the function names are the stable key).
 3. The extractor for this table lives in the ticket #10 session transcript;
    regenerating it is a grep, not a hand-edit: names and sites come from the
    sources.
+
 
