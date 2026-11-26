@@ -94,6 +94,33 @@ pub(crate) struct Mesh {
     /// every-build readers land with later rows).
     #[allow(dead_code)]
     pub(crate) undeads: i32,
+    /// C m->inelements (triangle.h:517): number of input triangles (the
+    /// .ele count). Written by reconstruct (triangle.c:5498); read by the
+    /// statistics rows that land with the later slices. Never read
+    /// before the first write in the pipeline; the #[allow(dead_code)]
+    /// mirrors the hullsize/cyclefail convention (the every-build
+    /// readers land with later rows).
+    #[allow(dead_code)]
+    pub(crate) inelements: i32,
+    /// C m->insegments (triangle.h:518): number of input PSLG segments
+    /// (the .poly count). Written by reconstruct (triangle.c:5519) and
+    /// formskeleton (triangle.c:6562); read by formskeleton's insertion
+    /// loop and, later, the refine/enforcequality rows.
+    pub(crate) insegments: i32,
+    /// C m->scoutsteps (triangle.h:532, long to i64): vertices reached so
+    /// far inserting the current segment. Zeroed by triangleinit
+    /// (triangle.c:1499, mirrored in Mesh::new) and by each
+    /// insertsegment (triangle.c:6428), guarded by scoutsegment's
+    /// going-in-circles check.
+    pub(crate) scoutsteps: i64,
+    /// C m->steinerleft (triangle.h:526, int): the running Steiner-point
+    /// budget b->steiner. C sets it twice, in triangle_context_create
+    /// (triangle_api.c:35) and triangle_mesh_load (triangle_api.c:208);
+    /// both entry paths set it after triangleinit and before any core
+    /// call can run, so the port takes the same value in Mesh::new
+    /// (the deterministic superset, like hullsize). Read and decremented
+    /// by segmentintersection and conformingedge in this slice.
+    pub(crate) steinerleft: i32,
 
     /// Statistics counters, C long fields of struct mesh (triangle.h:538-546:
     /// incirclecount, counterclockcount, orient3dcount, hyperbolacount,
@@ -254,10 +281,14 @@ impl Mesh {
             circletopcount: 0,
             // C triangleinit (triangle.c:1493-1502): recenttri.tri NULL,
             // samples 1, checksegments 0, checkquality 0, cyclefail 0,
-            // randomseed 1. hullsize and lastflip are not zeroed by C's
-            // triangleinit (uninitialized struct memory until their
-            // owning algorithms run); the port picks the deterministic
-            // zero superset of that undefined state.
+            // randomseed 1, scoutsteps 0 (triangle.c:1499). hullsize and
+            // lastflip are not zeroed by C's triangleinit (uninitialized
+            // struct memory until their owning algorithms run); the
+            // port picks the deterministic zero superset of that
+            // undefined state. inelements/insegments join that zero
+            // superset; steinerleft takes b->steiner at construction
+            // (C triangle_context_create:35 / triangle_mesh_load:208,
+            // both before any core call runs).
             randomseed: 1,
             samples: 1,
             checksegments: false,
@@ -265,6 +296,10 @@ impl Mesh {
             cyclefail: false,
             hullsize: 0,
             lastflip: NULL,
+            inelements: 0,
+            insegments: 0,
+            scoutsteps: 0,
+            steinerleft: b.steiner,
             infvertex1: NULL,
             infvertex2: NULL,
             infvertex3: NULL,
@@ -525,6 +560,60 @@ impl Mesh {
                 return Some(newvertex);
             }
         }
+    }
+
+    /// C: triangletraverse (triangle.c:1210-1228). Walk the triangle pool
+    /// in allocation order, skipping dead rows (tri[1] == NULL, the
+    /// killtri pattern through the chokepoint); the end-of-pool NULL of
+    /// C's traverse is the None here. Pool traversal walks dead rows
+    /// (D3), so this skip loop is the whole of C's do-while.
+    pub(crate) fn triangletraverse(&self, t: &mut crate::pool::Traversal) -> Option<u32> {
+        loop {
+            let newtri = self.triangles.traverse_next(t)?;
+            if !self.deadtri(newtri) {
+                return Some(newtri);
+            }
+        }
+    }
+
+    /// C: subsegtraverse (triangle.c:1243-1261). Same walk over the
+    /// subsegment pool, skipping dead rows (ss[1] == NULL, killsubseg).
+    pub(crate) fn subsegtraverse(&self, t: &mut crate::pool::Traversal) -> Option<u32> {
+        loop {
+            let newsub = self.subsegs.traverse_next(t)?;
+            if !self.deadsubseg(newsub) {
+                return Some(newsub);
+            }
+        }
+    }
+
+    /// C: getvertex (triangle.c:1343-1370). Map an input vertex number
+    /// to its pool row. The C block walk (firstblock, then one chained
+    /// block per itemsperblock step) becomes row-id arithmetic through
+    /// block_base_id; D1 replaces the C raw-pointer result (aligned
+    /// block base + itembytes * (number - current)) by the same row id
+    /// in the same allocation order. Input vertices are allocated
+    /// contiguously in input order (transfernodes), so number -
+    /// firstnumber is the allocation index.
+    pub(crate) fn getvertex(&self, firstnumber: i32, number: i32) -> u32 {
+        // C: getblock = m->vertices.firstblock; current = b->firstnumber.
+        let mut block: u64 = 0;
+        let mut current = firstnumber;
+
+        // C: find the right block. First the first block, then one
+        // chained block per step while the number lies beyond it.
+        if current + self.vertices.first_block_items() as i32 <= number {
+            block = 1;
+            current += self.vertices.first_block_items() as i32;
+            while current + self.vertices.block_items() as i32 <= number {
+                block += 1;
+                current += self.vertices.block_items() as i32;
+            }
+        }
+
+        // C: foundvertex = aligned block start + itembytes * (number -
+        // current); block_base_id is the same walk in id units.
+        self.vertices.block_base_id(block) + (number - current) as u32
     }
 }
 

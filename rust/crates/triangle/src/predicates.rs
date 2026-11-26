@@ -39,7 +39,7 @@ use std::sync::OnceLock;
 /// C: vertex as the predicates see it (a REAL*): passed by value here.
 /// Index 0 = x, 1 = y, 2 = the third coordinate the weighted tests read
 /// (weight for -w/-W, lifting/height input for tri_nonregular).
-type Vertex = [f64; 3];
+pub(crate) type Vertex = [f64; 3];
 
 /// The C file-scope globals of predicates.c (splitter, epsilon and the
 /// error-bound family), computed once by tri_exactinit.

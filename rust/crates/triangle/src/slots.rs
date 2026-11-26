@@ -891,6 +891,51 @@ impl Mesh {
     pub(crate) fn set_splay_rchild(&mut self, id: u32, child: u32) {
         self.splaynodes.set_word(id, 3, child as u64);
     }
+
+    // -----------------------------------------------------------------------
+    // The virus pool (C: struct mesh's viri, triangle.h:504). Rows hold one
+    // triangle id each (C stores a triangle*). The pool itself is eagerly
+    // initialized in Mesh::new (C poolinits it lazily at triangle.c:6988, a
+    // timing no state can observe); the truncation of C's pooldeinit tail
+    // (triangle.c:7094, carveholes) follows the splay
+    // precedent of D11 (the run ends with the Mesh drop).
+    // -----------------------------------------------------------------------
+
+    /// C: deadtriangle = (triangle **) poolalloc(&m->viri);
+    /// *deadtriangle = hulltri.tri (infecthull, plague, regionplague,
+    /// carveholes). One virus row stores one infected triangle's row id
+    /// in word 0 (D1: the id replaces the stored triangle*).
+    pub(crate) fn viri_push_tri(&mut self, tri: u32) -> Result<(), Oom> {
+        let row = self.viri.alloc()?;
+        self.viri.set_word(row, 0, tri as u64);
+        Ok(())
+    }
+
+    /// Read the triangle stored in virus row `row` (C: *virusloop).
+    pub(crate) fn viri_tri(&self, row: u32) -> u32 {
+        self.viri.word(row, 0) as u32
+    }
+
+    /// The traversal cursor for the virus pool (C: traversalinit).
+    pub(crate) fn viri_traversal(&self) -> crate::pool::Traversal {
+        self.viri.traversal()
+    }
+
+    /// C: virusloop = (triangle **) traverse(&m->viri). Virus rows are
+    /// never dead, so there is no skip loop (unlike triangletraverse);
+    /// the frontier is read live at each step, so a poolalloc
+    /// mid-traversal extends the loop exactly like C's traverse
+    /// (triangle.c:970) - the spreading phases of plague/regionplague
+    /// rely on that.
+    pub(crate) fn viri_traverse(&self, t: &mut crate::pool::Traversal) -> Option<u32> {
+        self.viri.traverse_next(t)
+    }
+
+    /// C: poolrestart(&m->viri) (the plague/regionplague tails empty the
+    /// virus pool).
+    pub(crate) fn viri_restart(&mut self) {
+        self.viri.restart();
+    }
 }
 
 #[cfg(test)]
