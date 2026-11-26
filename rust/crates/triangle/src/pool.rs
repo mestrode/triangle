@@ -71,6 +71,12 @@ pub(crate) struct WordPool {
     /// C deaditemstack: the most recently deallocated row id; the null id
     /// terminates the chain (D4; slot 0 of a dead row holds the next id).
     dead_head: u32,
+    /// Rows orphaned by clear_dead_stack (C highorder's
+    /// m->vertices.deaditemstack = NULL, triangle.c:7639): dead rows
+    /// whose chain was dropped and that are never handed out again;
+    /// C's pool keeps no invariant over them, so the debug invariant
+    /// discounts them through this counter.
+    cleared_dead: u64,
     /// C items: live rows.
     items: u64,
     /// C maxitems: fresh-allocation high water since init/restart; counts
@@ -127,6 +133,7 @@ impl WordPool {
             first_block_items: first_block,
             items_per_block,
             dead_head: NULL,
+            cleared_dead: 0,
             items: 0,
             maxitems: 0,
             next_fresh: base_rows as u32,
@@ -236,7 +243,29 @@ impl WordPool {
         self.items = 0;
         self.maxitems = 0;
         self.dead_head = NULL;
+        self.cleared_dead = 0;
         self.next_fresh = self.first_fresh_id();
+        self.debug_assert_dead_stack();
+    }
+
+    /// C: m->vertices.deaditemstack = (VOID *) NULL in highorder (the
+    /// "dead items in the pool of nodes cannot be allocated for the
+    /// extra nodes" reset, triangle.c:7634-7639): drop the dead-item
+    /// chain without touching items or the allocation frontier, so
+    /// highorder's midpoint allocations take fresh rows instead of dead
+    /// ones, and the primary nodes keep the lower indices (the comment
+    /// 7634-7638 rationale). The dropped rows are dead forever; C's
+    /// chain is simply unreachable, and the counter mirrors that for
+    /// the debug invariant. highorder (refine.rs) is the only caller.
+    pub(crate) fn clear_dead_stack(&mut self) {
+        let mut current = self.dead_head;
+        let mut steps = 0u64;
+        while current != NULL {
+            steps += 1;
+            current = self.word(current, 0) as u32;
+        }
+        self.cleared_dead += steps;
+        self.dead_head = NULL;
         self.debug_assert_dead_stack();
     }
 
@@ -400,7 +429,7 @@ impl WordPool {
         if !cfg!(debug_assertions) {
             return;
         }
-        let expected = self.maxitems - self.items;
+        let expected = self.maxitems - self.items - self.cleared_dead;
         let mut current = self.dead_head;
         let mut steps = 0u64;
         while current != NULL {

@@ -11,12 +11,14 @@
 //! into construction, D11), initializevertexpool, initializetrisubpools,
 //! dummyinit, maketriangle, makesubseg.
 //!
-//! NOT landed in this PR (their C rows arrive with the modules that use
-//! them; the chokepoint primitives they reduce to are already in slots.rs):
-//! triangledealloc / triangletraverse, subsegdealloc / subsegtraverse,
-//! vertexdealloc, badsubsegdealloc / badsubsegtraverse, getvertex,
-//! triangledeinit (triangle.c:1196-1408). vertextraverse (triangle.c:1276)
-//! landed with the delaunay part-1 PR (the divconqdelaunay consumer).
+//! NOT landed (their C rows arrive with the modules that use them; the
+//! chokepoint primitives they reduce to are already in slots.rs):
+//! triangledealloc, subsegdealloc, vertexdealloc, triangledeinit
+//! (triangle.c:1196-1408). vertextraverse (triangle.c:1276) landed with
+//! the delaunay part-1 PR (the divconqdelaunay consumer), triangletraverse
+//! and getvertex with their consumers, and badsubsegdealloc /
+//! badsubsegtraverse (triangle.c:1298-1304, 1316-1327) with refine.rs
+//! (the splitencsegs consumer).
 //!
 //! The behavior fields the init functions read arrive on the normalized
 //! Behavior (options.rs): Mesh::new takes &Behavior exactly where C's
@@ -162,6 +164,12 @@ pub(crate) struct Mesh {
     /// (triangle.c:3012). Read by the statistics rows when they land.
     #[allow(dead_code)]
     pub(crate) hullsize: i64,
+    /// C m->edges (triangle.h:521): the running edge count the
+    /// statistics row reads; the writers are the triangle_api.c entry
+    /// points (252-253 create, 326-327 load, 354-355 refine). The
+    /// refine writer is live (api.rs Mesh::refine); create and load
+    /// await the ioarrays phase, so the field stays 0 on their meshes.
+    pub(crate) edges: i64,
     /// C m->lastflip (triangle.h:509): the head of the stack of recently
     /// flipped triangles (struct flipstacker *; a flipstackers row id
     /// here, the null id for the C NULL pointer).
@@ -320,6 +328,7 @@ impl Mesh {
             checkquality: false,
             cyclefail: false,
             hullsize: 0,
+            edges: 0,
             lastflip: NULL,
             inelements: 0,
             insegments: 0,
@@ -340,8 +349,9 @@ impl Mesh {
             // the enforcequality-init values for the two C-initialized
             // members and the null superset for the other two, following
             // the established lazy-pool-init convention (ADR 0003
-            // section 4). When refine.rs lands, its enforcequality row
-            // re-runs the C init loop verbatim over these fields.
+            // section 4). refine.rs's enforcequality re-runs the C init
+            // loop verbatim over these fields (the queuefront sweep and
+            // firstnonemptyq reset of triangle.c:7559-7561).
             queuefront: [NULL; 4096],
             queuetail: [NULL; 4096],
             nextnonemptyq: [-1; 4096],
@@ -623,6 +633,28 @@ impl Mesh {
         loop {
             let newsub = self.subsegs.traverse_next(t)?;
             if !self.deadsubseg(newsub) {
+                return Some(newsub);
+            }
+        }
+    }
+
+    /// C: badsubsegdealloc (triangle.c:1298-1304). The dead-row idiom:
+    /// subsegorg = NULL first (triangle.c:1302) so badsubsegtraverse
+    /// skips the row, then pooldealloc (triangle.c:1303); splitencsegs
+    /// (refine.rs) is the consumer.
+    pub(crate) fn badsubsegdealloc(&mut self, dyingsubseg: u32) {
+        self.set_bad_sub_seg_org(dyingsubseg, NULL);
+        self.badsubsegs.dealloc(dyingsubseg);
+    }
+
+    /// C: badsubsegtraverse (triangle.c:1316-1327). Walk the pool and
+    /// skip the rows badsubsegdealloc marked (the subsegorg == NULL
+    /// test of the do-while, triangle.c:1321-1326); splitencsegs'
+    /// traversalinit (triangle.c:7367) starts it.
+    pub(crate) fn badsubsegtraverse(&self, t: &mut crate::pool::Traversal) -> Option<u32> {
+        loop {
+            let newsub = self.badsubsegs.traverse_next(t)?;
+            if self.bad_sub_seg_org(newsub) != NULL {
                 return Some(newsub);
             }
         }

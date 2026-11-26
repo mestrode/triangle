@@ -77,8 +77,8 @@ side changes; the function names are the stable key).
 | `subsegtraverse` | triangle.c:1243 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit); landed in PR #35 (the reconstruct consumer) |
 | `vertexdealloc` | triangle.c:1262 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit) |
 | `vertextraverse` | triangle.c:1276 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit); vertextraverse landed in PR #33 (the divconqdelaunay consumer) |
-| `badsubsegdealloc` | triangle.c:1298 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit) |
-| `badsubsegtraverse` | triangle.c:1316 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit) |
+| `badsubsegdealloc` | triangle.c:1298 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit); landed in the refine PR (#39), the splitencsegs consumer |
+| `badsubsegtraverse` | triangle.c:1316 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit); landed in the refine PR (#39), the splitencsegs consumer |
 | `getvertex` | triangle.c:1343 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit); landed in PR #35 (the reconstruct consumer) |
 | `triangledeinit` | triangle.c:1376 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit) |
 | `maketriangle` | triangle.c:1414 | `mesh.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit) |
@@ -140,13 +140,13 @@ side changes; the function names are the stable key).
 | `plague` | triangle.c:6714 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8); landed in PR #35 |
 | `regionplague` | triangle.c:6886 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8); landed in PR #35 |
 | `carveholes` | triangle.c:6964 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8); landed in PR #35 |
-| `tallyencs` | triangle.c:7129 | `refine.rs` | same name (snake_case) | S1 | highorder moves from the C Array I/O tail for cohesion |
-| `precisionerror` | triangle.c:7154 | `refine.rs` | same name (snake_case) | S1 | highorder moves from the C Array I/O tail for cohesion |
-| `splitencsegs` | triangle.c:7183 | `refine.rs` | same name (snake_case) | S1 | highorder moves from the C Array I/O tail for cohesion |
-| `tallyfaces` | triangle.c:7383 | `refine.rs` | same name (snake_case) | S1 | highorder moves from the C Array I/O tail for cohesion |
-| `splittriangle` | triangle.c:7409 | `refine.rs` | same name (snake_case) | S1 | highorder moves from the C Array I/O tail for cohesion |
-| `enforcequality` | triangle.c:7527 | `refine.rs` | same name (snake_case) | S1 | highorder moves from the C Array I/O tail for cohesion |
-| `highorder` | triangle.c:7624 | `refine.rs` | same name (snake_case) | S1 | highorder moves from the C Array I/O tail for cohesion |
+| `tallyencs` | triangle.c:7129 | `refine.rs` | same name (snake_case) | S1 | landed in the refine PR (#39); consumer-carry: the badsubseg queue rows come from checkseg4encroach (quality.rs) and drain through the slots.rs accessors |
+| `precisionerror` | triangle.c:7154 | `refine.rs` | same name (snake_case) | S1 | landed in the refine PR (#39); the only C call site (triangle.c:7510) is _DEBUG-gated, so the verbatim body is ahead-of-use until the CLI wiring |
+| `splitencsegs` | triangle.c:7183 | `refine.rs` | same name (snake_case) | S1 | landed in the refine PR (#39); consumer-carry: badsubsegdealloc/badsubsegtraverse (mesh.rs rows below) and the badsubseg row readers (slots.rs, promoted from test-only); status out-param mirrors InternalStatus (D8) |
+| `tallyfaces` | triangle.c:7383 | `refine.rs` | same name (snake_case) | S1 | landed in the refine PR (#39); the queue it fills is the one enforcequality re-inits verbatim (triangle.c:7559-7561) |
+| `splittriangle` | triangle.c:7409 | `refine.rs` | same name (snake_case) | S1 | landed in the refine PR (#39); the findNewSPLocation site (triangle.c:7437) mirrors the acute compile switch through the crate's acute feature and is funnel-marked NotImplemented until acute.rs (D16) |
+| `enforcequality` | triangle.c:7527 | `refine.rs` | same name (snake_case) | S1 | landed in the refine PR (#39); re-runs C's bad-triangle queue init verbatim (the mesh.rs state) and carries the badsubseg/badtriang pool restarts (slots.rs); status out-param mirrors InternalStatus (D8); wired by api.rs Mesh::refine (triangle_mesh_refine row) |
+| `highorder` | triangle.c:7624 | `refine.rs` | same name (snake_case) | S1 | landed in the refine PR (#39); deliberately moved from just before C's Array I/O banner (triangle.c:7687) for cohesion with its only caller, triangle_mesh_create (triangle_api.c:256), which awaits the ioarrays phase (ahead-of-use) |
 | `transfernodes` | triangle.c:7697 | `ioarrays.rs` | same name (snake_case) | S1 | transfernodes is the stage-1 input path; the writers feed Mesh::output (writers land late stage 1) |
 | `writenodes` | triangle.c:7768 | `ioarrays.rs` | same name (snake_case) | S1 | transfernodes is the stage-1 input path; the writers feed Mesh::output (writers land late stage 1) |
 | `numbernodes` | triangle.c:7840 | `ioarrays.rs` | same name (snake_case) | S1 | transfernodes is the stage-1 input path; the writers feed Mesh::output (writers land late stage 1) |
@@ -257,7 +257,7 @@ side changes; the function names are the stable key).
 | `triangle_check_delaunay` | triangle_api.c:172 | `api.rs` | Mesh::check_mesh, Mesh::check_delaunay | S1 shell | failure counts (usize), non-error semantics |
 | `triangle_mesh_create` | triangle_api.c:181 | `api.rs` | triangulate | S1 shell | entry point |
 | `triangle_mesh_load` | triangle_api.c:262 | `api.rs` | Mesh::load_mesh | S1 shell | |
-| `triangle_mesh_refine` | triangle_api.c:332 | `api.rs` | Mesh::refine | S1 shell | |
+| `triangle_mesh_refine` | triangle_api.c:332 | `api.rs` | Mesh::refine | S1 shell | wired in the refine PR (#39): the quality gate (triangle_api.c:347), the status funnel, and the m->edges writer inside the gate (triangle_api.c:354-355) |
 | `triangle_mesh_copy` | triangle_api.c:362 | `api.rs` | Mesh::output | S1 shell | |
 | `triangle_free` | triangle_api.c:430 | `-` | same name (snake_case) | - | dissolves: Drop/RAII (D11) |
 | `triangle_write_nodes` | triangle_api.c:437 | `io.rs` | same name (snake_case) | IO | serializes MeshOutput (formats pinned by the I/O-phase ticket) |

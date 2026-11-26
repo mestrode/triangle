@@ -12,10 +12,9 @@
 //! inlens at the transform.rs call sites, in the quality PR. The queue
 //! state (queuefront/queuetail/nextnonemptyq/firstnonemptyq) lives on
 //! mesh.rs since this PR; the badtriang row accessors live in slots.rs.
-//! dequeuebadtriang's consumer is enforcequality (refine.rs, a later
-//! stage); the blanket below silences that ahead-of-use dead_code and is
-//! removed when refine.rs lands.
-#![allow(dead_code)]
+//! dequeuebadtriang's consumer is enforcequality, which landed with
+//! refine.rs; the ahead-of-use dead_code blanket is removed with that
+//! PR (every item of this module now has its production consumer).
 
 use std::f64::consts::PI;
 
