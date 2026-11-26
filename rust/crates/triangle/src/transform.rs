@@ -9,26 +9,26 @@
 //! degree < 3) are mirrored as debug-only asserts because C's compiled-out
 //! variants exit via internalerror() on the same impossible states.
 //!
-//! Deferred call sites (quality.rs rows, see the linked issue): the
-//! encroachment and quality checks that the oracle build compiles are
-//!   - insertvertex's checkseg4encroach + inlens (triangle.c:3302-3307) and
-//!     its triflaps testtriangle (triangle.c:3447-3450),
+//! Restored call sites (the #28 restoration, landed with quality.rs): the
+//! encroachment and quality checks the oracle build compiles are
+//!   - insertvertex's checkseg4encroach + inlens (triangle.c:3302-3307)
+//!     and its triflaws testtriangle (triangle.c:3468-3473),
 //!   - triangulatepolygon's testtriangle of the committed triangle
-//!     (triangle.c:3598-3602),
+//!     (triangle.c:3608-3617),
 //!   - deletevertex's testtriangle of the relocated origin
-//!     (triangle.c:3695-3697).
+//!     (triangle.c:3705-3707).
 //!
-//! They land with their owning module (quality.rs per the mapping); each
-//! site carries a debug_assert so no caller can silently exercise the
-//! untested path. Until then ENCROACHINGVERTEX is unreachable and the
-//! runtime behavior equals the C CDT_ONLY build exactly.
+//! The C runtime behavior of these paths equals the CDT_ONLY build with
+//! segmentflaws/triflaws off; with the flags on it is the full C quality
+//! flow, bad-triangle queues included.
 //!
 //! C vertex pointers mirror to vertex row ids (D1); pool storage is touched
 //! only through slots.rs; OOM routes through the landed pool bridge.
 //!
 //! Stage-1 note: consumers are delaunay.rs/construct.rs/refine.rs/quality.rs
-//! and the api.rs entry points, none of which have landed; the blanket below
-//! silences the ahead-of-use dead_code and is removed as they land.
+//! and the api.rs entry points; api.rs wiring and quality.rs have landed,
+//! the remaining ioarrays/refine consumers carry their own notes; the
+//! blanket below silences ahead-of-use dead_code until they land.
 #![allow(dead_code)]
 
 use crate::handles::{decode, encode, sencode, Osub, Otri, DUMMY_SUB, DUMMY_TRI, NULL};
@@ -37,6 +37,7 @@ use crate::mesh::Mesh;
 use crate::options::Behavior;
 use crate::pool::Oom;
 use crate::predicates::{tri_counterclockwise, tri_incircle};
+use crate::quality::{checkseg4encroach, inlens, testtriangle};
 use crate::util::{interpolate, vertex_coords};
 
 /// C: enum insertvertexresult (triangle.h:105-106): SUCCESSFULVERTEX,
@@ -572,10 +573,9 @@ pub(crate) fn insertvertex(
     }
 
     // The insertion is successful by default, unless an encroached
-    //   subsegment is found.  (C's 'success' can only become
-    //   ENCROACHINGVERTEX inside the deferred quality.rs rows; it is a
-    //   constant until they land.)
-    let success = InsertVertexResult::SuccessfulVertex;
+    //   subsegment is found (C's 'success' can only become
+    //   ENCROACHINGVERTEX at the subsegment check of the flip loop).
+    let mut success = InsertVertexResult::SuccessfulVertex;
     // Circle around the newly inserted vertex, checking each edge opposite
     //   it for the Delaunay property.  Non-Delaunay edges are flipped.
     //   'horiz' is always the edge being checked.  'first' marks where to
@@ -604,16 +604,24 @@ pub(crate) fn insertvertex(
             if checksubseg.ss != DUMMY_SUB {
                 // The edge is a subsegment and cannot be flipped.
                 doflip = false;
-                // C (triangle.c:3302-3307, #ifndef CDT_ONLY) scores the
-                //   encroachment here (sorg/sdest + checkseg4encroach +
-                //   inlens, setting success = ENCROACHINGVERTEX); those
-                //   rows belong to quality.rs and land with that module
-                //   (see the module doc). Until then no caller may exercise
-                //   this branch.
-                debug_assert!(
-                    !segmentflaws,
-                    "the encroachment scoring lands with quality.rs"
-                );
+                if segmentflaws {
+                    // Does the new vertex encroach upon this subsegment?
+                    //   A vertex on the far side may encroach upon it
+                    //   too; that one was there before, and is left for
+                    //   the subsegment queue.
+                    let subsegorg = m.sorg(checksubseg);
+                    let subsegdest = m.sdest(checksubseg);
+                    if checkseg4encroach(m, b, checksubseg)? != 0
+                        && inlens(
+                            b,
+                            vertex_coords(m, subsegorg),
+                            vertex_coords(m, subsegdest),
+                            newvertex_v,
+                        )
+                    {
+                        success = InsertVertexResult::EncroachingVertex;
+                    }
+                }
             }
         }
 
@@ -770,12 +778,10 @@ pub(crate) fn insertvertex(
         }
         if !doflip {
             // The handle 'horiz' is accepted as locally Delaunay.
-            // C (triangle.c:3447-3450, #ifndef CDT_ONLY) checks the
-            //   triangle 'horiz' for quality here (testtriangle) when
-            //   'triflaws' is set; that row belongs to quality.rs and lands
-            //   with that module (see the module doc). Until then no caller
-            //   may exercise this branch.
-            debug_assert!(!triflaws, "the quality test lands with quality.rs");
+            if triflaws {
+                // Check the triangle 'horiz' for quality.
+                testtriangle(m, b, horiz)?;
+            }
             // Look for the next edge around the newly inserted vertex.
             horiz.lnextself();
             let testtri = m.sym(horiz);
@@ -805,9 +811,11 @@ pub(crate) fn insertvertex(
 /// performed, resulting in a fan of one triangle; if not, the final flip is
 /// not performed, resulting in a fan of two triangles. 'triflaws' is a
 /// flag that determines whether the new triangles should be tested for
-/// quality (the test lands with quality.rs; debug-only asserted). On
-/// completion 'lastedge' is the last remaining triangle, or the leftmost
-/// of the last two. (C comments preserved in the body.)
+/// quality. On completion 'lastedge' is the last remaining triangle, or
+/// the leftmost of the last two. (C comments preserved in the body.)
+///
+/// Returns Oom exactly when a triflaws quality test reaches the
+/// bad-triangle pool bridge (C cannot fail there).
 pub(crate) fn triangulatepolygon(
     m: &mut Mesh,
     b: &Behavior,
@@ -816,7 +824,7 @@ pub(crate) fn triangulatepolygon(
     edgecount: i32,
     doflip: bool,
     triflaws: bool,
-) {
+) -> Result<(), Oom> {
     // Identify the base vertices.
     let leftbasevertex = m.apex(*lastedge);
     let rightbasevertex = m.dest(*firstedge);
@@ -855,7 +863,7 @@ pub(crate) fn triangulatepolygon(
             bestnumber + 1,
             true,
             triflaws,
-        );
+        )?;
     }
     if bestnumber < edgecount - 2 {
         // Recursively triangulate the smaller polygon on the left.
@@ -868,7 +876,7 @@ pub(crate) fn triangulatepolygon(
             edgecount - bestnumber,
             true,
             triflaws,
-        );
+        )?;
         // Find 'besttri' again; it may have been lost to edge flips.
         besttri = m.sym(tempedge);
     }
@@ -876,16 +884,14 @@ pub(crate) fn triangulatepolygon(
         // Do one final edge flip.
         flip(m, b, besttri);
         if triflaws {
-            // C (triangle.c:3598-3602, #ifndef CDT_ONLY) checks the quality
-            //   of the newly committed triangle here (testtriangle); that
-            //   row belongs to quality.rs and lands with that module (see
-            //   the module doc). Until then no caller may exercise this
-            //   branch.
-            debug_assert!(!triflaws, "the quality test lands with quality.rs");
+            // Check the quality of the newly committed triangle.
+            let testtri = m.sym(besttri);
+            testtriangle(m, b, testtri)?;
         }
     }
     // Return the base triangle.
     *lastedge = besttri;
+    Ok(())
 }
 
 /// C: deletevertex (triangle.c:3638-3702). Delete a vertex from a Delaunay
@@ -893,9 +899,14 @@ pub(crate) fn triangulatepolygon(
 /// origin of 'deltri' is deleted. The union of the triangles adjacent to
 /// this vertex is a polygon, for which the Delaunay triangulation is found.
 /// Two triangles are removed from the mesh. Only interior vertices that do
-/// not lie on segments or boundaries may be deleted. (C comments preserved
-/// in the body.)
-pub(crate) fn deletevertex(m: &mut Mesh, b: &Behavior, deltri: &mut Otri) {
+/// not lie on a subsegment are candidates for deletion.
+///
+/// Returns Oom exactly when a quality test reaches the bad-triangle pool
+/// bridge (C cannot fail there).
+///
+/// The quality flank (the triflaws triangulatepolygon argument, the
+/// post-relocation testtriangle) is the #28 restoration.
+pub(crate) fn deletevertex(m: &mut Mesh, b: &Behavior, deltri: &mut Otri) -> Result<(), Oom> {
     let delvertex = m.org(*deltri);
     // C: vertexdealloc (triangle.c:1262-1271).
     m.vx_dealloc(delvertex);
@@ -931,7 +942,7 @@ pub(crate) fn deletevertex(m: &mut Mesh, b: &Behavior, deltri: &mut Otri) {
             edgecount,
             false,
             b.nobisect == 0,
-        );
+        )?;
     }
     // Splice out two triangles.
     let deltriright = (*deltri).lprev();
@@ -953,17 +964,15 @@ pub(crate) fn deletevertex(m: &mut Mesh, b: &Behavior, deltri: &mut Otri) {
     // Set the new origin of 'deltri' and check its quality.
     let neworg = m.org(lefttri);
     m.setorg(*deltri, neworg);
-    // C (triangle.c:3695-3697, #ifndef CDT_ONLY) tests the relocated
-    //   triangle for quality here (testtriangle) whenever b->nobisect is
-    //   zero; that row belongs to quality.rs and lands with that module
-    //   (see the module doc). Until then no caller may exercise this
-    //   branch.
-    debug_assert!(b.nobisect != 0, "the quality test lands with quality.rs");
+    if b.nobisect == 0 {
+        testtriangle(m, b, *deltri)?;
+    }
 
     // Delete the two spliced-out triangles.
     // C: triangledealloc (triangle.c:1196-1202).
     m.tri_dealloc(lefttri.tri);
     m.tri_dealloc(righttri.tri);
+    Ok(())
 }
 
 /// C: undovertex (triangle.c:3730-3818). Undo the most recent vertex
@@ -1444,7 +1453,7 @@ mod tests {
         // (triangulatepolygon into a fan of two, then splice).
         let mut m = mesh(true, 0, 0);
         let mut b = behavior(true);
-        b.nobisect = 1; // -Y: the quality.rs flanks stay deferred
+        b.nobisect = 1; // -Y: the quality flank of deletevertex is off
         let center = vxy(&mut m, 0.0, 0.0);
         let outer = [
             vxy(&mut m, 1.0, 0.0),
@@ -1476,7 +1485,7 @@ mod tests {
             tri: tris[0].tri,
             orient: 0,
         };
-        deletevertex(&mut m, &b, &mut deltri);
+        deletevertex(&mut m, &b, &mut deltri).expect("deletevertex");
         // two triangles were spliced out
         assert_eq!(m.triangles.live_count(), 2);
         // the deleted vertex is dead
@@ -1494,6 +1503,179 @@ mod tests {
                 assert_ne!(m.apex(h), center, "center must be gone from apex");
             }
         }
+    }
+
+    /// A behavior mirroring C's '-pq20' quality flows (the lens and
+    /// angle thresholds need the derived goodangle), computed through
+    /// the landed behavior_update exactly like a parsed command line.
+    fn behavior_q(poly: bool, minangle: f64) -> Behavior {
+        let mut b = behavior(poly);
+        b.quality = true;
+        b.minangle = minangle;
+        b.behavior_update();
+        b
+    }
+
+    /// The #28 restoration, triangle.c:3302-3307: inserting a vertex
+    /// inside a triangle whose opposite edge carries a subsegment runs
+    /// checkseg4encroach on that subsegment and inlens on the new
+    /// vertex; with both inside the lens the insertion reports
+    /// ENCROACHINGVERTEX and the encroached-subsegment row is enqueued
+    /// (hand-derived: at q20 the lens threshold is
+    /// cos^2(40)*1.0201 = 0.5987 and the vertex (1, 0.1) scores
+    /// dot^2 = 0.9801 above it; the far-side apex (1, -1) sits on the
+    /// lens boundary circle - dot = 0.0 - and does not encroach).
+    #[test]
+    fn insertvertex_encroaching_vertex_reports_and_enqueues() {
+        let mut m = mesh(true, 0, 0);
+        m.checksegments = true;
+        let b = behavior_q(true, 20.0);
+        let a = vxy(&mut m, 0.0, 0.0);
+        let e = vxy(&mut m, 2.0, 0.0);
+        let c = vxy(&mut m, 1.0, 3.0);
+        let d = vxy(&mut m, 1.0, -1.0);
+        let (t1, _t2) = pair(&mut m, true, a, e, c, d);
+        let shared = Otri {
+            tri: t1.tri,
+            orient: 0,
+        };
+        insertsubseg(&mut m, &b, shared, 0).expect("insertsubseg");
+        assert_eq!(m.badsubsegs.live_count(), 0);
+
+        let x = vxy(&mut m, 1.0, 0.1);
+        let mut searchtri = Otri {
+            tri: t1.tri,
+            orient: 0,
+        };
+        let res = insertvertex(&mut m, &b, x, &mut searchtri, None, true, false, false)
+            .expect("insertvertex");
+        assert_eq!(res, InsertVertexResult::EncroachingVertex);
+        // the encroached subsegment row (encroached == 1: the near side
+        // only, so the row carries the subsegment's own orientation)
+        assert_eq!(m.badsubsegs.live_count(), 1);
+        // the (a, e) edge's triangle kept its subsegment bond through
+        // the insertion; the enqueued row is that subsegment.
+        let sub = m.tspivot(Otri {
+            tri: t1.tri,
+            orient: 0,
+        });
+        assert_ne!(sub.ss, DUMMY_SUB);
+        assert_eq!(m.bad_sub_seg_enc(1), sencode(sub));
+        assert_eq!(m.bad_sub_seg_org(1), m.sorg(sub));
+        assert_eq!(m.bad_sub_seg_dest(1), m.sdest(sub));
+    }
+
+    /// The #28 restoration, triangle.c:3468-3473 (and the encroachment
+    /// site staying composed): with triflaws set, every edge accepted
+    /// without a flip (the subsegmented (a, e), the two hull edges)
+    /// runs testtriangle on its triangle; all three new triangles are
+    /// skinny at q20 (hand-derived cossquares: (a, e, x) scores
+    /// 4/(4*1.01) = 0.9901, (e, c, x) and (c, a, x) score
+    /// 75.69/84.1 = 0.8999, all above cos^2(20) = 0.883), so three
+    /// bad-triangle rows land, each keyed by the squared shortest edge
+    /// 1.01.
+    #[test]
+    fn insertvertex_with_triflaws_tests_the_committed_triangles() {
+        let mut m = mesh(true, 0, 0);
+        m.checksegments = true;
+        let b = behavior_q(true, 20.0);
+        let a = vxy(&mut m, 0.0, 0.0);
+        let e = vxy(&mut m, 2.0, 0.0);
+        let c = vxy(&mut m, 1.0, 3.0);
+        let d = vxy(&mut m, 1.0, -1.0);
+        let (t1, _t2) = pair(&mut m, true, a, e, c, d);
+        let shared = Otri {
+            tri: t1.tri,
+            orient: 0,
+        };
+        insertsubseg(&mut m, &b, shared, 0).expect("insertsubseg");
+
+        let x = vxy(&mut m, 1.0, 0.1);
+        let mut searchtri = Otri {
+            tri: t1.tri,
+            orient: 0,
+        };
+        let res = insertvertex(&mut m, &b, x, &mut searchtri, None, false, true, false)
+            .expect("insertvertex");
+        // no segmentflaws: the insertion reports success; only the
+        // quality tests ran.
+        assert_eq!(res, InsertVertexResult::SuccessfulVertex);
+        assert_eq!(m.badsubsegs.live_count(), 0);
+        assert_eq!(m.badtriangles.live_count(), 3);
+        for row in 1..=3u32 {
+            assert_eq!(m.bad_tri_key(row), 1.01, "row {}", row);
+            let poor = decode(m.bad_tri_poortri(row));
+            assert!(
+                !m.deadtri(poor.tri),
+                "row {} decodes to a live triangle",
+                row
+            );
+            // each row's triangle has the new vertex as a corner
+            let (o, ds, ap) = (m.org(poor), m.dest(poor), m.apex(poor));
+            assert!(
+                o == x || ds == x || ap == x,
+                "row {} must reference the inserted vertex",
+                row
+            );
+        }
+    }
+
+    /// The #28 restoration, triangle.c:3705-3707 (plus the
+    /// triangulatepolygon flip site at 3608-3617, reached because the
+    /// recursion hard-codes doflip = 1 at C 3597/3601 - only
+    /// deletevertex's top call passes doflip = 0): deleting the center
+    /// of a unit-distance square fan with nobisect == 0 tests both the
+    /// triangle across the recursive flip and the relocated deltri.
+    /// All fan triangles and both diamond halves are 45-45-90; at q50
+    /// (goodangle cos^2(50) = 0.4132) the 45-degree minimum scores
+    /// cossquare 0.5 above it, so exactly two rows land: the
+    /// flip-site triangle first, then the relocated deltri itself.
+    #[test]
+    fn deletevertex_with_nobisect_zero_tests_the_relocated_triangle() {
+        // The same square fan the retriangulation test uses.
+        let mut m = mesh(true, 0, 0);
+        let b = behavior_q(true, 50.0);
+        assert_eq!(b.nobisect, 0, "the default behavior runs the flank");
+        let center = vxy(&mut m, 0.0, 0.0);
+        let outer = [
+            vxy(&mut m, 1.0, 0.0),
+            vxy(&mut m, 0.0, 1.0),
+            vxy(&mut m, -1.0, 0.0),
+            vxy(&mut m, 0.0, -1.0),
+        ];
+        let n = 4;
+        let mut tris = vec![];
+        for k in 0..n {
+            let t = m.maketriangle(true, false).expect("tri");
+            m.setorg(t, center);
+            m.setdest(t, outer[k]);
+            m.setapex(t, outer[(k + 1) % n]);
+            tris.push(t);
+        }
+        for k in 0..n {
+            let a = tris[k].lprev();
+            let hb = Otri {
+                tri: tris[(k + 1) % n].tri,
+                orient: 0,
+            };
+            m.bond(a, hb);
+        }
+
+        let mut deltri = Otri {
+            tri: tris[0].tri,
+            orient: 0,
+        };
+        assert_eq!(m.badtriangles.live_count(), 0);
+        deletevertex(&mut m, &b, &mut deltri).expect("deletevertex");
+        assert_eq!(m.badtriangles.live_count(), 2);
+        // both tested triangles are diamond halves, keyed by the
+        // squared shortest edge (edges sqrt(2), sqrt(2), 2 squared
+        // give 2.0 as the minimum).
+        assert_eq!(m.bad_tri_key(1), 2.0);
+        assert_eq!(m.bad_tri_key(2), 2.0);
+        // the second row is the relocated triangle itself (the
+        // 3705-3707 site; the first is the recursive flip site).
+        assert_eq!(m.bad_tri_poortri(2), encode(deltri));
     }
 
     #[test]
