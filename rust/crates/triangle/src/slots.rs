@@ -465,6 +465,26 @@ impl Mesh {
         self.set_tri_slot(o.tri, o.orient as usize + 3, v as u64);
     }
 
+    /// The full-word org-slot read of the sweepline event pun (delaunay.rs
+    /// part 2): C stores a `struct event *` in the org slot of front
+    /// handles (setorg, triangle.c:5388/5403) and reads it back with the
+    /// plain org macro, reinterpreted as an event pointer, in exactly one
+    /// place: check4deadevent (triangle.c:5008). D1 replaces the pointer
+    /// with a tagged full-width word (bit 32 above the 32-bit id space);
+    /// this reader returns the slot raw, the single sanctioned pun site.
+    #[inline]
+    pub(crate) fn orgword(&self, o: Otri) -> u64 {
+        self.tri_slot(o.tri, PLUS1MOD3[o.orient as usize] as usize + 3)
+    }
+
+    /// C: setorg(checktri, (VOID *) newevent) of the event pun, and the
+    /// NULL clear of check4deadevent (triangle.c:5388, 5403, 5016): the
+    /// full-width store through the same slot as org/setorg.
+    #[inline]
+    pub(crate) fn setorgword(&mut self, o: Otri, w: u64) {
+        self.set_tri_slot(o.tri, PLUS1MOD3[o.orient as usize] as usize + 3, w);
+    }
+
     /// C bond (triangle.h:871): bond two triangles together at the
     /// respective oriented handles.
     pub(crate) fn bond(&mut self, a: Otri, b: Otri) {
@@ -803,6 +823,73 @@ impl Mesh {
     #[cfg(test)]
     pub(crate) fn bad_sub_seg_dest(&self, id: u32) -> u32 {
         self.badsubsegs.word(id, 2) as u32
+    }
+
+    // -----------------------------------------------------------------------
+    // Splay-node rows (C struct splaynode, triangle.h:323-326:
+    // { struct otri keyedge; vertex keydest; struct splaynode *lchild,
+    //   *rchild; }, 5 words: keyedge at word 0, keydest at word 1, lchild
+    // at word 2, rchild at word 3, word 4 spare-zero). The sweepline
+    // front's splay tree (delaunay.rs part 2) uses exactly these rows.
+    // D4: the C NULL child pointers mirror as the null row id 0.
+    // -----------------------------------------------------------------------
+
+    /// C: poolalloc(&m->splaynodes) (triangle.c:5139): the fresh splaynode
+    /// row id.
+    pub(crate) fn splay_alloc(&mut self) -> Result<u32, Oom> {
+        self.splaynodes.alloc()
+    }
+
+    /// C: pooldealloc(&m->splaynodes, splaytree) (triangle.c:5105): the
+    /// keydest-mismatch eviction of the splay tree. C's poolinit at
+    /// triangle.c:5234 and pooldeinit at triangle.c:5408 dissolve: the
+    /// pool is eagerly inited by Mesh::new (identical geometry) and the
+    /// deinit is a no-op, keeping maxitems readable after the run exactly
+    /// like C's stale-pool statistics reads (triangle_api.c).
+    pub(crate) fn splay_dealloc(&mut self, id: u32) {
+        self.splaynodes.dealloc(id);
+    }
+
+    /// C: splaytree->keyedge (triangle.h:324): the stored encode()d front
+    /// handle at word 0; the caller decodes through handles.rs.
+    pub(crate) fn splay_keyedge(&self, id: u32) -> Otri {
+        decode(self.splaynodes.word(id, 0))
+    }
+
+    /// C: newsplaynode->keyedge = *newkey (triangle.c:5140).
+    pub(crate) fn set_splay_keyedge(&mut self, id: u32, key: Otri) {
+        self.splaynodes.set_word(id, 0, encode(key));
+    }
+
+    /// C: splaytree->keydest (triangle.h:325): the vertex id (D1) of the
+    /// keyedge destination, at word 1.
+    pub(crate) fn splay_keydest(&self, id: u32) -> u32 {
+        self.splaynodes.word(id, 1) as u32
+    }
+
+    /// C: newsplaynode->keydest = dest(*newkey) (triangle.c:5141).
+    pub(crate) fn set_splay_keydest(&mut self, id: u32, keydest: u32) {
+        self.splaynodes.set_word(id, 1, keydest as u64);
+    }
+
+    /// C: splaytree->lchild (word 2; the null id 0 is C NULL).
+    pub(crate) fn splay_lchild(&self, id: u32) -> u32 {
+        self.splaynodes.word(id, 2) as u32
+    }
+
+    /// C: splaytree->lchild = ... (the splay rotations).
+    pub(crate) fn set_splay_lchild(&mut self, id: u32, child: u32) {
+        self.splaynodes.set_word(id, 2, child as u64);
+    }
+
+    /// C: splaytree->rchild (word 3; the null id 0 is C NULL).
+    pub(crate) fn splay_rchild(&self, id: u32) -> u32 {
+        self.splaynodes.word(id, 3) as u32
+    }
+
+    /// C: splaytree->rchild = ... (the splay rotations).
+    pub(crate) fn set_splay_rchild(&mut self, id: u32, child: u32) {
+        self.splaynodes.set_word(id, 3, child as u64);
     }
 }
 
@@ -1158,5 +1245,61 @@ mod tests {
         assert_eq!(m.tri_slot(t, 8), 0.03125f64.to_bits());
         assert_eq!(m.tri_attribute(t, 1), -7.5);
         assert_eq!(m.tri_areabound(t), 0.03125);
+    }
+
+    #[test]
+    fn orgword_roundtrips_the_event_pun_through_the_same_slot() {
+        // C stores a `struct event *` through setorg's slot (triangle.c:
+        // 5388/5403) and reads it back reinterpreted (5008). The port's
+        // tagged word rides the same slot, full-width; a plain setorg
+        // vertex id must stay visible through orgword as the bare id.
+        let mut m = mesh(false);
+        let t = m.tri_alloc().expect("alloc");
+        let o = Otri { tri: t, orient: 1 };
+        assert_eq!(m.orgword(o), 0, "a fresh row is the C NULL pun");
+        let word = (1u64 << 32) | 0x1234_5678;
+        m.setorgword(o, word);
+        assert_eq!(m.orgword(o), word);
+        assert_eq!(
+            m.org(o),
+            0x1234_5678,
+            "the low 32 bits of the pun mesh with the vertex-id view"
+        );
+        // the NULL clear of check4deadevent (triangle.c:5016)
+        m.setorgword(o, 0);
+        assert_eq!(m.orgword(o), 0);
+        // a plain setorg store is visible through orgword as the bare id
+        m.setorg(o, 42);
+        assert_eq!(m.orgword(o), 42);
+    }
+
+    #[test]
+    fn splaynode_rows_roundtrip_the_five_word_shape() {
+        // C struct splaynode (triangle.h:323-326): keyedge (word 0),
+        // keydest (word 1), lchild (word 2), rchild (word 3). Word 4 is
+        // spare-zero; the null id 0 mirrors C NULL children.
+        let mut m = mesh(false);
+        let live0 = m.splaynodes.live_count();
+        let n = m.splay_alloc().expect("splaynode alloc");
+        assert_eq!(m.splaynodes.live_count(), live0 + 1);
+        let key = Otri { tri: 7, orient: 2 };
+        m.set_splay_keyedge(n, key);
+        m.set_splay_keydest(n, 9);
+        m.set_splay_lchild(n, 0);
+        m.set_splay_rchild(n, n);
+        assert_eq!(m.splay_keyedge(n), key);
+        assert_eq!(
+            m.splaynodes.word(n, 0),
+            encode(key),
+            "the stored word is the raw encode() like C"
+        );
+        assert_eq!(m.splay_keydest(n), 9);
+        assert_eq!(m.splay_lchild(n), 0);
+        assert_eq!(m.splay_rchild(n), n);
+        assert_eq!(m.splaynodes.word(n, 4), 0, "word 4 stays spare-zero");
+        m.splay_dealloc(n);
+        assert_eq!(m.splaynodes.live_count(), live0);
+        // the dead row comes back first (C poolalloc's LIFO dead stack)
+        assert_eq!(m.splay_alloc().expect("realloc"), n);
     }
 }
