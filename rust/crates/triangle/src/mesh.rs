@@ -14,7 +14,11 @@
 //! NOT landed (their C rows arrive with the modules that use them; the
 //! chokepoint primitives they reduce to are already in slots.rs):
 //! triangledealloc, subsegdealloc, vertexdealloc, triangledeinit
-//! (triangle.c:1196-1408). vertextraverse (triangle.c:1276) landed with
+//! (triangle.c:1196-1408). When triangledeinit lands, its acute free
+//! (trifree(m->acute_mem) and the NULL store, triangle.c:1395-1396)
+//! dissolves into the Drop of the owned acute_mem field (D23, the
+//! acutepool row of docs/deviation-register.md).
+//! vertextraverse (triangle.c:1276) landed with
 //! the delaunay part-1 PR (the divconqdelaunay consumer), triangletraverse
 //! and getvertex with their consumers, and badsubsegdealloc /
 //! badsubsegtraverse (triangle.c:1298-1304, 1316-1327) with refine.rs
@@ -195,6 +199,19 @@ pub(crate) struct Mesh {
     /// triangle of location (struct otri in C, where tri can be NULL;
     /// Option here).
     pub(crate) recenttri: Option<Otri>,
+    /// C m->acute_mem (triangle.h:496, struct acutepool*): the aCute
+    /// scratch. Deviation D23 (docs/deviation-register.md): C trimallocs
+    /// the struct (acute.c:22-43) and hangs it off the mesh inside
+    /// triangleinit (NULL store at triangle.c:1507) with the real
+    /// acutepool_init(20) at the enforcequality site (triangle.c:7538);
+    /// the port owns the eight typed Vec<f64> buffers directly
+    /// (crate::acute::AcutePool) behind the feature, eagerly constructed
+    /// at this Mesh::new site with exactly the acutepool_init(20)
+    /// capacities of acute.c:26-40. The two-step free of triangledeinit
+    /// (trifree(m->acute_mem), triangle.c:1395, and the NULL store,
+    /// triangle.c:1396) dissolves into Drop of the owned field.
+    #[cfg(feature = "acute")]
+    pub(crate) acute_mem: crate::acute::AcutePool,
 
     // -----------------------------------------------------------------
     // The bad-triangle queues (C triangle.h:502-505, the mesh fields the
@@ -356,6 +373,16 @@ impl Mesh {
             queuetail: [NULL; 4096],
             nextnonemptyq: [-1; 4096],
             firstnonemptyq: -1,
+            // The aCute scratch pool (C m->acute_mem, triangle.h:496):
+            // NULL inside triangleinit (triangle.c:1507), really
+            // allocated by acutepool_init(20) at the enforcequality site
+            // (triangle.c:7538). D23: the port constructs the owned
+            // AcutePool eagerly here, with exactly C's initial capacities
+            // (acute.c:26-40 at n = 20: 500 for initialpoly and the three
+            // point buffers, 2n for the petal buffers, 2n*20+40 for
+            // wedges).
+            #[cfg(feature = "acute")]
+            acute_mem: crate::acute::AcutePool::new(20),
         };
         m.initializevertexpool(b.poly)?;
         m.initializetrisubpools(
