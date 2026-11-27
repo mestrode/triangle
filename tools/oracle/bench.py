@@ -29,6 +29,13 @@ TOL is deliberately not hardcoded: it is the binding tolerance set in ticket
 #11 from the measured build-server noise floor, and it should be re-derived
 (run the noise probe) whenever the gate machine changes.
 
+Report totals (issue #64): besides the overall fields, the report's totals
+carry a per-size-class split ("by_size") - for every size class present in
+the timed rows, the sum of medians per side, the total ratio, the geomean of
+the class's per-run ratios, and the class's worst ratio with its case.
+Report-only addition: measurement behavior, run counts, interleaving and
+all existing fields are unchanged.
+
 Noise-floor probe: point --candidate at the pinned oracle itself. The ratio
 distribution around 1.0 is the machine's measurement noise; ticket #11
 derived the tolerance band from exactly this.
@@ -260,6 +267,26 @@ def main():
     log("[bench] worst per-run ratio: %.3f (%s/%s)"
         % (worst["ratio"], worst["case"], worst["family"]))
 
+    # Per-size-class totals (issue #64, report-only): for every size class
+    # present in the timed rows, the same fields as the overall totals,
+    # computed over that class's rows. The overall fields, the measurement
+    # itself, and all existing report fields are unchanged; existing reports
+    # are not rewritten.
+    by_size = {}
+    for size in sorted(set(r["size"] for r in rows)):
+        sub = [r for r in rows if r["size"] == size]
+        sub_base = sum(r["oracle_median_s"] for r in sub)
+        sub_cand = sum(r["candidate_median_s"] for r in sub)
+        sub_worst = max(sub, key=lambda r: r["ratio"])
+        by_size[size] = {
+            "oracle_sum_medians_s": sub_base,
+            "candidate_sum_medians_s": sub_cand,
+            "total_ratio": sub_cand / sub_base,
+            "geomean_ratio": geomean([r["ratio"] for r in sub]),
+            "worst_ratio": sub_worst["ratio"],
+            "worst_case": "%s/%s" % (sub_worst["case"], sub_worst["family"]),
+        }
+
     report = {
         "bench_version": 1,
         "ticket": "mestrode/triangle#11",
@@ -279,6 +306,7 @@ def main():
             "geomean_ratio": gm,
             "worst_ratio": worst["ratio"],
             "worst_case": "%s/%s" % (worst["case"], worst["family"]),
+            "by_size": by_size,
         },
     }
     os.makedirs(os.path.dirname(args.report), exist_ok=True)
