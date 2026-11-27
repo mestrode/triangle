@@ -7,28 +7,28 @@
 //! docs/function-mapping.md.
 //!
 //! Stage-1 landing state: complete. The rows landed in two steps:
-//! makevertexmap with its construct.rs consumer (PR #35), the rest,
+//! makevertexmap with its algorithm/segments.rs consumer (PR #35), the rest,
 //! together with the #28 restoration of testtriangle/checkseg4encroach/
-//! inlens at the transform.rs call sites, in the quality PR. The queue
+//! inlens at the algorithm/transform.rs call sites, in the quality PR. The queue
 //! state (queuefront/queuetail/nextnonemptyq/firstnonemptyq) lives on
-//! mesh.rs since this PR; the badtriang row accessors live in slots.rs.
+//! mesh/mod.rs since this PR; the badtriang row accessors live in mesh/slots.rs.
 //! dequeuebadtriang's consumer is enforcequality, which landed with
-//! refine.rs; the ahead-of-use dead_code blanket is removed with that
+//! algorithm/refine.rs; the ahead-of-use dead_code blanket is removed with that
 //! PR (every item of this module now has its production consumer).
 
 use std::f64::consts::PI;
 
 use crate::api::Quality;
-use crate::handles::{
+use crate::mesh::handles::{
     encode, sencode, Osub, Otri, DUMMY_SUB, DUMMY_TRI, MINUS1MOD3, NULL, PLUS1MOD3,
 };
 
+use crate::mesh::pool::Oom;
+use crate::mesh::slots::SEGMENTVERTEX;
+use crate::mesh::util::vertex_coords;
 use crate::mesh::Mesh;
 use crate::options::{Behavior, VertexSample};
-use crate::pool::Oom;
 use crate::predicates::{tri_counterclockwise, tri_nonregular, Vertex};
-use crate::slots::SEGMENTVERTEX;
-use crate::util::vertex_coords;
 
 /// C SQUAREROOTTWO (triangle_config.h:163), the full-precision literal.
 #[allow(clippy::approx_constant)] // C-parity: the C macro carries this
@@ -823,8 +823,8 @@ pub(crate) fn quality_statistics(m: &mut Mesh, b: &Behavior, q: &mut Quality) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::delaunay::delaunay;
-    use crate::handles::decode;
+    use crate::algorithm::delaunay::delaunay;
+    use crate::mesh::handles::decode;
 
     /// A hand-usable Behavior: C's parsecommandline defaults plus the
     /// given minangle (which behavior_update turns into goodangle).
@@ -949,7 +949,7 @@ mod tests {
         assert_eq!(m.firstnonemptyq, -1);
         assert!(dequeuebadtriang(&mut m).is_none());
         // dequeued rows stay allocated (deallocation belongs to the
-        // refine.rs drainers).
+        // algorithm/refine.rs drainers).
         assert_eq!(m.badtriangles.live_count(), 3);
         assert_eq!(m.bad_tri_next(d2), d3, "the FIFO link survives the pop");
     }
@@ -1058,7 +1058,7 @@ mod tests {
             tri: t1.tri,
             orient: 0,
         };
-        crate::transform::insertsubseg(m, &b, shared, 0).expect("insertsubseg");
+        crate::algorithm::transform::insertsubseg(m, &b, shared, 0).expect("insertsubseg");
         m.tspivot(shared)
     }
 
@@ -1132,7 +1132,7 @@ mod tests {
         m.setorg(t, a);
         m.setdest(t, e);
         m.setapex(t, apex);
-        crate::transform::insertsubseg(
+        crate::algorithm::transform::insertsubseg(
             &mut m,
             &b,
             Otri {
@@ -1166,7 +1166,7 @@ mod tests {
         m.setorg(t, a);
         m.setdest(t, e);
         m.setapex(t, apex);
-        crate::transform::insertsubseg(
+        crate::algorithm::transform::insertsubseg(
             &mut m,
             &b,
             Otri {

@@ -16,7 +16,7 @@
 //! getWedgeIntersectionWithoutMaxAngle/getWedgeIntersectionWithMaxAngle,
 //! polygonAngles/testPolygonAngle/testTriangleAngle and
 //! minDistanceToNeigbor. Stage-1 acute C (#43) lands the
-//! findNewSPLocation family and lifts refine.rs's D16 funnel marker:
+//! findNewSPLocation family and lifts algorithm/refine.rs's D16 funnel marker:
 //! the dispatcher and its two variants consume the landed substrate,
 //! splittriangle calls the family live at triangle.c:7437, and the
 //! ahead-of-use dead_code allows of the substrate retire.
@@ -24,19 +24,19 @@
 //! Module-level C state mirrored here: compConst (acute.c:81, the "for
 //! comparing real numbers" epsilon); PI is C's triangle_config.h:159
 //! macro, mirrored as std::f64::consts::PI exactly like options.rs and
-//! quality.rs.
+//! algorithm/quality.rs.
 
 use std::f64::consts::PI; // C: #define PI (triangle_config.h:159)
 
-use crate::handles::{Otri, DUMMY_TRI, NULL};
-use crate::locate::{preciselocate, LocateResult};
+use crate::algorithm::locate::{preciselocate, LocateResult};
+use crate::algorithm::transform::deletevertex;
+use crate::mesh::handles::{Otri, DUMMY_TRI, NULL};
+use crate::mesh::pool::Oom;
+use crate::mesh::slots::FREEVERTEX;
+use crate::mesh::util::vertex_coords;
 use crate::mesh::Mesh;
 use crate::options::Behavior;
-use crate::pool::Oom;
 use crate::predicates::{tri_counterclockwise, tri_findcircumcenter};
-use crate::slots::FREEVERTEX;
-use crate::transform::deletevertex;
-use crate::util::vertex_coords;
 
 // -------------------------------------------------------------------
 // ACUTE MEMORY POOL (the acute.c:20 banner, the block acute.c:18-78)
@@ -66,9 +66,9 @@ use crate::util::vertex_coords;
 /// called where C calls it (acute.c:2276, 2522). C's acutepool_deinit
 /// (acute.c:64-76) and the trifree that follows it in triangledeinit
 /// (triangle.c:1395-1396) dissolve into Drop of the owned field
-/// (D11's RAII); triangledeinit itself is not landed yet (the mesh.rs
+/// (D11's RAII); triangledeinit itself is not landed yet (the mesh/mod.rs
 /// module doc's NOT-landed list), so the dissolution is documented
-/// there and at the mesh.rs field.
+/// there and at the mesh/mod.rs field.
 #[allow(clippy::struct_field_names)] // C-parity: the C struct's field
                                      // names petalx/petaly/petalr and points_p/points_q/points_r
                                      // (private/acute.h:6-19, the mallocs at acute.c:27-40)
@@ -5254,7 +5254,7 @@ pub(crate) fn pointBetweenPoints(
 /// C: testTriangleAngle (acute.c:3493-3577). Given three coordinates,
 /// test the triangle against both quality bounds: the squared cosine
 /// of the smallest angle against b->goodangle (C's testtriangle
-/// shape, the same goodangle the quality.rs lens reads) and, when a
+/// shape, the same goodangle the algorithm/quality.rs lens reads) and, when a
 /// maximum angle is set (b->maxangle != 0.00, acute.c:3572), the
 /// cosine of the largest angle against b->maxgoodangle; returns 1 for
 /// a bad triangle, 0 for a good one. C's minedge/maxedge stores
@@ -5449,7 +5449,7 @@ pub(crate) fn minDistanceToNeigbor(
         /* Orient `searchtri' to fit the preconditions of calling preciselocate(). */
         // C: ahead = tri_counterclockwise(m, b, torg, tdest, newvertex); (acute.c:3617).
         // C's vertex pointers map to coordinate rows through vertex_coords,
-        // the delaunay.rs convention for the predicates' REAL* vertices.
+        // the algorithm/delaunay.rs convention for the predicates' REAL* vertices.
         let ahead = tri_counterclockwise(
             m,
             b,
@@ -5781,10 +5781,10 @@ mod tests {
     // relocation, all pinned by construction (hand-derived geometry,
     // exact f64 arithmetic on exactly representable inputs), never by
     // running the C oracle. The fixtures go through the landed
-    // mesh-local layer exactly like the refine.rs tests.
+    // mesh-local layer exactly like the algorithm/refine.rs tests.
     // -----------------------------------------------------------------
 
-    /// -q MINANGLE through behavior_update, exactly like refine.rs's
+    /// -q MINANGLE through behavior_update, exactly like algorithm/refine.rs's
     /// fixture helper; the goodangle the angle gates read.
     fn behavior_q(minangle: f64) -> Behavior {
         let mut b = Behavior {
@@ -5823,7 +5823,7 @@ mod tests {
 
     /// A CCW fan of triangles around a center vertex with the given
     /// ring, triangle i = (center, ring[i], ring[i+1 mod k]), bonded
-    /// around the center with the refine.rs fixture's opposite-
+    /// around the center with the algorithm/refine.rs fixture's opposite-
     /// direction convention: bond(T_i @orient 2, T_{i+1} @orient 0).
     /// The ring edges stay unbonded (hull), exactly like C's border.
     fn star_fan(
@@ -5861,7 +5861,7 @@ mod tests {
     }
 
     /// A triangle (pa, pb, pc) CCW at orient 0, unbonded (hull edges),
-    /// like refine.rs's lone_tri.
+    /// like algorithm/refine.rs's lone_tri.
     fn lone_tri(
         m: &mut Mesh,
         pa: (f64, f64),
@@ -6304,8 +6304,8 @@ mod tests {
             (0.0, 0.0),
             &[(1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0)],
         );
-        m.vx_set_type(c, crate::slots::FREEVERTEX);
-        assert_eq!(m.vx_type(c), crate::slots::FREEVERTEX);
+        m.vx_set_type(c, crate::mesh::slots::FREEVERTEX);
+        assert_eq!(m.vx_type(c), crate::mesh::slots::FREEVERTEX);
         let torg = c;
         let tdest = m.dest(tris[0]);
         let tapex = m.apex(tris[0]);
@@ -6325,7 +6325,7 @@ mod tests {
         assert_eq!(m.acute_mem.points_r.len(), 500);
         // A non-free center cannot be relocated: the flag never sets
         // and doSmoothing reports 0 (the FREEVERTEX gate).
-        m.vx_set_type(c, crate::slots::SEGMENTVERTEX);
+        m.vx_set_type(c, crate::mesh::slots::SEGMENTVERTEX);
         let mut newloc2 = [0.0f64; 2];
         assert_eq!(
             doSmoothing(&mut m, &b, tris[0], torg, tdest, tapex, &mut newloc2),
@@ -6444,7 +6444,7 @@ mod tests {
         let mut m = mesh(&b);
         let (t, torg, tdest, tapex) = lone_tri(&mut m, (0.0, 0.0), (1.0, 0.0), (0.0, 1.2));
         for v in [torg, tdest, tapex] {
-            m.vx_set_type(v, crate::slots::SEGMENTVERTEX);
+            m.vx_set_type(v, crate::mesh::slots::SEGMENTVERTEX);
         }
         let cc = vxy(&mut m, 99.0, 99.0);
         let (xi, eta) = findNewSPLocation(&mut m, &b, torg, tdest, tapex, cc, true, t)
@@ -6474,7 +6474,7 @@ mod tests {
         // The twin: doSmoothing's newloc for the free center.
         let mut m0 = mesh(&b);
         let (c0, _r0, tris0) = star_fan(&mut m0, (0.0, 0.0), &ring);
-        m0.vx_set_type(c0, crate::slots::FREEVERTEX);
+        m0.vx_set_type(c0, crate::mesh::slots::FREEVERTEX);
         let tdest0 = m0.dest(tris0[0]);
         let tapex0 = m0.apex(tris0[0]);
         let mut newloc = [0.0f64; 2];
@@ -6486,14 +6486,14 @@ mod tests {
         // set, so the With variant runs, relocates, and deletes.
         let mut m = mesh(&b);
         let (c, _r, tris) = star_fan(&mut m, (0.0, 0.0), &ring);
-        m.vx_set_type(c, crate::slots::FREEVERTEX);
+        m.vx_set_type(c, crate::mesh::slots::FREEVERTEX);
         let cc = vxy(&mut m, 99.0, 99.0);
         let tdest = m.dest(tris[0]);
         let tapex = m.apex(tris[0]);
         let (xi, eta) = findNewSPLocation(&mut m, &b, c, tdest, tapex, cc, true, tris[0])
             .expect("findNewSPLocation");
         // The center is gone: the relocated branch's deletevertex.
-        assert_eq!(m.vx_type(c), crate::slots::DEADVERTEX);
+        assert_eq!(m.vx_type(c), crate::mesh::slots::DEADVERTEX);
         // Degree-4 deletion retriangulates the diamond into two
         // triangles (the 45-45-90 halves pass -q20 -u120, so the
         // quality flank of deletevertex adds no Steiner).

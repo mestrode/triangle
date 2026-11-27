@@ -37,11 +37,11 @@ use std::io::{BufReader, Read, Write};
 
 use crate::error::Error;
 use crate::formatter::{d, ld, write_d, write_d4, write_g, write_ld4};
-use crate::handles::{Osub, Otri, DUMMY_SUB, DUMMY_TRI};
 use crate::input::{Hole, MeshInput, Point2, Region};
+use crate::mesh::handles::{Osub, Otri, DUMMY_SUB, DUMMY_TRI};
+use crate::mesh::slots::UNDEADVERTEX;
 use crate::mesh::Mesh;
 use crate::options::Behavior;
-use crate::slots::UNDEADVERTEX;
 
 // ---------------------------------------------------------------------------
 // File writing routines (triangle_io.c:10-352).
@@ -363,7 +363,7 @@ pub(crate) fn file_writeedges(
 
 /// file_writeneighbors (triangle_io.c:264-310): the .neigh writer.
 /// The word-6 overlay rides the D2 numbering int exactly like the
-/// array writer (ioarrays.rs); unlike the array writer, C's file
+/// array writer (io/arrays.rs); unlike the array writer, C's file
 /// writer saves nothing and restores nothing (triangle_io.c has no
 /// subsegs scratch - only the array writer at triangle.c:8078,
 /// 8119-8129 restores), so the port does not either: the element
@@ -440,7 +440,7 @@ pub(crate) fn file_write_eps(
     _b: &Behavior,
     file: &mut dyn Write,
 ) -> std::io::Result<()> {
-    use crate::eps::Rect;
+    use crate::io::eps::Rect;
     // EPS page metrics (323-326).
     let mut ps = Rect {
         xmin: 36.0,
@@ -463,14 +463,14 @@ pub(crate) fn file_write_eps(
         ymax: m.ymax,
     };
 
-    crate::eps::eps_update_metrics(&mut ps, &mut clip, &mut ms);
+    crate::io::eps::eps_update_metrics(&mut ps, &mut clip, &mut ms);
 
-    crate::eps::eps_write_header(file, "mesh.eps", &ps)?;
-    crate::eps::eps_draw_clip(file, &ps, &clip)?;
-    crate::eps::eps_draw_edges(file, m, &ps, &ms)?;
-    crate::eps::eps_draw_segments(file, m, &ps, &ms)?;
-    crate::eps::eps_draw_points(file, m, &ps, &ms)?;
-    crate::eps::eps_write_trailer(file)?;
+    crate::io::eps::eps_write_header(file, "mesh.eps", &ps)?;
+    crate::io::eps::eps_draw_clip(file, &ps, &clip)?;
+    crate::io::eps::eps_draw_edges(file, m, &ps, &ms)?;
+    crate::io::eps::eps_draw_segments(file, m, &ps, &ms)?;
+    crate::io::eps::eps_draw_points(file, m, &ps, &ms)?;
+    crate::io::eps::eps_write_trailer(file)?;
     Ok(())
 }
 
@@ -1371,7 +1371,7 @@ mod tests {
     use std::io::Cursor;
 
     /// An assembled Behavior from a closure over Options (the
-    /// ioarrays.rs test precedent; Options::validate runs C's
+    /// io/arrays.rs test precedent; Options::validate runs C's
     /// behavior_update tail exactly like the entry points).
     fn behavior_with(setup: impl FnOnce(&mut Options)) -> Behavior {
         let mut opts = Options::new();
@@ -1379,7 +1379,7 @@ mod tests {
         opts.validate().expect("validate")
     }
 
-    /// The two-triangle unit square of the ioarrays.rs fixture: t1
+    /// The two-triangle unit square of the io/arrays.rs fixture: t1
     /// (a, e, c) bonded to t2 (a, c, d) across t1's orient-2 edge;
     /// the vertices are the pool rows 1..=4, the triangles rows 2
     /// and 3.
@@ -1907,3 +1907,9 @@ mod tests {
         assert_eq!(m.tri_int(DUMMY_TRI, numberindex), -1);
     }
 }
+
+// R4 module reorganization (docs/architecture-spec.md section 5): the
+// I/O phase lives under io/ - the in-memory array transfer and the
+// writers (arrays.rs), and the EPS renderer (eps.rs).
+pub(crate) mod arrays;
+pub(crate) mod eps;

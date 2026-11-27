@@ -53,25 +53,16 @@ pub use options::{Options, Unsuitable, VertexSample};
 
 #[cfg(feature = "acute")]
 mod acute;
-mod construct;
-mod debug;
-mod delaunay;
-mod handles;
-mod ioarrays;
-mod locate;
-mod mesh;
-mod pool;
-mod predicates;
-mod quality;
-mod refine;
-mod slots;
-mod transform;
-mod util;
 
-// I/O phase (module assignment decided in ADR 0004; content lands with the
-// I/O-phase tickets).
-mod eps;
+// R4 module reorganization (docs/architecture-spec.md section 5): the
+// transliterated core is regrouped along its seams - the storage model
+// under mesh/, the triangle.c algorithm sections under algorithm/, the
+// I/O phase under io/ - with the module assignment of every C function
+// recorded in docs/function-mapping.md.
+mod algorithm;
 mod io;
+mod mesh;
+mod predicates;
 
 /// Crate/lib version, mirroring triangle_version()'s numeric form and the
 /// C Triangle_VERSION 1.7.0 in src/CMakeLists.txt (the fork's numbering).

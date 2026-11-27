@@ -7,12 +7,12 @@
 //! vertex traversal that puts the original point markers back over
 //! the vertex numbers writenodes left on the marks (triangle_api.c:
 //! 423-425). It reduces to vertextraverse/setvertexmark and rides the
-//! mesh.rs vertex traversal row.
+//! mesh/mod.rs vertex traversal row.
 
 use crate::error::Error;
+use crate::mesh::slots::UNDEADVERTEX;
 use crate::mesh::Mesh;
 use crate::options::Behavior;
-use crate::slots::UNDEADVERTEX;
 
 /// A point in the plane: the two REALs of C's pointlist entry.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -282,12 +282,12 @@ mod tests {
             Point2 { x: 0.0, y: 1.0 },
         ];
         let markers = [4, 5, 6];
-        crate::ioarrays::transfernodes(&mut m, &mut b, &points, &[], Some(&markers), 3, 0)
+        crate::io::arrays::transfernodes(&mut m, &mut b, &points, &[], Some(&markers), 3, 0)
             .expect("load");
         let mut plist: Vec<Point2> = Vec::new();
         let mut palist: Vec<f64> = Vec::new();
         let mut pmlist: Vec<i32> = Vec::new();
-        crate::ioarrays::writenodes(&mut m, &b, &mut plist, &mut palist, &mut pmlist)
+        crate::io::arrays::writenodes(&mut m, &b, &mut plist, &mut palist, &mut pmlist)
             .expect("writenodes");
         // the original markers left in the list, the numbers sit on
         // the marks
@@ -306,7 +306,7 @@ mod tests {
         let mut plist2: Vec<Point2> = Vec::new();
         let mut palist2: Vec<f64> = Vec::new();
         let mut pmlist2: Vec<i32> = Vec::new();
-        crate::ioarrays::writenodes(&mut m, &b, &mut plist2, &mut palist2, &mut pmlist2)
+        crate::io::arrays::writenodes(&mut m, &b, &mut plist2, &mut palist2, &mut pmlist2)
             .expect("writenodes");
         assert_eq!(pmlist2, vec![4, 5, 6]);
     }
@@ -328,7 +328,7 @@ mod tests {
             Point2 { x: 0.0, y: 1.0 },
         ];
         let markers = [4, 5, 6];
-        crate::ioarrays::transfernodes(&mut m, &mut b, &points, &[], Some(&markers), 3, 0)
+        crate::io::arrays::transfernodes(&mut m, &mut b, &points, &[], Some(&markers), 3, 0)
             .expect("load");
         let mut t = m.vertices.traversal();
         let v1 = m.vertextraverse(&mut t).expect("vx");
@@ -339,7 +339,7 @@ mod tests {
         let mut plist: Vec<Point2> = Vec::new();
         let mut palist: Vec<f64> = Vec::new();
         let mut pmlist: Vec<i32> = Vec::new();
-        crate::ioarrays::writenodes(&mut m, &b, &mut plist, &mut palist, &mut pmlist)
+        crate::io::arrays::writenodes(&mut m, &b, &mut plist, &mut palist, &mut pmlist)
             .expect("writenodes");
         // the living rows carry numbers, the undead keeps its input
         // marker, and the list holds the two living markers only

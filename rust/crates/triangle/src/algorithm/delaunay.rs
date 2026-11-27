@@ -6,7 +6,7 @@
 //! circletop, check4deadevent, frontlocate, sweeplinedelaunay) and the
 //! delaunay() dispatcher; triangle.c:3866-5454. Assignment: the part-1
 //! and part-2 rows of docs/function-mapping.md. The api.rs scaffolding
-//! of the triangulate entry point stays untouched until construct.rs
+//! of the triangulate entry point stays untouched until algorithm/segments.rs
 //! consumes the delaunay() dispatcher (part 2 lands its final internal
 //! caller chain, so the module-level dead_code blanket below persists
 //! until then).
@@ -32,7 +32,7 @@
 //! - The three "infinite" bounding box vertices (boundingbox) are C
 //!   trimalloc allocations outside the vertex pool; the port mirror is
 //!   the reserved out-of-pool INFVERTEX ids plus the owned store, per
-//!   deviation D12 (slots.rs, mesh.rs::infvertex_store).
+//!   deviation D12 (mesh/slots.rs, mesh/mod.rs::infvertex_store).
 //! - The trimalloc'd scratch of part 1 (sortarray) and part 2 (the
 //!   event arena, the event heap index array, the splay plumbing) is
 //!   not mesh state, is not counted by C's triangle_memory, and
@@ -52,7 +52,7 @@
 //!   slot of front handles (setorg, triangle.c:5388/5403; cleared at
 //!   5016) and reads it back reinterpreted (triangle.c:5008) in
 //!   exactly one function, check4deadevent. The port stores a tagged
-//!   full-width word through slots.rs orgword/setorgword (the same
+//!   full-width word through mesh/slots.rs orgword/setorgword (the same
 //!   slot org/setorg use); bit 32 tags the event, the low 32 bits are
 //!   the arena index, and the all-zero word keeps the C NULL meaning.
 //! - sweeplinedelaunay raises Error::Input at C's TRI_INPUT return
@@ -67,23 +67,23 @@
 //!   1:1 (D8's rung-2 resolution).
 //! - Mesh::hyperbolacount/circletopcount and Mesh::xminextreme arrive
 //!   with part 2 as landed fields (incremented exactly at C's sites;
-//!   xminextreme written by the transfernodes row, ioarrays.rs, which
+//!   xminextreme written by the transfernodes row, io/arrays.rs, which
 //!   lands later; the zero superset until then is D11).
 //!
 //! Stage-1 note: the consumers of this module are reachable only through
-//! the api.rs entry points, which stay scaffolded until construct.rs
+//! the api.rs entry points, which stay scaffolded until algorithm/segments.rs
 //! lands; the blanket below silences that ahead-of-use dead_code and is
 //! removed when the scaffolding is consumed.
 #![allow(dead_code)]
 
-use crate::handles::{decode, encode, Otri, DUMMY_TRI, NULL};
+use crate::algorithm::transform::{flip, insertvertex, InsertVertexResult};
+use crate::mesh::handles::{decode, encode, Otri, DUMMY_TRI, NULL};
+use crate::mesh::pool::Oom;
+use crate::mesh::slots::{INFVERTEX1, INFVERTEX2, INFVERTEX3, UNDEADVERTEX};
+use crate::mesh::util::{randomnation, vertex_coords};
 use crate::mesh::Mesh;
 use crate::options::Behavior;
-use crate::pool::Oom;
 use crate::predicates::{tri_counterclockwise, tri_incircle};
-use crate::slots::{INFVERTEX1, INFVERTEX2, INFVERTEX3, UNDEADVERTEX};
-use crate::transform::{flip, insertvertex, InsertVertexResult};
-use crate::util::{randomnation, vertex_coords};
 
 /// C: vertexsort (triangle.c:3870-3930). Sort an array of vertices by
 /// x-coordinate, using the y-coordinate as a secondary key. Uses quicksort.
@@ -957,7 +957,7 @@ pub(crate) fn divconqdelaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, Oom> {
 /// (C comments preserved in the body.)
 ///
 /// The three trimalloc'ed vertices of C land under the reserved D12
-/// out-of-pool INFVERTEX ids (slots.rs; see the deviation register).
+/// out-of-pool INFVERTEX ids (mesh/slots.rs; see the deviation register).
 pub(crate) fn boundingbox(m: &mut Mesh, b: &Behavior) -> Result<(), Oom> {
     // Find the width (or height, whichever is larger) of the triangulation.
     let mut width = m.xmax - m.xmin;
@@ -1112,7 +1112,7 @@ const SAMPLERATE: u32 = 10;
 /// hull (removebox's return).
 ///
 /// Transliteration notes: traversalinit/vertextraverse ride the pool
-/// traversal (mesh.rs); insertvertex's DUPLICATEVERTEX result carries
+/// traversal (mesh/mod.rs); insertvertex's DUPLICATEVERTEX result carries
 /// C's duplicate accounting (setvertextype(UNDEADVERTEX) + undeads,
 /// triangle.c:4779-4780); the _DEBUG printf above it is compiled out of
 /// the pinned oracle build.
@@ -2149,7 +2149,7 @@ pub(crate) fn delaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, crate::error::
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transform::{insertvertex, InsertVertexResult};
+    use crate::algorithm::transform::{insertvertex, InsertVertexResult};
 
     /// A hand-built Behavior exactly like the landed modules' test
     /// helpers: plain or poly, everything else the defaults (the dwyer
@@ -2596,7 +2596,7 @@ mod tests {
         // incrementaldelaunay flow through the landed insertvertex
         let pts = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
         let mut m = mesh_with(&pts, false);
-        // the bounds are transfernodes' (ioarrays.rs, not landed); the
+        // the bounds are transfernodes' (io/arrays.rs, not landed); the
         // test sets them exactly as that row will
         m.xmin = 0.0;
         m.xmax = 1.0;

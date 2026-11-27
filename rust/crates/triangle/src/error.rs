@@ -93,8 +93,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// the pools' primitive fallible allocation returns pool::Oom; call
 /// sites convert it to Error::OutOfMemory exactly as C's fatal
 /// "Error:  Out of memory." site would have ended the process.
-impl From<crate::pool::Oom> for Error {
-    fn from(_: crate::pool::Oom) -> Error {
+impl From<crate::mesh::pool::Oom> for Error {
+    fn from(_: crate::mesh::pool::Oom) -> Error {
         Error::OutOfMemory
     }
 }
@@ -107,7 +107,7 @@ mod tests {
     /// 7). Adapted in rung 2: constructs Error::Internal directly with
     /// the verbatim internalerror payload - the same text the
     /// funnel_maps_every_negative_code arm carried and the
-    /// conformingedge site's boundary conversion (construct.rs)
+    /// conformingedge site's boundary conversion (algorithm/segments.rs)
     /// constructs today.
     #[test]
     fn fatal_messages_are_verbatim() {
@@ -122,7 +122,7 @@ mod tests {
 
     #[test]
     fn oom_bridge_from_pool() {
-        let e: Error = crate::pool::Oom.into();
+        let e: Error = crate::mesh::pool::Oom.into();
         assert!(matches!(e, Error::OutOfMemory));
     }
 

@@ -1,4 +1,4 @@
-//! Quality refinement (the refine.rs rows of docs/function-mapping.md):
+//! Quality refinement (the algorithm/refine.rs rows of docs/function-mapping.md):
 //! tallyencs, precisionerror, splitencsegs, tallyfaces, splittriangle,
 //! enforcequality, and highorder. C: the Mesh quality maintenance section
 //! of triangle.c (tallyencs through enforcequality) plus highorder, which
@@ -14,16 +14,18 @@
 
 use std::cmp::Ordering;
 
+use crate::algorithm::quality::{
+    checkseg4encroach, dequeuebadtriang, enqueuebadtriang, testtriangle,
+};
+use crate::algorithm::transform::{deletevertex, insertvertex, undovertex, InsertVertexResult};
 use crate::error::{Error, SegmentRecoveryKind};
-use crate::handles::{decode, sdecode, Osub, Otri, DUMMY_SUB, DUMMY_TRI, NULL};
+use crate::mesh::handles::{decode, sdecode, Osub, Otri, DUMMY_SUB, DUMMY_TRI, NULL};
+use crate::mesh::pool::Oom;
+use crate::mesh::slots::{FREEVERTEX, SEGMENTVERTEX};
+use crate::mesh::util::vertex_coords;
 use crate::mesh::Mesh;
 use crate::options::Behavior;
-use crate::pool::Oom;
 use crate::predicates::{tri_counterclockwise, tri_findcircumcenter};
-use crate::quality::{checkseg4encroach, dequeuebadtriang, enqueuebadtriang, testtriangle};
-use crate::slots::{FREEVERTEX, SEGMENTVERTEX};
-use crate::transform::{deletevertex, insertvertex, undovertex, InsertVertexResult};
-use crate::util::vertex_coords;
 
 /// C: tallyencs (triangle.c:7129-7142). Traverse the entire list of
 /// subsegments, and check each to see if it is encroached. If so, add it
@@ -336,7 +338,7 @@ pub(crate) fn splittriangle(m: &mut Mesh, b: &Behavior, badtri: u32) -> Result<(
         let newvertex = m.vx_alloc().map_err(Error::from)?;
         // C: #ifndef NO_ACUTE (triangle.c:7432-7441), mirrored as the
         // crate's 'acute' feature - the inverted compile switch,
-        // exactly like quality.rs's testtriangle maxangle block.
+        // exactly like algorithm/quality.rs's testtriangle maxangle block.
         let (xi, eta): (f64, f64);
         #[cfg(feature = "acute")]
         {
@@ -465,7 +467,7 @@ pub(crate) fn splittriangle(m: &mut Mesh, b: &Behavior, badtri: u32) -> Result<(
 /// *status' out-param is dissolved (rung 2, D8): the TRI_CYCLE write
 /// (triangle.c:7574) raises Error::SegmentRecovery in place. The
 /// three poolinit resets (triangle.c:7533-7534, 7555-7556, 7565-7566)
-/// mirror as the slots.rs restarts: the pools take their geometry
+/// mirror as the mesh/slots.rs restarts: the pools take their geometry
 /// eagerly at construction (ADR 0003 section 4), and restart reproduces
 /// poolinit's reset of the allocation state - the timing no allocation,
 /// id, reuse, or traversal can observe, and what a re-refinement must
@@ -503,7 +505,7 @@ pub(crate) fn enforcequality(m: &mut Mesh, b: &Behavior) -> Result<(), Error> {
         m.bad_tri_restart();
         // Initialize the queues of bad triangles
         // (triangle.c:7557-7561), the construction-pinned queue state
-        // of mesh.rs re-initialized verbatim.
+        // of mesh/mod.rs re-initialized verbatim.
         for slot in m.queuefront.iter_mut() {
             *slot = NULL;
         }
@@ -653,11 +655,11 @@ mod tests {
     #![allow(clippy::float_cmp)] // exact-value pins, the predicates.rs precedent
 
     use super::*;
-    use crate::delaunay::delaunay;
-    use crate::slots::DEADVERTEX;
-    use crate::transform::insertsubseg;
+    use crate::algorithm::delaunay::delaunay;
+    use crate::algorithm::transform::insertsubseg;
+    use crate::mesh::slots::DEADVERTEX;
 
-    /// -q MINANGLE through behavior_update, exactly like quality.rs's
+    /// -q MINANGLE through behavior_update, exactly like algorithm/quality.rs's
     /// fixture helper; the goodangle the lens and angle gates read.
     fn behavior_q(minangle: f64) -> Behavior {
         let mut b = Behavior {
@@ -712,7 +714,7 @@ mod tests {
         t
     }
 
-    /// The quality.rs pair fixture: two triangles sharing the edge
+    /// The algorithm/quality.rs pair fixture: two triangles sharing the edge
     /// (0,0)-(2,0) with a subsegment on it, apexes at the given points.
     /// Returns the subsegment as tspivot hands it over on the first
     /// triangle's orient-0 edge.
@@ -761,7 +763,7 @@ mod tests {
 
     #[test]
     fn tallyencs_enqueues_exactly_the_encroached_segments() {
-        // The quality.rs pair fixture: the apex (1, 0.1) is inside the
+        // The algorithm/quality.rs pair fixture: the apex (1, 0.1) is inside the
         // 20-degree lens of the segment (0,0)-(2,0), the apex (1, -10)
         // is far outside, so tallyencs adds exactly one badsubseg row
         // carrying the subsegment handle and its endpoint ids.
@@ -822,7 +824,7 @@ mod tests {
         // Error::SegmentRecovery(Split) in place. The fixture
         // hand-enqueues a subsegment whose endpoints have identical
         // coordinates - exactly the row checkseg4encroach writes
-        // (quality.rs) - so the split interpolation lands the new
+        // (algorithm/quality.rs) - so the split interpolation lands the new
         // vertex on eorg and the endpoint check fires before any
         // insertion.
         let b = behavior_q(20.0);
@@ -856,7 +858,7 @@ mod tests {
         insertsubseg(&mut m, &b, shared, 7).expect("insertsubseg");
         let sub = m.tspivot(shared);
         let row = m.bad_subseg_alloc().expect("badsubseg row");
-        m.set_bad_sub_seg_enc(row, crate::handles::sencode(sub));
+        m.set_bad_sub_seg_enc(row, crate::mesh::handles::sencode(sub));
         m.set_bad_sub_seg_org(row, m.sorg(sub));
         m.set_bad_sub_seg_dest(row, m.sdest(sub));
         assert_eq!(m.badsubsegs.live_count(), 1);

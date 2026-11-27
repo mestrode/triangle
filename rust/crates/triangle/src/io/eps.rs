@@ -39,9 +39,9 @@
 use std::io::Write;
 
 use crate::formatter::g as fmt_g;
-use crate::handles::{Osub, Otri, DUMMY_TRI};
+use crate::mesh::handles::{Osub, Otri, DUMMY_TRI};
+use crate::mesh::slots::UNDEADVERTEX;
 use crate::mesh::Mesh;
-use crate::slots::UNDEADVERTEX;
 
 /// C's rect (triangle.h: the metric rectangle eps_update_metrics
 /// shrinks and the TX/TY transforms read).
@@ -366,8 +366,8 @@ mod tests {
         opts.validate().expect("validate")
     }
 
-    /// The two-triangle unit square of the io.rs tests (same shape as
-    /// the ioarrays.rs fixture): vertices (0,0), (1,0), (1,1), (0,1)
+    /// The two-triangle unit square of the io/mod.rs tests (same shape as
+    /// the io/arrays.rs fixture): vertices (0,0), (1,0), (1,1), (0,1)
     /// bonded across t1's orient-2 edge.
     fn square_two_triangles(b: &crate::options::Behavior) -> (Mesh, u32, u32, [u32; 4]) {
         let mut m = Mesh::new(b, 8, 2, 0, 0).expect("mesh init");

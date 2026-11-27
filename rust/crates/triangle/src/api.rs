@@ -22,10 +22,10 @@
 //! (triangle_api.c:437-555) landed with the I/O phase.
 
 use crate::error::Error;
-use crate::handles::NULL;
 use crate::input::{Hole, MeshInput, Point2, Region};
+use crate::mesh::handles::NULL;
+use crate::mesh::pool::WordPool;
 use crate::options::{Behavior, Options};
-use crate::pool::WordPool;
 
 /// The output half of the C triangleio surface (ADR 0004 section 5.2),
 /// produced by Mesh::output (the triangle_mesh_copy lift,
@@ -92,7 +92,7 @@ pub struct BoundingBox {
 /// The quality surface (ADR 0004 sections 5.3/5.5): the mirror of
 /// C's struct quality (triangle.h:568-576), filled by Mesh::quality
 /// (triangle_mesh_quality, which is quality_statistics) with exact C
-/// arithmetic once quality.rs lands.
+/// arithmetic once algorithm/quality.rs lands.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Quality {
     pub shortest: f64,
@@ -188,7 +188,7 @@ impl Mesh {
         // check (204-206). The owned MeshInput fields arrive exactly
         // where C hands its triangleio pointers to transfernodes; the
         // marker-list Option mirrors C's NULL-vs-present branch.
-        crate::ioarrays::transfernodes(
+        crate::io::arrays::transfernodes(
             &mut core,
             &mut behavior,
             &input.points,
@@ -203,7 +203,7 @@ impl Mesh {
         // runs), so the store is idempotent; kept for the 1:1 walk.
         core.steinerleft = behavior.steiner;
         // C: m->hullsize = delaunay(m, b) (triangle_api.c:209).
-        core.hullsize = crate::delaunay::delaunay(&mut core, &behavior)?;
+        core.hullsize = crate::algorithm::delaunay::delaunay(&mut core, &behavior)?;
         // C: the three infvertex NULL stores (triangle_api.c:213-215),
         // already the RefCell bridge's construction shape.
         core.infvertex1 = NULL;
@@ -215,7 +215,7 @@ impl Mesh {
             // C: formskeleton (triangle_api.c:221-222) and the status
             // check (223-225); the owned [i32; 2] pairs flatten into
             // C's flat segmentlist at the call site.
-            crate::construct::formskeleton(
+            crate::algorithm::segments::formskeleton(
                 &mut core,
                 &behavior,
                 &flat_segmentlist(input)?,
@@ -228,7 +228,12 @@ impl Mesh {
             // 229-230) and carveholes (233).
             core.holes = input.holes.len() as i32;
             core.regions = input.regions.len() as i32;
-            crate::construct::carveholes(&mut core, &behavior, &input.holes, &input.regions)?;
+            crate::algorithm::segments::carveholes(
+                &mut core,
+                &behavior,
+                &input.holes,
+                &input.regions,
+            )?;
         } else {
             // C: without a PSLG there can be no holes or regional
             // attributes; zeroed to avoid an accidental free() later
@@ -242,13 +247,13 @@ impl Mesh {
             // check (246-248). C's CDT_ONLY compile gate around the
             // block has no port flag; b->quality is the whole
             // condition here.
-            crate::refine::enforcequality(&mut core, &behavior)?;
+            crate::algorithm::refine::enforcequality(&mut core, &behavior)?;
         }
         // C: the m->edges writer (triangle_api.c:252-253).
         core.edges = (3 * core.triangles.live_count() as i64 + core.hullsize) / 2;
         if behavior.order > 1 {
             // C: highorder (triangle_api.c:255-256).
-            crate::refine::highorder(&mut core, &behavior)?;
+            crate::algorithm::refine::highorder(&mut core, &behavior)?;
         }
         Ok(())
     }
@@ -269,7 +274,7 @@ impl Mesh {
         // where C hands its triangleio pointers to transfernodes, and
         // the TRI_INPUT raise propagates through the Result channel
         // (rung 2, D8, the Mesh::create pattern).
-        crate::ioarrays::transfernodes(
+        crate::io::arrays::transfernodes(
             &mut core,
             &mut behavior,
             &input.points,
@@ -283,7 +288,7 @@ impl Mesh {
         // at the call site (the Mesh::create pattern);
         // in->numberoftriangles derives from the flat corner list
         // exactly where the C caller passes its reader count.
-        core.hullsize = crate::construct::reconstruct(
+        core.hullsize = crate::algorithm::segments::reconstruct(
             &mut core,
             &behavior,
             &input.elements,
@@ -302,7 +307,7 @@ impl Mesh {
         )? as i64;
         // C: the hullsize < 0 check (triangle_api.c:301-303) returns
         // the raw code; reconstruct's only negative rider is TRI_INPUT
-        // (triangle.c:5522, 5573, 5664; construct.rs raises at the
+        // (triangle.c:5522, 5573, 5664; algorithm/segments.rs raises at the
         // three sites), so this C mirror is defensively unreachable -
         // kept for the 1:1 walk, raising the public variant directly
         // exactly where C returns it (D8).
@@ -429,7 +434,7 @@ impl Mesh {
         let behavior = self.behavior.borrow();
         let mut core = self.core.borrow_mut();
         if behavior.quality && core.triangles.live_count() > 0 {
-            crate::refine::enforcequality(&mut core, &behavior)?;
+            crate::algorithm::refine::enforcequality(&mut core, &behavior)?;
             core.edges = (3 * core.triangles.live_count() as i64 + core.hullsize) / 2;
         }
         Ok(())
@@ -465,7 +470,7 @@ impl Mesh {
         // C: writenodes (triangle_api.c:393-395), the numbering
         // writer (it writes the vertex numbers over the marks,
         // triangle.c:7823).
-        crate::ioarrays::writenodes(
+        crate::io::arrays::writenodes(
             &mut core,
             &behavior,
             &mut out.points,
@@ -473,7 +478,7 @@ impl Mesh {
             &mut out.point_markers,
         )?;
         // C: always write elements (triangle_api.c:397-398).
-        crate::ioarrays::writeelements(
+        crate::io::arrays::writeelements(
             &mut core,
             &behavior,
             &mut out.elements,
@@ -482,7 +487,7 @@ impl Mesh {
         // C: the poly || convex gate (triangle_api.c:400-402): the -c
         // switch causes a PSLG to be written even if none was read.
         if behavior.poly || behavior.convex {
-            crate::ioarrays::writepoly(
+            crate::io::arrays::writepoly(
                 &mut core,
                 &behavior,
                 &mut out.segments,
@@ -499,7 +504,7 @@ impl Mesh {
         }
         // C: the edges gate (triangle_api.c:415-417).
         if edges {
-            crate::ioarrays::writeedges(
+            crate::io::arrays::writeedges(
                 &mut core,
                 &behavior,
                 &mut out.edges,
@@ -508,7 +513,7 @@ impl Mesh {
         }
         // C: the neighbors gate (triangle_api.c:419-421).
         if neighbors {
-            crate::ioarrays::writeneighbors(&mut core, &behavior, &mut out.neighbors)?;
+            crate::io::arrays::writeneighbors(&mut core, &behavior, &mut out.neighbors)?;
         }
         // C: the pointmarker restore (triangle_api.c:423-425), gated
         // on the marker list existing: writenodes wrote the vertex
@@ -526,7 +531,7 @@ impl Mesh {
     // here, the read wrappers at module scope below. The context NULL
     // checks dissolve over the owned mesh (D8); the FILE* parameter
     // becomes the writer; the writers' unchecked fprintf return values
-    // surface as io::Result at the io.rs seam and funnel into
+    // surface as io::Result at the io/mod.rs seam and funnel into
     // Error::Io exactly where triangle_api.c returns the TRI_* code.
     // ------------------------------------------------------------------
 
@@ -621,7 +626,7 @@ impl Mesh {
         let mut q = Quality::default();
         let mut core = self.core.borrow_mut();
         let b = self.behavior.borrow();
-        crate::quality::quality_statistics(&mut core, &b, &mut q);
+        crate::algorithm::quality::quality_statistics(&mut core, &b, &mut q);
         Ok(q)
     }
 
@@ -632,7 +637,7 @@ impl Mesh {
     pub fn check_mesh(&self) -> usize {
         let mut core = self.core.borrow_mut();
         let mut behavior = self.behavior.borrow_mut();
-        crate::quality::checkmesh(&mut core, &mut behavior) as usize
+        crate::algorithm::quality::checkmesh(&mut core, &mut behavior) as usize
     }
 
     /// triangle_check_delaunay (triangle_api.c:172): the failure count
@@ -640,7 +645,7 @@ impl Mesh {
     pub fn check_delaunay(&self) -> usize {
         let mut core = self.core.borrow_mut();
         let mut behavior = self.behavior.borrow_mut();
-        crate::quality::checkdelaunay(&mut core, &mut behavior) as usize
+        crate::algorithm::quality::checkdelaunay(&mut core, &mut behavior) as usize
     }
 
     /// triangle_memory (triangle_api.c:143): the mirror of C's

@@ -6,8 +6,8 @@
 //! triangleinit, triangle.c:1502), so a run's determinism is owned by its
 //! mesh and two independent meshes never share a sequence.
 //!
-//! Stage-1 note: consumers of these functions are locate.rs and
-//! transform.rs (this PR) and later delaunay.rs/construct.rs/refine.rs; the
+//! Stage-1 note: consumers of these functions are algorithm/locate.rs and
+//! algorithm/transform.rs (this PR) and later algorithm/delaunay.rs/algorithm/segments.rs/algorithm/refine.rs; the
 //! whole current call graph sits below not-yet-landed modules, so the
 //! blanket below silences the ahead-of-use dead_code and is removed as the
 //! remaining consumers land.

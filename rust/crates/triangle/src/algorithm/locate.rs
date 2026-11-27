@@ -9,17 +9,17 @@
 //! plus the sample index (D4: ids replace the raw addresses; identical
 //! arithmetic).
 //!
-//! Stage-1 note: consumers of these functions are transform.rs (this PR:
-//! insertvertex) and later construct.rs/refine.rs; the current call graph
+//! Stage-1 note: consumers of these functions are algorithm/transform.rs (this PR:
+//! insertvertex) and later algorithm/segments.rs/algorithm/refine.rs; the current call graph
 //! sits below not-yet-landed modules, so the blanket below silences the
 //! ahead-of-use dead_code and is removed as the remaining consumers land.
 #![allow(dead_code)]
 
-use crate::handles::{Otri, DUMMY_SUB, DUMMY_TRI};
+use crate::mesh::handles::{Otri, DUMMY_SUB, DUMMY_TRI};
+use crate::mesh::util::{randomnation, vertex_coords};
 use crate::mesh::Mesh;
 use crate::options::Behavior;
 use crate::predicates::tri_counterclockwise;
-use crate::util::{randomnation, vertex_coords};
 
 /// C: TRIPERBLOCK (triangle_config.h:120): number of triangles allocated at
 /// once. locate()'s sampling schedule reads the constant exactly like C's

@@ -57,16 +57,16 @@
 //! dead_code and is removed when the scaffolding is consumed.
 #![allow(dead_code)]
 
+use crate::algorithm::locate::{locate, LocateResult};
+use crate::algorithm::transform::{insertsubseg, insertvertex, InsertVertexResult};
 use crate::error::{Error, SegmentRecoveryKind};
-use crate::handles::{decode, encode, Osub, Otri, DUMMY_SUB, DUMMY_TRI};
-use crate::locate::{locate, LocateResult};
+use crate::mesh::handles::{decode, encode, Osub, Otri, DUMMY_SUB, DUMMY_TRI};
+use crate::mesh::pool::Oom;
+use crate::mesh::slots::{DEADVERTEX, INPUTVERTEX, SEGMENTVERTEX, UNDEADVERTEX};
+use crate::mesh::util::vertex_coords;
 use crate::mesh::Mesh;
 use crate::options::Behavior;
-use crate::pool::Oom;
 use crate::predicates::{tri_counterclockwise, tri_incircle, Vertex};
-use crate::slots::{DEADVERTEX, INPUTVERTEX, SEGMENTVERTEX, UNDEADVERTEX};
-use crate::transform::{insertsubseg, insertvertex, InsertVertexResult};
-use crate::util::vertex_coords;
 
 // ---------------------------------------------------------------------------
 // SegmentChainError (the fix pass's narrow hot-chain error)
@@ -947,7 +947,7 @@ pub(crate) fn delaunayfixup(m: &mut Mesh, b: &Behavior, fixuptri: &mut Otri, lef
         }
         // Not locally Delaunay; go on to an edge flip.
     } // else fartri is inverted; remove it from the stack by flipping.
-    crate::transform::flip(m, b, neartri);
+    crate::algorithm::transform::flip(m, b, neartri);
     fixuptri.lprevself(); // Restore the origin of fixuptri after the flip.
                           // Recursively process the two triangles that result from the flip.
     delaunayfixup(m, b, fixuptri, leftside);
@@ -982,7 +982,7 @@ pub(crate) fn constrainededge(
 
     endpoint1 = m.org(*starttri);
     let mut fixuptri = starttri.lnext();
-    crate::transform::flip(m, b, fixuptri);
+    crate::algorithm::transform::flip(m, b, fixuptri);
     // 'collision' indicates whether we have found a vertex directly
     //   between endpoint1 and endpoint2.
     collision = false;
@@ -1057,7 +1057,7 @@ pub(crate) fn constrainededge(
                 // Check for two intersecting segments.
                 crosssubseg = m.tspivot(fixuptri);
                 if crosssubseg.ss == DUMMY_SUB {
-                    crate::transform::flip(m, b, fixuptri); // May create inverted triangle at left.
+                    crate::algorithm::transform::flip(m, b, fixuptri); // May create inverted triangle at left.
                 } else {
                     // We've collided with a segment between endpoint1
                     //   and endpoint2.
@@ -1264,7 +1264,7 @@ pub(crate) fn formskeleton(
         // If segments are to be inserted, compute a mapping
         //   from vertices to triangles.
         if m.insegments > 0 {
-            crate::quality::makevertexmap(m, b);
+            crate::algorithm::quality::makevertexmap(m, b);
         }
 
         let mut boundmarker = 0i32;
@@ -1809,9 +1809,9 @@ pub(crate) fn carveholes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::delaunay::delaunay;
-    use crate::handles::NULL;
+    use crate::algorithm::delaunay::delaunay;
     use crate::input::Hole;
+    use crate::mesh::handles::NULL;
 
     /// The Behavior for the test at hand, composed exactly like the
     /// landed modules' test helpers.
@@ -1843,7 +1843,7 @@ mod tests {
         v
     }
 
-    /// The transform.rs pair: t1 = {org a, dest b, apex c} and
+    /// The algorithm/transform.rs pair: t1 = {org a, dest b, apex c} and
     /// t2 = {org b, dest a, apex d} bonded across the shared edge a-b
     /// (c and d on opposite sides), the smallest well-bonded poly mesh.
     fn pair(m: &mut Mesh, usesegments: bool, a: u32, b: u32, c: u32, d: u32) -> (Otri, Otri) {
@@ -2029,7 +2029,7 @@ mod tests {
         // Three triangles around the origin: a full-circle fan (no hull
         // edges), the walk from any of them finds any searchpoint by
         // turning. Fan: center(0,0), rim at 1/n-scaled angles, hand-bonded
-        // ring (the locate.rs fan pattern, with -p rows).
+        // ring (the algorithm/locate.rs fan pattern, with -p rows).
         let b = behavior(true);
         let mut m = Mesh::new(&b, 9, 2, 0, 0).expect("mesh init");
         let center = vxy(&mut m, 0.0, 0.0);
@@ -2237,7 +2237,7 @@ mod tests {
         pair(&mut m, true, a, bb, c, d);
         // formskeleton's C flow: makevertexmap supplies insertsegment's
         // vertex2tri start triangles on every PSLG mesh.
-        crate::quality::makevertexmap(&mut m, &b);
+        crate::algorithm::quality::makevertexmap(&mut m, &b);
         m.checksegments = true;
 
         // hull edge a-c (t1's orient-2 rim edge): subsegment installed by
@@ -2288,7 +2288,7 @@ mod tests {
         let c = vxy(&mut m, 0.0, 1.0);
         let d = vxy(&mut m, 0.5, -1.0);
         let (t1, _t2) = pair(&mut m, true, a, bb, c, d);
-        crate::quality::makevertexmap(&mut m, &b);
+        crate::algorithm::quality::makevertexmap(&mut m, &b);
         // Mirror the -p driver's dummytri[0] linkage (written by
         // removeghosts, triangle.c:4507; reconstruct never writes it):
         // conformingedge's from-scratch insertvertex locates through the
@@ -2346,7 +2346,7 @@ mod tests {
         let c = vxy(&mut m, 0.0, 1.0);
         let d = vxy(&mut m, 0.5, -1.0);
         pair(&mut m, true, a, bb, c, d);
-        crate::quality::makevertexmap(&mut m, &b);
+        crate::algorithm::quality::makevertexmap(&mut m, &b);
         m.checksegments = true;
 
         insertsegment(&mut m, &b, c, d, 8).expect("insertsegment");
@@ -2538,7 +2538,7 @@ mod tests {
         // carveholes locates holes and regions from the dummy row.
         // Point it at the hull edge t1@0 (org A, dest B).
         m.set_tri_neighbor_word(DUMMY_TRI, 0, encode(Otri { tri: 2, orient: 0 }));
-        // the transfernodes bounds write (ioarrays.rs not landed): the
+        // the transfernodes bounds write (io/arrays.rs not landed): the
         // input coordinates' bounding box, mirrored by hand.
         m.xmin = 0.0;
         m.xmax = 4.0;
@@ -2718,7 +2718,7 @@ mod tests {
                 orient: 2,
             },
         );
-        crate::quality::makevertexmap(&mut m, &b);
+        crate::algorithm::quality::makevertexmap(&mut m, &b);
         m.checksegments = true;
 
         insertsegment(&mut m, &b, a, mpt, 3).expect("insertsegment");

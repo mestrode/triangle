@@ -9,7 +9,7 @@
 //! degree < 3) are mirrored as debug-only asserts because C's compiled-out
 //! variants exit via internalerror() on the same impossible states.
 //!
-//! Restored call sites (the #28 restoration, landed with quality.rs): the
+//! Restored call sites (the #28 restoration, landed with algorithm/quality.rs): the
 //! encroachment and quality checks the oracle build compiles are
 //!   - insertvertex's checkseg4encroach + inlens (triangle.c:3302-3307)
 //!     and its triflaws testtriangle (triangle.c:3468-3473),
@@ -23,22 +23,22 @@
 //! flow, bad-triangle queues included.
 //!
 //! C vertex pointers mirror to vertex row ids (D1); pool storage is touched
-//! only through slots.rs; OOM routes through the landed pool bridge.
+//! only through mesh/slots.rs; OOM routes through the landed pool bridge.
 //!
-//! Stage-1 note: consumers are delaunay.rs/construct.rs/refine.rs/quality.rs
-//! and the api.rs entry points; api.rs wiring and quality.rs have landed,
+//! Stage-1 note: consumers are algorithm/delaunay.rs/algorithm/segments.rs/algorithm/refine.rs/algorithm/quality.rs
+//! and the api.rs entry points; api.rs wiring and algorithm/quality.rs have landed,
 //! the remaining ioarrays/refine consumers carry their own notes; the
 //! blanket below silences ahead-of-use dead_code until they land.
 #![allow(dead_code)]
 
-use crate::handles::{decode, encode, sencode, Osub, Otri, DUMMY_SUB, DUMMY_TRI, NULL};
-use crate::locate::{locate, preciselocate, LocateResult};
+use crate::algorithm::locate::{locate, preciselocate, LocateResult};
+use crate::algorithm::quality::{checkseg4encroach, inlens, testtriangle};
+use crate::mesh::handles::{decode, encode, sencode, Osub, Otri, DUMMY_SUB, DUMMY_TRI, NULL};
+use crate::mesh::pool::Oom;
+use crate::mesh::util::{interpolate, vertex_coords};
 use crate::mesh::Mesh;
 use crate::options::Behavior;
-use crate::pool::Oom;
 use crate::predicates::{tri_counterclockwise, tri_incircle};
-use crate::quality::{checkseg4encroach, inlens, testtriangle};
-use crate::util::{interpolate, vertex_coords};
 
 /// C: enum insertvertexresult (triangle.h:105-106): SUCCESSFULVERTEX,
 /// ENCROACHINGVERTEX, VIOLATINGVERTEX, DUPLICATEVERTEX - the exact C
@@ -51,7 +51,7 @@ use crate::util::{interpolate, vertex_coords};
 pub(crate) enum InsertVertexResult {
     /// C SUCCESSFULVERTEX.
     SuccessfulVertex = 0,
-    /// C ENCROACHINGVERTEX (unreachable until the quality.rs rows land;
+    /// C ENCROACHINGVERTEX (unreachable until the algorithm/quality.rs rows land;
     /// see the module doc).
     EncroachingVertex = 1,
     /// C VIOLATINGVERTEX.
@@ -270,7 +270,7 @@ pub(crate) fn unflip(m: &mut Mesh, _b: &Behavior, flipedge: Otri) {
 /// 'searchtri' to be the triangle reached by pivoting from it, and no point
 /// location is done. The return value is SUCCESSFULVERTEX, or
 /// ENCROACHINGVERTEX when a checked subsegment is encroached (unreachable
-/// until quality.rs lands; see the module doc). On return 'searchtri' has
+/// until algorithm/quality.rs lands; see the module doc). On return 'searchtri' has
 /// the new (or existing) vertex as origin. insertvertex() does not use
 /// flip() for reasons of speed; some information can be reused from edge
 /// flip to edge flip (C comments preserved in the body). The C five-value
@@ -1068,10 +1068,10 @@ pub(crate) fn undovertex(m: &mut Mesh, b: &Behavior) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::slots::DEADVERTEX;
+    use crate::mesh::slots::DEADVERTEX;
 
     /// The Behavior for the test at hand, composed exactly like the
-    /// locate.rs/util.rs test helpers (Behavior::default_form() plus the
+    /// algorithm/locate.rs/mesh/util.rs test helpers (Behavior::default_form() plus the
     /// fields the case needs, mirroring the C tests' hand-filled structs).
     fn behavior(poly: bool) -> Behavior {
         Behavior {
@@ -1087,7 +1087,7 @@ mod tests {
     }
 
     /// A vertex row with real coordinates (the fan-builder pattern of
-    /// locate.rs; vx ids start at 1, D1).
+    /// algorithm/locate.rs; vx ids start at 1, D1).
     fn vxy(m: &mut Mesh, x: f64, y: f64) -> u32 {
         let v = m.vx_alloc().expect("vertex alloc");
         m.set_vx_x(v, x);
@@ -1145,7 +1145,7 @@ mod tests {
     }
 
     /// A pair of triangles sharing the edge (a, b): t1 = (a, b, c) and
-    /// t2 = (b, a, d), bonded at orient 0 like the fan builder of locate.rs.
+    /// t2 = (b, a, d), bonded at orient 0 like the fan builder of algorithm/locate.rs.
     fn pair(m: &mut Mesh, usesegments: bool, a: u32, b: u32, c: u32, d: u32) -> (Otri, Otri) {
         let t1 = m.maketriangle(usesegments, false).expect("tri");
         m.setorg(t1, a);
@@ -1470,7 +1470,7 @@ mod tests {
             m.setapex(t, outer[(k + 1) % n]);
             tris.push(t);
         }
-        // bond the spokes exactly like the fan builder of locate.rs
+        // bond the spokes exactly like the fan builder of algorithm/locate.rs
         for k in 0..n {
             let a = tris[k].lprev();
             let hb = Otri {

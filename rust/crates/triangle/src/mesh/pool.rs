@@ -4,7 +4,7 @@
 //! poolrestart, poolinit, pooldeinit, poolalloc, pooldealloc,
 //! traversalinit, traverse) and `struct memorypool` (triangle.h:352-366).
 //! Assignment: the pool rows of docs/function-mapping.md; the chokepoint
-//! (slots.rs) is its only client. Method names are the resolved pool
+//! (mesh/slots.rs) is its only client. Method names are the resolved pool
 //! contract of ADR 0003 section 3 ("signatures are the contract"); every
 //! method documents its C analog so the mapping stays greppable:
 //! poolzero/pooldeinit dissolve into construction/Drop (D11), poolinit is
@@ -24,7 +24,7 @@
 //! stride-fixed rows and amortized-doubling growth through `try_reserve`
 //! (the initial reservation mirrors C's first-block hints; capacity only,
 //! rows materialize as ids are handed out). Payload meaning is the
-//! data-model's business, all of it behind slots.rs.
+//! data-model's business, all of it behind mesh/slots.rs.
 //!
 //! R1 accessor-invariant rung (ADR 0002 section 3): the five core-data
 //! invariants are enforced at this seam in debug builds only - range (a)
@@ -46,7 +46,7 @@
 
 use std::cmp::Ordering;
 
-use crate::handles::NULL;
+use crate::mesh::handles::NULL;
 
 /// The pool layer's only failure: allocation failure (C prints
 /// "Error:  Out of memory." and exits 1 at the trimalloc site,
@@ -55,7 +55,7 @@ use crate::handles::NULL;
 /// Current flow (the stage-1 `InternalStatus` bridge of ADR 0004 section 6
 /// is dissolved per D8's rung-2 resolution): the traversing core propagates
 /// `Oom` directly, the hot segment chain carries it as
-/// `SegmentChainError::Oom` (construct.rs), and the `From<Oom> for Error`
+/// `SegmentChainError::Oom` (algorithm/segments.rs), and the `From<Oom> for Error`
 /// bridge (error.rs, D26) maps it to the public `Error::OutOfMemory` at
 /// the api boundary - exactly the process end C's fatal site performed.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -182,7 +182,7 @@ impl WordPool {
     /// as C never dereferences a NULL slot), and strictly below the
     /// materialized row frontier (the pool counters are the whole state
     /// this needs; the reserved sentinel row, D3, is inside the space).
-    /// The chokepoint decode sites (slots.rs) and getvertex (mesh.rs)
+    /// The chokepoint decode sites (mesh/slots.rs) and getvertex (mesh/mod.rs)
     /// run this on every decoded or computed row id; release builds
     /// compile it away entirely.
     #[inline]
@@ -274,8 +274,8 @@ impl WordPool {
     /// accessors. Bounds-checked indexing. Invariants (ADR 0002 section
     /// 3, debug builds only): slot-role (c) `slot < stride` here; range
     /// (a) - the row id names a materialized row - below. The null
-    /// discipline (b) is decode-side per ADR 0002 section 3 (handles.rs
-    /// plus the slots.rs decode sites): the reserved null row is inside
+    /// discipline (b) is decode-side per ADR 0002 section 3 (mesh/handles.rs
+    /// plus the mesh/slots.rs decode sites): the reserved null row is inside
     /// the materialized frontier and reads as its never-written zeros,
     /// the port's defined substitute for the NULL-vertex deref the
     /// legal C flow never performs (rightofhyperbola on an outer-space
@@ -337,7 +337,7 @@ impl WordPool {
     /// ones, and the primary nodes keep the lower indices (the comment
     /// 7634-7638 rationale). The dropped rows are dead forever; C's
     /// chain is simply unreachable, and the counter mirrors that for
-    /// the debug invariant. highorder (refine.rs) is the only caller.
+    /// the debug invariant. highorder (algorithm/refine.rs) is the only caller.
     ///
     /// Invariant (ADR 0002 section 3 d): the dropped rows stay dead
     /// forever (never re-handed); `cleared_dead` keeps the recorded dead
@@ -877,7 +877,7 @@ mod tests {
         // surface the null id. The reserved null row itself stays inside
         // the materialized frontier and reads as its never-written zero
         // words - the port's defined substitute for the NULL-vertex
-        // deref (delaunay.rs rightofhyperbola on an outer-space handle;
+        // deref (algorithm/delaunay.rs rightofhyperbola on an outer-space handle;
         // C's dummytri carries NULL vertices there, triangle.c:1049,
         // and the legal C flow never performs that read).
         let p = pool(8, 8, 0, false);

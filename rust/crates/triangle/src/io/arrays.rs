@@ -8,7 +8,7 @@
 //! the public MeshOutput types and feed Mesh::output
 //! (triangle_mesh_copy, landed in api.rs).
 //! quality_statistics once closed the C section (triangle.c:8143); it
-//! moved to quality.rs for cohesion with its only caller
+//! moved to algorithm/quality.rs for cohesion with its only caller
 //! (docs/function-mapping.md).
 //!
 //! Input seam (ADR 0004 section 5.2): C's flat `REAL *pointlist`,
@@ -17,7 +17,7 @@
 //! site exactly where triangle_api.c hands its triangleio pointers to
 //! transfernodes (triangle_api.c:200-202). The Point2 records carry
 //! C's two-REAL stride per point (the carveholes precedent for the
-//! typed records of the frozen input surface, construct.rs), the
+//! typed records of the frozen input surface, algorithm/segments.rs), the
 //! attribute list stays flat as in C, and the marker list mirrors as
 //! Option, preserving C's NULL-vs-present branch (triangle.c:7732): an
 //! empty MeshInput marker list is C's NULL list.
@@ -58,12 +58,12 @@
 //! so it lands dead_code-allowed with that noted at the site.
 
 use crate::error::Error;
-use crate::handles::{Osub, Otri, DUMMY_SUB, DUMMY_TRI};
 use crate::input::Point2;
+use crate::mesh::handles::{Osub, Otri, DUMMY_SUB, DUMMY_TRI};
+use crate::mesh::pool::Oom;
+use crate::mesh::slots::{INPUTVERTEX, UNDEADVERTEX};
 use crate::mesh::Mesh;
 use crate::options::Behavior;
-use crate::pool::Oom;
-use crate::slots::{INPUTVERTEX, UNDEADVERTEX};
 use std::cmp::Ordering;
 
 /// C: transfernodes (triangle.c:7697-7757, banner 7691-7696). Read the
@@ -107,7 +107,7 @@ pub(crate) fn transfernodes(
     m.initializevertexpool(b.poly).map_err(Error::from)?;
     // The pool geometry already ran eagerly in Mesh::new over the same
     // input counters (the ADR 0003 section 4 convention, the same one
-    // delaunay.rs cites at its initializetrisubpools site), and no
+    // algorithm/delaunay.rs cites at its initializetrisubpools site), and no
     // vertex row exists on any transfernodes call path yet, so this
     // C-site call re-creates an identical empty pool: no allocation,
     // id, reuse, or traversal state exists that could observe it.
@@ -256,7 +256,7 @@ pub(crate) fn writenodes(
                     // of C's own uncalled function (C's banner,
                     // triangle.c:7836: used when writenodes is not
                     // called; the only trace is main.c:65, commented
-                    // out); the io.rs file writer will inline the
+                    // out); the io/mod.rs file writer will inline the
                     // numbering exactly like C's file_writenodes
                     // (triangle_io.c:64-65).
 pub(crate) fn numbernodes(m: &mut Mesh, b: &Behavior) {
@@ -692,7 +692,7 @@ mod tests {
         opts.validate().expect("validate")
     }
 
-    /// The two-triangle unit square of the refine.rs highorder
+    /// The two-triangle unit square of the algorithm/refine.rs highorder
     /// fixture: t1 (a, e, c) bonded to t2 (a, c, d) across t1's
     /// orient-2 edge (the diagonal a-c); the vertices are the pool
     /// rows 1..=4 in traversal order, the triangles the rows 2 and 3
@@ -894,7 +894,7 @@ mod tests {
             o.element_order(2);
         });
         let (mut m, _t1, _t2, _v) = square_two_triangles(&b, 0);
-        crate::refine::highorder(&mut m, &b).expect("highorder");
+        crate::algorithm::refine::highorder(&mut m, &b).expect("highorder");
         numbernodes(&mut m, &b);
         let mut tlist: Vec<i32> = Vec::new();
         let mut talist: Vec<f64> = Vec::new();

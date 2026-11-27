@@ -13,7 +13,7 @@
 //! slot and is never decoded. D6: every C handle macro becomes a method on
 //! the explicit register type; the hidden macro locals (ptr/sptr)
 //! disappear. The pure ring rotations live here (no memory touched, no
-//! re-encoding); the storage-touching methods live in slots.rs (the
+//! re-encoding); the storage-touching methods live in mesh/slots.rs (the
 //! chokepoint). C names survive until idiomatization rung 4.
 //!
 //! Invariants enforced here (ADR 0002 section 3, debug builds only):
@@ -23,7 +23,7 @@
 //! virus bit); null discipline (b) - the all-zero word is never
 //! decoded, exactly as C never decodes a NULL slot. The row-id side of
 //! the range invariant needs pool state and is enforced at the
-//! chokepoint decode sites (slots.rs) and the pool seam (pool.rs).
+//! chokepoint decode sites (mesh/slots.rs) and the pool seam (mesh/pool.rs).
 //! Release builds compile no check.
 //!
 //! Stage-1 note: items here are consumed by the not-yet-transliterated
@@ -100,7 +100,7 @@ pub(crate) fn decode(word: u64) -> Otri {
 /// C: sencode(): compress an oriented subsegment into one word. The low two
 /// bits are masked exactly like C's ~3 (triangle.h:925-933): ssorient at
 /// bit 0, bit 1 permanently spare - the mirror of C's pointer-alignment
-/// bit that the viral-infection flag (slots.rs infect, triangle.h:875)
+/// bit that the viral-infection flag (mesh/slots.rs infect, triangle.h:875)
 /// occupies on triangle word 6 (D1; ADR 0002 amendment, issue #22).
 ///
 /// Invariant (ADR 0002 section 3 a): ssorient is in range (debug_assert,
