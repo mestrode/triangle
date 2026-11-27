@@ -48,16 +48,16 @@ use std::cmp::Ordering;
 
 use crate::handles::NULL;
 
-/// Stage-1 internal status for the only failure the pool layer can produce:
-/// allocation failure (C prints "Error: Out of memory." and exits 1 at the
-/// trimalloc site, triangle.c:318-324).
+/// The pool layer's only failure: allocation failure (C prints
+/// "Error:  Out of memory." and exits 1 at the trimalloc site,
+/// triangle.c:318-324).
 ///
-/// Intended bridge (ADR 0004 section 6, items 3-4): when the stage-1 shell
-/// lands `error.rs`, this type dissolves into `InternalStatus::Oom` (a
-/// funnel extension with no C number), and the single translation point
-/// `impl From<InternalStatus> for Error` at the api.rs boundary maps it to
-/// `Error::OutOfMemory`. Until then this is the pool layer's whole error
-/// surface: the public error funnel arrives in a later PR.
+/// Current flow (the stage-1 `InternalStatus` bridge of ADR 0004 section 6
+/// is dissolved per D8's rung-2 resolution): the traversing core propagates
+/// `Oom` directly, the hot segment chain carries it as
+/// `SegmentChainError::Oom` (construct.rs), and the `From<Oom> for Error`
+/// bridge (error.rs, D26) maps it to the public `Error::OutOfMemory` at
+/// the api boundary - exactly the process end C's fatal site performed.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct Oom;
 

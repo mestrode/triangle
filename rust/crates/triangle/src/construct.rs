@@ -213,7 +213,7 @@ pub(crate) fn reconstruct(
         let triangleloop = m.maketriangle(b.usesegments, b.vararea)?;
         // Mark the triangle as living: C's raw tri[3] = (triangle) tri
         // self-scribble on the org slot, later overwritten by setorg.
-        m.set_tri_slot(triangleloop.tri, 3, triangleloop.tri as u64);
+        m.set_tri_vertex_word(triangleloop.tri, 0, triangleloop.tri as u64);
     }
 
     if b.poly {
@@ -224,7 +224,7 @@ pub(crate) fn reconstruct(
         for _ in 1..=m.insegments {
             let subsegloop = m.makesubseg()?;
             // Mark the subsegment as living: C's raw ss[2] = (subseg) ss.
-            m.set_sub_slot(subsegloop.ss, 2, subsegloop.ss as u64);
+            m.set_sub_vertex_word(subsegloop.ss, 0, subsegloop.ss as u64);
         }
     }
 
@@ -310,7 +310,7 @@ pub(crate) fn reconstruct(
             // Look for other triangles having this vertex.
             let mut nexttri = vertexarray[ai];
             // Link the current triangle to the next one in the stack.
-            m.set_tri_slot(triangleloop.tri, 6 + triangleloop.orient as usize, nexttri);
+            m.set_tri_subseg_word(triangleloop.tri, triangleloop.orient as usize, nexttri);
             // Push the current triangle onto the stack.
             vertexarray[ai] = encode(triangleloop);
             let mut checktri = decode(nexttri);
@@ -332,7 +332,7 @@ pub(crate) fn reconstruct(
                         m.bond(triangleloop, checkleft);
                     }
                     // Find the next triangle in the stack.
-                    nexttri = m.tri_slot(checktri.tri, 6 + checktri.orient as usize);
+                    nexttri = m.tri_subseg_word(checktri.tri, checktri.orient as usize);
                     checktri = decode(nexttri);
                     if checktri.tri == DUMMY_TRI {
                         break;
@@ -404,10 +404,10 @@ pub(crate) fn reconstruct(
                     if shorg == checkdest {
                         // We have a match.  Remove this triangle from
                         //   the list: *prevlink = tri[6 + orient].
-                        let unlink = m.tri_slot(checktri.tri, 6 + checktri.orient as usize);
+                        let unlink = m.tri_subseg_word(checktri.tri, checktri.orient as usize);
                         match prevlink {
                             PrevLink::Array(i) => vertexarray[i] = unlink,
-                            PrevLink::Tri(t, o) => m.set_tri_slot(t, 6 + o as usize, unlink),
+                            PrevLink::Tri(t, o) => m.set_tri_subseg_word(t, o as usize, unlink),
                         }
                         // Bond the subsegment to the triangle.
                         m.tsbond(checktri, subsegloop);
@@ -425,7 +425,7 @@ pub(crate) fn reconstruct(
                     }
                     // Find the next triangle in the stack.
                     prevlink = PrevLink::Tri(checktri.tri, checktri.orient);
-                    nexttri = m.tri_slot(checktri.tri, 6 + checktri.orient as usize);
+                    nexttri = m.tri_subseg_word(checktri.tri, checktri.orient as usize);
                     checktri = decode(nexttri);
                 }
             }
@@ -444,7 +444,7 @@ pub(crate) fn reconstruct(
         while checktri.tri != DUMMY_TRI {
             // Find the next triangle in the stack before this
             // information gets overwritten.
-            nexttri = m.tri_slot(checktri.tri, 6 + checktri.orient as usize);
+            nexttri = m.tri_subseg_word(checktri.tri, checktri.orient as usize);
             // No adjacent subsegment.  (This overwrites the stack info.)
             m.tsdissolve(checktri);
             let checkneighbor = m.sym(checktri);
@@ -595,15 +595,15 @@ pub(crate) fn segmentintersection(
     let endpoint1 = m.apex(*splittri);
     let torg = m.org(*splittri);
     let tdest = m.dest(*splittri);
-    let endpoint1_xy = (m.vx_real(endpoint1, 0), m.vx_real(endpoint1, 1));
+    let endpoint1_xy = (m.vx_x(endpoint1), m.vx_y(endpoint1));
 
     // Segment intersection formulae; see the Antonio reference.
-    let tx = m.vx_real(tdest, 0) - m.vx_real(torg, 0);
-    let ty = m.vx_real(tdest, 1) - m.vx_real(torg, 1);
-    let ex = m.vx_real(endpoint2, 0) - endpoint1_xy.0;
-    let ey = m.vx_real(endpoint2, 1) - endpoint1_xy.1;
-    let etx = m.vx_real(torg, 0) - m.vx_real(endpoint2, 0);
-    let ety = m.vx_real(torg, 1) - m.vx_real(endpoint2, 1);
+    let tx = m.vx_x(tdest) - m.vx_x(torg);
+    let ty = m.vx_y(tdest) - m.vx_y(torg);
+    let ex = m.vx_x(endpoint2) - endpoint1_xy.0;
+    let ey = m.vx_y(endpoint2) - endpoint1_xy.1;
+    let etx = m.vx_x(torg) - m.vx_x(endpoint2);
+    let ety = m.vx_y(torg) - m.vx_y(endpoint2);
     let denom = ty * ex - tx * ey;
     if denom == 0.0 {
         // C: Attempt to find intersection of parallel segments.
@@ -683,12 +683,9 @@ pub(crate) fn segmentintersection(
 
     let rightvertex = m.dest(*splittri);
     let leftvertex = m.apex(*splittri);
-    if (m.vx_real(leftvertex, 0) == endpoint1_xy.0) && (m.vx_real(leftvertex, 1) == endpoint1_xy.1)
-    {
+    if (m.vx_x(leftvertex) == endpoint1_xy.0) && (m.vx_y(leftvertex) == endpoint1_xy.1) {
         m.onextself(splittri);
-    } else if (m.vx_real(rightvertex, 0) != endpoint1_xy.0)
-        || (m.vx_real(rightvertex, 1) != endpoint1_xy.1)
-    {
+    } else if (m.vx_x(rightvertex) != endpoint1_xy.0) || (m.vx_y(rightvertex) != endpoint1_xy.1) {
         // C: Topological inconsistency after splitting a segment.
         return Err(SegmentChainError::Recovery(SegmentRecoveryKind::Intersect));
     }
@@ -728,22 +725,17 @@ pub(crate) fn scoutsegment(
         return Err(SegmentChainError::Recovery(SegmentRecoveryKind::Scout));
     }
 
-    let collinear = finddirection(
-        m,
-        b,
-        searchtri,
-        (m.vx_real(endpoint2, 0), m.vx_real(endpoint2, 1)),
-    )?;
+    let collinear = finddirection(m, b, searchtri, (m.vx_x(endpoint2), m.vx_y(endpoint2)))?;
 
     let rightvertex = m.dest(*searchtri);
     let leftvertex = m.apex(*searchtri);
-    let e2x = m.vx_real(endpoint2, 0);
-    let e2y = m.vx_real(endpoint2, 1);
-    if ((m.vx_real(leftvertex, 0) == e2x) && (m.vx_real(leftvertex, 1) == e2y))
-        || ((m.vx_real(rightvertex, 0) == e2x) && (m.vx_real(rightvertex, 1) == e2y))
+    let e2x = m.vx_x(endpoint2);
+    let e2y = m.vx_y(endpoint2);
+    if ((m.vx_x(leftvertex) == e2x) && (m.vx_y(leftvertex) == e2y))
+        || ((m.vx_x(rightvertex) == e2x) && (m.vx_y(rightvertex) == e2y))
     {
         // The segment is already an edge in the mesh.
-        if (m.vx_real(leftvertex, 0) == e2x) && (m.vx_real(leftvertex, 1) == e2y) {
+        if (m.vx_x(leftvertex) == e2x) && (m.vx_y(leftvertex) == e2y) {
             searchtri.lprevself();
         }
         // Insert a subsegment, if there isn't already one there.
@@ -861,7 +853,7 @@ pub(crate) fn conformingedge(
         m,
         b,
         &mut searchtri2,
-        (m.vx_real(endpoint2, 0), m.vx_real(endpoint2, 1)),
+        (m.vx_x(endpoint2), m.vx_y(endpoint2)),
     )?;
     if scoutsegment(m, b, &mut searchtri1, endpoint1, newmark)? == 0 {
         // The origin of searchtri1 may have changed if a collision with
@@ -1013,9 +1005,7 @@ pub(crate) fn constrainededge(
         }
         // 'farvertex' is the extreme point of the polygon we are
         //   "digging" to get from endpoint1 to endpoint2.
-        if (m.vx_real(farvertex, 0) == m.vx_real(endpoint2, 0))
-            && (m.vx_real(farvertex, 1) == m.vx_real(endpoint2, 1))
-        {
+        if (m.vx_x(farvertex) == m.vx_x(endpoint2)) && (m.vx_y(farvertex) == m.vx_y(endpoint2)) {
             let mut fixuptri2 = m.oprev(fixuptri);
             // Enforce the Delaunay condition around endpoint2.
             delaunayfixup(m, b, &mut fixuptri, false);
@@ -1135,7 +1125,7 @@ pub(crate) fn insertsegment(
         if locate(
             m,
             b,
-            (m.vx_real(endpoint1, 0), m.vx_real(endpoint1, 1)),
+            (m.vx_x(endpoint1), m.vx_y(endpoint1)),
             &mut searchtri1,
         ) != LocateResult::OnVertex
         {
@@ -1178,7 +1168,7 @@ pub(crate) fn insertsegment(
         if locate(
             m,
             b,
-            (m.vx_real(endpoint2, 0), m.vx_real(endpoint2, 1)),
+            (m.vx_x(endpoint2), m.vx_y(endpoint2)),
             &mut searchtri2,
         ) != LocateResult::OnVertex
         {
@@ -1298,8 +1288,8 @@ pub(crate) fn formskeleton(
                 // Find the vertices numbered 'end1' and 'end2'.
                 let endpoint1 = m.getvertex(b.firstnumber, end1);
                 let endpoint2 = m.getvertex(b.firstnumber, end2);
-                if (m.vx_real(endpoint1, 0) == m.vx_real(endpoint2, 0))
-                    && (m.vx_real(endpoint1, 1) == m.vx_real(endpoint2, 1))
+                if (m.vx_x(endpoint1) == m.vx_x(endpoint2))
+                    && (m.vx_y(endpoint1) == m.vx_y(endpoint2))
                 {
                     // C: Endpoints of segment are coincident (the
                     //   _DEBUG printf compiles out; C skips silently).
@@ -1848,8 +1838,8 @@ mod tests {
     /// the landed tests; vx ids start at 1, D1).
     fn vxy(m: &mut Mesh, x: f64, y: f64) -> u32 {
         let v = m.vx_alloc().expect("vertex alloc");
-        m.vx_set_real(v, 0, x);
-        m.vx_set_real(v, 1, y);
+        m.set_vx_x(v, x);
+        m.set_vx_y(v, y);
         v
     }
 
@@ -1907,7 +1897,7 @@ mod tests {
     fn vertex_at(m: &Mesh, x: f64, y: f64) -> Option<u32> {
         let mut vt = m.vertices.traversal();
         while let Some(v) = m.vertices.traverse_next(&mut vt) {
-            if m.vx_type(v) != DEADVERTEX && m.vx_real(v, 0) == x && m.vx_real(v, 1) == y {
+            if m.vx_type(v) != DEADVERTEX && m.vx_x(v) == x && m.vx_y(v) == y {
                 return Some(v);
             }
         }
@@ -2303,7 +2293,7 @@ mod tests {
         // removeghosts, triangle.c:4507; reconstruct never writes it):
         // conformingedge's from-scratch insertvertex locates through the
         // dummy row, so point it at the hull edge t1@2 (edge c -> a).
-        m.set_tri_slot(
+        m.set_tri_neighbor_word(
             DUMMY_TRI,
             0,
             encode(Otri {
@@ -2547,7 +2537,7 @@ mod tests {
         // dummy row (reconstruct bonds only interior edges), while
         // carveholes locates holes and regions from the dummy row.
         // Point it at the hull edge t1@0 (org A, dest B).
-        m.set_tri_slot(DUMMY_TRI, 0, encode(Otri { tri: 2, orient: 0 }));
+        m.set_tri_neighbor_word(DUMMY_TRI, 0, encode(Otri { tri: 2, orient: 0 }));
         // the transfernodes bounds write (ioarrays.rs not landed): the
         // input coordinates' bounding box, mirrored by hand.
         m.xmin = 0.0;
@@ -2795,7 +2785,7 @@ mod tests {
         let (t1, _t2) = pair(&mut m, true, a, bb, c, d);
         // Mirror the -p driver's dummytri[0] linkage (the
         // conformingedge test's pattern): the locate start decodes it.
-        m.set_tri_slot(
+        m.set_tri_neighbor_word(
             DUMMY_TRI,
             0,
             encode(Otri {

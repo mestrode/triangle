@@ -442,18 +442,17 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
     /* Compute the circumcenter of the triangle. */
     // C: xdo = tdest[0] - torg[0]; ... yda = tapex[1] - tdest[1];
     // (acute.c:183-188)
-    xdo = m.vx_real(tdest, 0) - m.vx_real(torg, 0);
-    ydo = m.vx_real(tdest, 1) - m.vx_real(torg, 1);
-    xao = m.vx_real(tapex, 0) - m.vx_real(torg, 0);
-    yao = m.vx_real(tapex, 1) - m.vx_real(torg, 1);
-    xda = m.vx_real(tapex, 0) - m.vx_real(tdest, 0);
-    yda = m.vx_real(tapex, 1) - m.vx_real(tdest, 1);
+    xdo = m.vx_x(tdest) - m.vx_x(torg);
+    ydo = m.vx_y(tdest) - m.vx_y(torg);
+    xao = m.vx_x(tapex) - m.vx_x(torg);
+    yao = m.vx_y(tapex) - m.vx_y(torg);
+    xda = m.vx_x(tapex) - m.vx_x(tdest);
+    yda = m.vx_y(tapex) - m.vx_y(tdest);
     // keeps the square of the distances (acute.c:189-193)
     dodist = xdo * xdo + ydo * ydo;
     aodist = xao * xao + yao * yao;
-    dadist = (m.vx_real(tdest, 0) - m.vx_real(tapex, 0))
-        * (m.vx_real(tdest, 0) - m.vx_real(tapex, 0))
-        + (m.vx_real(tdest, 1) - m.vx_real(tapex, 1)) * (m.vx_real(tdest, 1) - m.vx_real(tapex, 1));
+    dadist = (m.vx_x(tdest) - m.vx_x(tapex)) * (m.vx_x(tdest) - m.vx_x(tapex))
+        + (m.vx_y(tdest) - m.vx_y(tapex)) * (m.vx_y(tdest) - m.vx_y(tapex));
     // checking if the user wanted exact arithmetic or not (acute.c:194)
     if b.noexact {
         denominator = 0.5 / (xdo * yao - xao * ydo);
@@ -478,8 +477,8 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
     dy = (xdo * aodist - xao * dodist) * denominator;
     // for debugging and for keeping circumcenter to use later:
     // coordinate value of the circumcenter (acute.c:208-211)
-    myCircumcenter[0] = m.vx_real(torg, 0) + dx;
-    myCircumcenter[1] = m.vx_real(torg, 1) + dy;
+    myCircumcenter[0] = m.vx_x(torg) + dx;
+    myCircumcenter[1] = m.vx_y(torg) + dy;
 
     delotri = badotri; // save for later (acute.c:213)
                        /////////////////// FINDING THE ORIENTATION OF TRIANGLE //////////////////
@@ -651,10 +650,10 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
         // if relocation is possible, delete that vertex and insert a
         // vertex at the new location (acute.c:398-399)
         if relocated > 0 {
-            dx = newloc[0] - m.vx_real(torg, 0);
-            dy = newloc[1] - m.vx_real(torg, 1);
-            origin_x = m.vx_real(torg, 0); // keep for later use
-            origin_y = m.vx_real(torg, 1); // (acute.c:402-403)
+            dx = newloc[0] - m.vx_x(torg);
+            dy = newloc[1] - m.vx_y(torg);
+            origin_x = m.vx_x(torg); // keep for later use
+            origin_y = m.vx_y(torg); // (acute.c:402-403)
             match relocated {
                 1 => {
                     // C: deletevertex(m,b,&delotri); (acute.c:407)
@@ -685,38 +684,36 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
             // compute two possible centers of the petal: finding the
             // center, first find the middle point of smallest edge
             // (acute.c:426-430)
-            xMidOfShortestEdge =
-                (m.vx_real(middleAngleCorner, 0) + m.vx_real(largestAngleCorner, 0)) / 2.0;
-            yMidOfShortestEdge =
-                (m.vx_real(middleAngleCorner, 1) + m.vx_real(largestAngleCorner, 1)) / 2.0;
+            xMidOfShortestEdge = (m.vx_x(middleAngleCorner) + m.vx_x(largestAngleCorner)) / 2.0;
+            yMidOfShortestEdge = (m.vx_y(middleAngleCorner) + m.vx_y(largestAngleCorner)) / 2.0;
             // two possible centers (acute.c:431-440)
             xPetalCtr_1 = xMidOfShortestEdge
                 + (petalRadius * petalRadius - (shortestEdgeDist / 4.0)).sqrt()
-                    * (m.vx_real(middleAngleCorner, 1) - m.vx_real(largestAngleCorner, 1))
+                    * (m.vx_y(middleAngleCorner) - m.vx_y(largestAngleCorner))
                     / shortestEdgeDist.sqrt();
             yPetalCtr_1 = yMidOfShortestEdge
                 + (petalRadius * petalRadius - (shortestEdgeDist / 4.0)).sqrt()
-                    * (m.vx_real(largestAngleCorner, 0) - m.vx_real(middleAngleCorner, 0))
+                    * (m.vx_x(largestAngleCorner) - m.vx_x(middleAngleCorner))
                     / shortestEdgeDist.sqrt();
             xPetalCtr_2 = xMidOfShortestEdge
                 - (petalRadius * petalRadius - (shortestEdgeDist / 4.0)).sqrt()
-                    * (m.vx_real(middleAngleCorner, 1) - m.vx_real(largestAngleCorner, 1))
+                    * (m.vx_y(middleAngleCorner) - m.vx_y(largestAngleCorner))
                     / shortestEdgeDist.sqrt();
             yPetalCtr_2 = yMidOfShortestEdge
                 - (petalRadius * petalRadius - (shortestEdgeDist / 4.0)).sqrt()
-                    * (m.vx_real(largestAngleCorner, 0) - m.vx_real(middleAngleCorner, 0))
+                    * (m.vx_x(largestAngleCorner) - m.vx_x(middleAngleCorner))
                     / shortestEdgeDist.sqrt();
             // find the correct circle since there will be two possible
             // circles: calculate the distance to smallest angle corner
             // (acute.c:441-446)
-            dxcenter1 = (xPetalCtr_1 - m.vx_real(smallestAngleCorner, 0))
-                * (xPetalCtr_1 - m.vx_real(smallestAngleCorner, 0));
-            dycenter1 = (yPetalCtr_1 - m.vx_real(smallestAngleCorner, 1))
-                * (yPetalCtr_1 - m.vx_real(smallestAngleCorner, 1));
-            dxcenter2 = (xPetalCtr_2 - m.vx_real(smallestAngleCorner, 0))
-                * (xPetalCtr_2 - m.vx_real(smallestAngleCorner, 0));
-            dycenter2 = (yPetalCtr_2 - m.vx_real(smallestAngleCorner, 1))
-                * (yPetalCtr_2 - m.vx_real(smallestAngleCorner, 1));
+            dxcenter1 = (xPetalCtr_1 - m.vx_x(smallestAngleCorner))
+                * (xPetalCtr_1 - m.vx_x(smallestAngleCorner));
+            dycenter1 = (yPetalCtr_1 - m.vx_y(smallestAngleCorner))
+                * (yPetalCtr_1 - m.vx_y(smallestAngleCorner));
+            dxcenter2 = (xPetalCtr_2 - m.vx_x(smallestAngleCorner))
+                * (xPetalCtr_2 - m.vx_x(smallestAngleCorner));
+            dycenter2 = (yPetalCtr_2 - m.vx_y(smallestAngleCorner))
+                * (yPetalCtr_2 - m.vx_y(smallestAngleCorner));
 
             // whichever is closer to smallest angle corner, it must be
             // the center (acute.c:448-453)
@@ -733,10 +730,10 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
             neighborNotFound = getNeighborsVertex(
                 m,
                 badotri,
-                m.vx_real(middleAngleCorner, 0),
-                m.vx_real(middleAngleCorner, 1),
-                m.vx_real(smallestAngleCorner, 0),
-                m.vx_real(smallestAngleCorner, 1),
+                m.vx_x(middleAngleCorner),
+                m.vx_y(middleAngleCorner),
+                m.vx_x(smallestAngleCorner),
+                m.vx_y(smallestAngleCorner),
                 &mut thirdPoint,
                 &mut neighborotri,
             );
@@ -766,8 +763,8 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
                 // compute petal and Voronoi edge intersection: in
                 // order to avoid degenerate cases, we need to do a
                 // vector based calculation for line (acute.c:468-473)
-                vector_x = m.vx_real(middleAngleCorner, 1) - m.vx_real(smallestAngleCorner, 1); // (-y, x)
-                vector_y = m.vx_real(smallestAngleCorner, 0) - m.vx_real(middleAngleCorner, 0);
+                vector_x = m.vx_y(middleAngleCorner) - m.vx_y(smallestAngleCorner); // (-y, x)
+                vector_y = m.vx_x(smallestAngleCorner) - m.vx_x(middleAngleCorner);
                 vector_x = myCircumcenter[0] + vector_x;
                 vector_y = myCircumcenter[1] + vector_y;
 
@@ -787,10 +784,8 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
                 // choose the correct intersection point: calculate
                 // middle point of the longest edge(bisector)
                 // (acute.c:480-483)
-                xMidOfLongestEdge =
-                    (m.vx_real(middleAngleCorner, 0) + m.vx_real(smallestAngleCorner, 0)) / 2.0;
-                yMidOfLongestEdge =
-                    (m.vx_real(middleAngleCorner, 1) + m.vx_real(smallestAngleCorner, 1)) / 2.0;
+                xMidOfLongestEdge = (m.vx_x(middleAngleCorner) + m.vx_x(smallestAngleCorner)) / 2.0;
+                yMidOfLongestEdge = (m.vx_y(middleAngleCorner) + m.vx_y(smallestAngleCorner)) / 2.0;
                 // we need to find correct intersection point, since
                 // line intersects circle twice (acute.c:484-486)
                 isCorrect = chooseCorrectPoint(
@@ -833,10 +828,10 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
                     if (voronoiOrInter[0] - 1.0).abs() <= compConst {
                         if testTriangleAngle(
                             b,
-                            m.vx_real(middleAngleCorner, 0),
-                            m.vx_real(middleAngleCorner, 1),
-                            m.vx_real(largestAngleCorner, 0),
-                            m.vx_real(largestAngleCorner, 1),
+                            m.vx_x(middleAngleCorner),
+                            m.vx_y(middleAngleCorner),
+                            m.vx_x(largestAngleCorner),
+                            m.vx_y(largestAngleCorner),
                             neighborCircumcenter[0],
                             neighborCircumcenter[1],
                         ) != 0
@@ -848,8 +843,8 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
                             // we are not creating a bad triangle:
                             // neighbor's circumcenter is suggested
                             // (acute.c:510-513)
-                            dxFirstSuggestion = voronoiOrInter[2] - m.vx_real(torg, 0);
-                            dyFirstSuggestion = voronoiOrInter[3] - m.vx_real(torg, 1);
+                            dxFirstSuggestion = voronoiOrInter[2] - m.vx_x(torg);
+                            dyFirstSuggestion = voronoiOrInter[3] - m.vx_y(torg);
                         }
                     } else {
                         // there is no voronoi vertex between
@@ -857,10 +852,10 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
                         // (acute.c:516-517)
                         if testTriangleAngle(
                             b,
-                            m.vx_real(largestAngleCorner, 0),
-                            m.vx_real(largestAngleCorner, 1),
-                            m.vx_real(middleAngleCorner, 0),
-                            m.vx_real(middleAngleCorner, 1),
+                            m.vx_x(largestAngleCorner),
+                            m.vx_y(largestAngleCorner),
+                            m.vx_x(middleAngleCorner),
+                            m.vx_y(middleAngleCorner),
                             inter_x,
                             inter_y,
                         ) != 0
@@ -887,10 +882,10 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
                             inter_y = inter_y + ay * pertConst * shortestEdgeDist.sqrt();
                             if testTriangleAngle(
                                 b,
-                                m.vx_real(middleAngleCorner, 0),
-                                m.vx_real(middleAngleCorner, 1),
-                                m.vx_real(largestAngleCorner, 0),
-                                m.vx_real(largestAngleCorner, 1),
+                                m.vx_x(middleAngleCorner),
+                                m.vx_y(middleAngleCorner),
+                                m.vx_x(largestAngleCorner),
+                                m.vx_y(largestAngleCorner),
                                 inter_x,
                                 inter_y,
                             ) != 0
@@ -902,33 +897,32 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
                             } else {
                                 // intersection point is suggested
                                 // (acute.c:537-540)
-                                dxFirstSuggestion = inter_x - m.vx_real(torg, 0);
-                                dyFirstSuggestion = inter_y - m.vx_real(torg, 1);
+                                dxFirstSuggestion = inter_x - m.vx_x(torg);
+                                dyFirstSuggestion = inter_y - m.vx_y(torg);
                             }
                         } else {
                             // intersection point is suggested
                             // (acute.c:543-546)
-                            dxFirstSuggestion = inter_x - m.vx_real(torg, 0);
-                            dyFirstSuggestion = inter_y - m.vx_real(torg, 1);
+                            dxFirstSuggestion = inter_x - m.vx_x(torg);
+                            dyFirstSuggestion = inter_y - m.vx_y(torg);
                         }
                     }
                     // if it is an acute triangle, check if it is a
                     // good enough location: for acute triangle case,
                     // we need to check if it is ok to use either of
                     // them (acute.c:549-560)
-                    if (m.vx_real(smallestAngleCorner, 0) - myCircumcenter[0])
-                        * (m.vx_real(smallestAngleCorner, 0) - myCircumcenter[0])
-                        + (m.vx_real(smallestAngleCorner, 1) - myCircumcenter[1])
-                            * (m.vx_real(smallestAngleCorner, 1) - myCircumcenter[1])
+                    if (m.vx_x(smallestAngleCorner) - myCircumcenter[0])
+                        * (m.vx_x(smallestAngleCorner) - myCircumcenter[0])
+                        + (m.vx_y(smallestAngleCorner) - myCircumcenter[1])
+                            * (m.vx_y(smallestAngleCorner) - myCircumcenter[1])
                         > lengthConst
-                            * ((m.vx_real(smallestAngleCorner, 0)
-                                - (dxFirstSuggestion + m.vx_real(torg, 0)))
-                                * (m.vx_real(smallestAngleCorner, 0)
-                                    - (dxFirstSuggestion + m.vx_real(torg, 0)))
-                                + (m.vx_real(smallestAngleCorner, 1)
-                                    - (dyFirstSuggestion + m.vx_real(torg, 1)))
-                                    * (m.vx_real(smallestAngleCorner, 1)
-                                        - (dyFirstSuggestion + m.vx_real(torg, 1))))
+                            * ((m.vx_x(smallestAngleCorner) - (dxFirstSuggestion + m.vx_x(torg)))
+                                * (m.vx_x(smallestAngleCorner)
+                                    - (dxFirstSuggestion + m.vx_x(torg)))
+                                + (m.vx_y(smallestAngleCorner)
+                                    - (dyFirstSuggestion + m.vx_y(torg)))
+                                    * (m.vx_y(smallestAngleCorner)
+                                        - (dyFirstSuggestion + m.vx_y(torg))))
                     {
                         // use circumcenter (acute.c:557-559)
                         dxFirstSuggestion = dx;
@@ -946,10 +940,10 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
             neighborNotFound = getNeighborsVertex(
                 m,
                 badotri,
-                m.vx_real(largestAngleCorner, 0),
-                m.vx_real(largestAngleCorner, 1),
-                m.vx_real(smallestAngleCorner, 0),
-                m.vx_real(smallestAngleCorner, 1),
+                m.vx_x(largestAngleCorner),
+                m.vx_y(largestAngleCorner),
+                m.vx_x(smallestAngleCorner),
+                m.vx_y(smallestAngleCorner),
                 &mut thirdPoint,
                 &mut neighborotri,
             );
@@ -978,8 +972,8 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
                 // compute petal and Voronoi edge intersection: in
                 // order to avoid degenerate cases, we need to do a
                 // vector based calculation for line (acute.c:580-585)
-                vector_x = m.vx_real(largestAngleCorner, 1) - m.vx_real(smallestAngleCorner, 1); // (-y, x)
-                vector_y = m.vx_real(smallestAngleCorner, 0) - m.vx_real(largestAngleCorner, 0);
+                vector_x = m.vx_y(largestAngleCorner) - m.vx_y(smallestAngleCorner); // (-y, x)
+                vector_y = m.vx_x(smallestAngleCorner) - m.vx_x(largestAngleCorner);
                 vector_x = myCircumcenter[0] + vector_x;
                 vector_y = myCircumcenter[1] + vector_y;
 
@@ -1000,10 +994,8 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
                 // choose the correct intersection point: calculate
                 // middle point of the longest edge(bisector) (the
                 // variable is C's xMidOfMiddleEdge, acute.c:593-596)
-                xMidOfMiddleEdge =
-                    (m.vx_real(largestAngleCorner, 0) + m.vx_real(smallestAngleCorner, 0)) / 2.0;
-                yMidOfMiddleEdge =
-                    (m.vx_real(largestAngleCorner, 1) + m.vx_real(smallestAngleCorner, 1)) / 2.0;
+                xMidOfMiddleEdge = (m.vx_x(largestAngleCorner) + m.vx_x(smallestAngleCorner)) / 2.0;
+                yMidOfMiddleEdge = (m.vx_y(largestAngleCorner) + m.vx_y(smallestAngleCorner)) / 2.0;
                 // we need to find correct intersection point, since
                 // line intersects circle twice; this direction is
                 // always ACUTE (acute.c:597-600)
@@ -1048,10 +1040,10 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
                     if (voronoiOrInter[0] - 1.0).abs() <= compConst {
                         if testTriangleAngle(
                             b,
-                            m.vx_real(middleAngleCorner, 0),
-                            m.vx_real(middleAngleCorner, 1),
-                            m.vx_real(largestAngleCorner, 0),
-                            m.vx_real(largestAngleCorner, 1),
+                            m.vx_x(middleAngleCorner),
+                            m.vx_y(middleAngleCorner),
+                            m.vx_x(largestAngleCorner),
+                            m.vx_y(largestAngleCorner),
                             neighborCircumcenter[0],
                             neighborCircumcenter[1],
                         ) != 0
@@ -1063,8 +1055,8 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
                             // we are not creating a bad triangle:
                             // neighbor's circumcenter is suggested
                             // (acute.c:625-628)
-                            dxSecondSuggestion = voronoiOrInter[2] - m.vx_real(torg, 0);
-                            dySecondSuggestion = voronoiOrInter[3] - m.vx_real(torg, 1);
+                            dxSecondSuggestion = voronoiOrInter[2] - m.vx_x(torg);
+                            dySecondSuggestion = voronoiOrInter[3] - m.vx_y(torg);
                         }
                     } else {
                         // there is no voronoi vertex between
@@ -1072,10 +1064,10 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
                         // (acute.c:632-633)
                         if testTriangleAngle(
                             b,
-                            m.vx_real(middleAngleCorner, 0),
-                            m.vx_real(middleAngleCorner, 1),
-                            m.vx_real(largestAngleCorner, 0),
-                            m.vx_real(largestAngleCorner, 1),
+                            m.vx_x(middleAngleCorner),
+                            m.vx_y(middleAngleCorner),
+                            m.vx_x(largestAngleCorner),
+                            m.vx_y(largestAngleCorner),
                             inter_x,
                             inter_y,
                         ) != 0
@@ -1102,10 +1094,10 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
                             inter_y = inter_y + ay * pertConst * shortestEdgeDist.sqrt();
                             if testTriangleAngle(
                                 b,
-                                m.vx_real(middleAngleCorner, 0),
-                                m.vx_real(middleAngleCorner, 1),
-                                m.vx_real(largestAngleCorner, 0),
-                                m.vx_real(largestAngleCorner, 1),
+                                m.vx_x(middleAngleCorner),
+                                m.vx_y(middleAngleCorner),
+                                m.vx_x(largestAngleCorner),
+                                m.vx_y(largestAngleCorner),
                                 inter_x,
                                 inter_y,
                             ) != 0
@@ -1117,33 +1109,32 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
                             } else {
                                 // intersection point is suggested
                                 // (acute.c:653-656)
-                                dxSecondSuggestion = inter_x - m.vx_real(torg, 0);
-                                dySecondSuggestion = inter_y - m.vx_real(torg, 1);
+                                dxSecondSuggestion = inter_x - m.vx_x(torg);
+                                dySecondSuggestion = inter_y - m.vx_y(torg);
                             }
                         } else {
                             // intersection point is suggested
                             // (acute.c:658-662)
-                            dxSecondSuggestion = inter_x - m.vx_real(torg, 0);
-                            dySecondSuggestion = inter_y - m.vx_real(torg, 1);
+                            dxSecondSuggestion = inter_x - m.vx_x(torg);
+                            dySecondSuggestion = inter_y - m.vx_y(torg);
                         }
                     }
                     // if it is an acute triangle, check if it is a
                     // good enough location: for acute triangle case,
                     // we need to check if it is ok to use either of
                     // them (acute.c:665-676)
-                    if (m.vx_real(smallestAngleCorner, 0) - myCircumcenter[0])
-                        * (m.vx_real(smallestAngleCorner, 0) - myCircumcenter[0])
-                        + (m.vx_real(smallestAngleCorner, 1) - myCircumcenter[1])
-                            * (m.vx_real(smallestAngleCorner, 1) - myCircumcenter[1])
+                    if (m.vx_x(smallestAngleCorner) - myCircumcenter[0])
+                        * (m.vx_x(smallestAngleCorner) - myCircumcenter[0])
+                        + (m.vx_y(smallestAngleCorner) - myCircumcenter[1])
+                            * (m.vx_y(smallestAngleCorner) - myCircumcenter[1])
                         > lengthConst
-                            * ((m.vx_real(smallestAngleCorner, 0)
-                                - (dxSecondSuggestion + m.vx_real(torg, 0)))
-                                * (m.vx_real(smallestAngleCorner, 0)
-                                    - (dxSecondSuggestion + m.vx_real(torg, 0)))
-                                + (m.vx_real(smallestAngleCorner, 1)
-                                    - (dySecondSuggestion + m.vx_real(torg, 1)))
-                                    * (m.vx_real(smallestAngleCorner, 1)
-                                        - (dySecondSuggestion + m.vx_real(torg, 1))))
+                            * ((m.vx_x(smallestAngleCorner) - (dxSecondSuggestion + m.vx_x(torg)))
+                                * (m.vx_x(smallestAngleCorner)
+                                    - (dxSecondSuggestion + m.vx_x(torg)))
+                                + (m.vx_y(smallestAngleCorner)
+                                    - (dySecondSuggestion + m.vx_y(torg)))
+                                    * (m.vx_y(smallestAngleCorner)
+                                        - (dySecondSuggestion + m.vx_y(torg))))
                     {
                         // use circumcenter (acute.c:673-675)
                         dxSecondSuggestion = dx;
@@ -1160,21 +1151,14 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
             } else {
                 // acute: consider other direction (acute.c:683-697)
                 if justAcute
-                    * ((m.vx_real(smallestAngleCorner, 0)
-                        - (dxSecondSuggestion + m.vx_real(torg, 0)))
-                        * (m.vx_real(smallestAngleCorner, 0)
-                            - (dxSecondSuggestion + m.vx_real(torg, 0)))
-                        + (m.vx_real(smallestAngleCorner, 1)
-                            - (dySecondSuggestion + m.vx_real(torg, 1)))
-                            * (m.vx_real(smallestAngleCorner, 1)
-                                - (dySecondSuggestion + m.vx_real(torg, 1))))
-                    > (m.vx_real(smallestAngleCorner, 0) - (dxFirstSuggestion + m.vx_real(torg, 0)))
-                        * (m.vx_real(smallestAngleCorner, 0)
-                            - (dxFirstSuggestion + m.vx_real(torg, 0)))
-                        + (m.vx_real(smallestAngleCorner, 1)
-                            - (dyFirstSuggestion + m.vx_real(torg, 1)))
-                            * (m.vx_real(smallestAngleCorner, 1)
-                                - (dyFirstSuggestion + m.vx_real(torg, 1)))
+                    * ((m.vx_x(smallestAngleCorner) - (dxSecondSuggestion + m.vx_x(torg)))
+                        * (m.vx_x(smallestAngleCorner) - (dxSecondSuggestion + m.vx_x(torg)))
+                        + (m.vx_y(smallestAngleCorner) - (dySecondSuggestion + m.vx_y(torg)))
+                            * (m.vx_y(smallestAngleCorner) - (dySecondSuggestion + m.vx_y(torg))))
+                    > (m.vx_x(smallestAngleCorner) - (dxFirstSuggestion + m.vx_x(torg)))
+                        * (m.vx_x(smallestAngleCorner) - (dxFirstSuggestion + m.vx_x(torg)))
+                        + (m.vx_y(smallestAngleCorner) - (dyFirstSuggestion + m.vx_y(torg)))
+                            * (m.vx_y(smallestAngleCorner) - (dyFirstSuggestion + m.vx_y(torg)))
                 {
                     dx = dxSecondSuggestion;
                     dy = dySecondSuggestion;
@@ -1188,12 +1172,12 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
 
     if relocated <= 0 {
         // (acute.c:703-705)
-        m.vx_set_real(circumcenter, 0, m.vx_real(torg, 0) + dx);
-        m.vx_set_real(circumcenter, 1, m.vx_real(torg, 1) + dy);
+        m.set_vx_x(circumcenter, m.vx_x(torg) + dx);
+        m.set_vx_y(circumcenter, m.vx_y(torg) + dy);
     } else {
         // (acute.c:706-708)
-        m.vx_set_real(circumcenter, 0, origin_x + dx);
-        m.vx_set_real(circumcenter, 1, origin_y + dy);
+        m.set_vx_x(circumcenter, origin_x + dx);
+        m.set_vx_y(circumcenter, origin_y + dy);
     }
 
     // (acute.c:711-712)
@@ -1431,18 +1415,17 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
     /* Compute the circumcenter of the triangle. */
     // C: xdo = tdest[0] - torg[0]; ... yda = tapex[1] - tdest[1];
     // (acute.c:806-811)
-    xdo = m.vx_real(tdest, 0) - m.vx_real(torg, 0);
-    ydo = m.vx_real(tdest, 1) - m.vx_real(torg, 1);
-    xao = m.vx_real(tapex, 0) - m.vx_real(torg, 0);
-    yao = m.vx_real(tapex, 1) - m.vx_real(torg, 1);
-    xda = m.vx_real(tapex, 0) - m.vx_real(tdest, 0);
-    yda = m.vx_real(tapex, 1) - m.vx_real(tdest, 1);
+    xdo = m.vx_x(tdest) - m.vx_x(torg);
+    ydo = m.vx_y(tdest) - m.vx_y(torg);
+    xao = m.vx_x(tapex) - m.vx_x(torg);
+    yao = m.vx_y(tapex) - m.vx_y(torg);
+    xda = m.vx_x(tapex) - m.vx_x(tdest);
+    yda = m.vx_y(tapex) - m.vx_y(tdest);
     // keeps the square of the distances (acute.c:812-816)
     dodist = xdo * xdo + ydo * ydo;
     aodist = xao * xao + yao * yao;
-    dadist = (m.vx_real(tdest, 0) - m.vx_real(tapex, 0))
-        * (m.vx_real(tdest, 0) - m.vx_real(tapex, 0))
-        + (m.vx_real(tdest, 1) - m.vx_real(tapex, 1)) * (m.vx_real(tdest, 1) - m.vx_real(tapex, 1));
+    dadist = (m.vx_x(tdest) - m.vx_x(tapex)) * (m.vx_x(tdest) - m.vx_x(tapex))
+        + (m.vx_y(tdest) - m.vx_y(tapex)) * (m.vx_y(tdest) - m.vx_y(tapex));
     // checking if the user wanted exact arithmetic or not (acute.c:817)
     if b.noexact {
         denominator = 0.5 / (xdo * yao - xao * ydo);
@@ -1467,8 +1450,8 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
     dy = (xdo * aodist - xao * dodist) * denominator;
     // for debugging and for keeping circumcenter to use later:
     // coordinate value of the circumcenter (acute.c:831-834)
-    myCircumcenter[0] = m.vx_real(torg, 0) + dx;
-    myCircumcenter[1] = m.vx_real(torg, 1) + dy;
+    myCircumcenter[0] = m.vx_x(torg) + dx;
+    myCircumcenter[1] = m.vx_y(torg) + dy;
 
     delotri = badotri; // save for later (acute.c:836)
                        // FINDING THE ORIENTATION OF TRIANGLE: find the orientation of
@@ -1636,10 +1619,10 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
         // if relocation is possible, delete that vertex and insert a
         // vertex at the new location (acute.c:1020-1021)
         if relocated > 0 {
-            dx = newloc[0] - m.vx_real(torg, 0);
-            dy = newloc[1] - m.vx_real(torg, 1);
-            origin_x = m.vx_real(torg, 0); // keep for later use
-            origin_y = m.vx_real(torg, 1); // (acute.c:1024-1025)
+            dx = newloc[0] - m.vx_x(torg);
+            dy = newloc[1] - m.vx_y(torg);
+            origin_x = m.vx_x(torg); // keep for later use
+            origin_y = m.vx_y(torg); // (acute.c:1024-1025)
             match relocated {
                 1 => {
                     // C: deletevertex(m,b,&delotri); (acute.c:1029)
@@ -1684,38 +1667,36 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                                                                                            // compute two possible centers of the petal: finding the
                                                                                            // center, first find the middle point of smallest edge
                                                                                            // (acute.c:1055-1059)
-            xMidOfShortestEdge =
-                (m.vx_real(middleAngleCorner, 0) + m.vx_real(largestAngleCorner, 0)) / 2.0;
-            yMidOfShortestEdge =
-                (m.vx_real(middleAngleCorner, 1) + m.vx_real(largestAngleCorner, 1)) / 2.0;
+            xMidOfShortestEdge = (m.vx_x(middleAngleCorner) + m.vx_x(largestAngleCorner)) / 2.0;
+            yMidOfShortestEdge = (m.vx_y(middleAngleCorner) + m.vx_y(largestAngleCorner)) / 2.0;
             // two possible centers (acute.c:1060-1069)
             xPetalCtr_1 = xMidOfShortestEdge
                 + (petalRadius * petalRadius - (shortestEdgeDist / 4.0)).sqrt()
-                    * (m.vx_real(middleAngleCorner, 1) - m.vx_real(largestAngleCorner, 1))
+                    * (m.vx_y(middleAngleCorner) - m.vx_y(largestAngleCorner))
                     / shortestEdgeDist.sqrt();
             yPetalCtr_1 = yMidOfShortestEdge
                 + (petalRadius * petalRadius - (shortestEdgeDist / 4.0)).sqrt()
-                    * (m.vx_real(largestAngleCorner, 0) - m.vx_real(middleAngleCorner, 0))
+                    * (m.vx_x(largestAngleCorner) - m.vx_x(middleAngleCorner))
                     / shortestEdgeDist.sqrt();
             xPetalCtr_2 = xMidOfShortestEdge
                 - (petalRadius * petalRadius - (shortestEdgeDist / 4.0)).sqrt()
-                    * (m.vx_real(middleAngleCorner, 1) - m.vx_real(largestAngleCorner, 1))
+                    * (m.vx_y(middleAngleCorner) - m.vx_y(largestAngleCorner))
                     / shortestEdgeDist.sqrt();
             yPetalCtr_2 = yMidOfShortestEdge
                 - (petalRadius * petalRadius - (shortestEdgeDist / 4.0)).sqrt()
-                    * (m.vx_real(largestAngleCorner, 0) - m.vx_real(middleAngleCorner, 0))
+                    * (m.vx_x(largestAngleCorner) - m.vx_x(middleAngleCorner))
                     / shortestEdgeDist.sqrt();
             // find the correct circle since there will be two possible
             // circles: calculate the distance to smallest angle corner
             // (acute.c:1070-1075)
-            dxcenter1 = (xPetalCtr_1 - m.vx_real(smallestAngleCorner, 0))
-                * (xPetalCtr_1 - m.vx_real(smallestAngleCorner, 0));
-            dycenter1 = (yPetalCtr_1 - m.vx_real(smallestAngleCorner, 1))
-                * (yPetalCtr_1 - m.vx_real(smallestAngleCorner, 1));
-            dxcenter2 = (xPetalCtr_2 - m.vx_real(smallestAngleCorner, 0))
-                * (xPetalCtr_2 - m.vx_real(smallestAngleCorner, 0));
-            dycenter2 = (yPetalCtr_2 - m.vx_real(smallestAngleCorner, 1))
-                * (yPetalCtr_2 - m.vx_real(smallestAngleCorner, 1));
+            dxcenter1 = (xPetalCtr_1 - m.vx_x(smallestAngleCorner))
+                * (xPetalCtr_1 - m.vx_x(smallestAngleCorner));
+            dycenter1 = (yPetalCtr_1 - m.vx_y(smallestAngleCorner))
+                * (yPetalCtr_1 - m.vx_y(smallestAngleCorner));
+            dxcenter2 = (xPetalCtr_2 - m.vx_x(smallestAngleCorner))
+                * (xPetalCtr_2 - m.vx_x(smallestAngleCorner));
+            dycenter2 = (yPetalCtr_2 - m.vx_y(smallestAngleCorner))
+                * (yPetalCtr_2 - m.vx_y(smallestAngleCorner));
 
             // whichever is closer to smallest angle corner, it must be
             // the center (acute.c:1077-1082)
@@ -1732,10 +1713,10 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
             neighborNotFound_first = getNeighborsVertex(
                 m,
                 badotri,
-                m.vx_real(middleAngleCorner, 0),
-                m.vx_real(middleAngleCorner, 1),
-                m.vx_real(smallestAngleCorner, 0),
-                m.vx_real(smallestAngleCorner, 1),
+                m.vx_x(middleAngleCorner),
+                m.vx_y(middleAngleCorner),
+                m.vx_x(smallestAngleCorner),
+                m.vx_y(smallestAngleCorner),
                 &mut thirdPoint,
                 &mut neighborotri,
             );
@@ -1787,8 +1768,8 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
             isCorrect = chooseCorrectPoint(
                 x_2,
                 y_2,
-                m.vx_real(middleAngleCorner, 0),
-                m.vx_real(middleAngleCorner, 1),
+                m.vx_x(middleAngleCorner),
+                m.vx_y(middleAngleCorner),
                 x_1,
                 y_1,
                 1,
@@ -1808,10 +1789,8 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
             }
             // choose the correct intersection point: calculate middle
             // point of the longest edge(bisector) (acute.c:1122-1125)
-            xMidOfLongestEdge =
-                (m.vx_real(middleAngleCorner, 0) + m.vx_real(smallestAngleCorner, 0)) / 2.0;
-            yMidOfLongestEdge =
-                (m.vx_real(middleAngleCorner, 1) + m.vx_real(smallestAngleCorner, 1)) / 2.0;
+            xMidOfLongestEdge = (m.vx_x(middleAngleCorner) + m.vx_x(smallestAngleCorner)) / 2.0;
+            yMidOfLongestEdge = (m.vx_y(middleAngleCorner) + m.vx_y(smallestAngleCorner)) / 2.0;
             // if there is a neighbor triangle (acute.c:1126-1127)
             if neighborNotFound_first == 0 {
                 neighborvertex_1 = m.org(neighborotri);
@@ -1833,8 +1812,8 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                 // compute petal and Voronoi edge intersection: in
                 // order to avoid degenerate cases, we need to do a
                 // vector based calculation for line (acute.c:1134-1138)
-                vector_x = m.vx_real(middleAngleCorner, 1) - m.vx_real(smallestAngleCorner, 1); // (-y, x)
-                vector_y = m.vx_real(smallestAngleCorner, 0) - m.vx_real(middleAngleCorner, 0);
+                vector_x = m.vx_y(middleAngleCorner) - m.vx_y(smallestAngleCorner); // (-y, x)
+                vector_y = m.vx_x(smallestAngleCorner) - m.vx_x(middleAngleCorner);
                 vector_x = myCircumcenter[0] + vector_x;
                 vector_y = myCircumcenter[1] + vector_y;
 
@@ -1874,8 +1853,8 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
 
                 // calculate the intersection of angle lines and Voronoi:
                 // for slab calculation (acute.c:1154-1157)
-                linepnt1_x = m.vx_real(middleAngleCorner, 0);
-                linepnt1_y = m.vx_real(middleAngleCorner, 1);
+                linepnt1_x = m.vx_x(middleAngleCorner);
+                linepnt1_y = m.vx_y(middleAngleCorner);
                 // C: line_vector_x = largestAngleCorner[0] -
                 // middleAngleCorner[0]; line_vector_y =
                 // largestAngleCorner[1] - middleAngleCorner[1];
@@ -1946,22 +1925,21 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                             // calculate the distance to the smallest
                             // angle corner; check if we create a bad
                             // triangle or not (acute.c:1193-1203)
-                            if ((m.vx_real(smallestAngleCorner, 0) - petal_slab_inter_x_first)
-                                * (m.vx_real(smallestAngleCorner, 0) - petal_slab_inter_x_first)
-                                + (m.vx_real(smallestAngleCorner, 1) - petal_slab_inter_y_first)
-                                    * (m.vx_real(smallestAngleCorner, 1)
-                                        - petal_slab_inter_y_first)
+                            if ((m.vx_x(smallestAngleCorner) - petal_slab_inter_x_first)
+                                * (m.vx_x(smallestAngleCorner) - petal_slab_inter_x_first)
+                                + (m.vx_y(smallestAngleCorner) - petal_slab_inter_y_first)
+                                    * (m.vx_y(smallestAngleCorner) - petal_slab_inter_y_first)
                                 > lengthConst
-                                    * ((m.vx_real(smallestAngleCorner, 0) - line_inter_x)
-                                        * (m.vx_real(smallestAngleCorner, 0) - line_inter_x)
-                                        + (m.vx_real(smallestAngleCorner, 1) - line_inter_y)
-                                            * (m.vx_real(smallestAngleCorner, 1) - line_inter_y)))
+                                    * ((m.vx_x(smallestAngleCorner) - line_inter_x)
+                                        * (m.vx_x(smallestAngleCorner) - line_inter_x)
+                                        + (m.vx_y(smallestAngleCorner) - line_inter_y)
+                                            * (m.vx_y(smallestAngleCorner) - line_inter_y)))
                                 && testTriangleAngle(
                                     b,
-                                    m.vx_real(middleAngleCorner, 0),
-                                    m.vx_real(middleAngleCorner, 1),
-                                    m.vx_real(largestAngleCorner, 0),
-                                    m.vx_real(largestAngleCorner, 1),
+                                    m.vx_x(middleAngleCorner),
+                                    m.vx_y(middleAngleCorner),
+                                    m.vx_x(largestAngleCorner),
+                                    m.vx_y(largestAngleCorner),
                                     petal_slab_inter_x_first,
                                     petal_slab_inter_y_first,
                                 ) != 0
@@ -1983,17 +1961,17 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                                 // which one if better: slab and petal
                                 // intersection is advised
                                 // (acute.c:1205-1209)
-                                dxFirstSuggestion = petal_slab_inter_x_first - m.vx_real(torg, 0);
-                                dyFirstSuggestion = petal_slab_inter_y_first - m.vx_real(torg, 1);
+                                dxFirstSuggestion = petal_slab_inter_x_first - m.vx_x(torg);
+                                dyFirstSuggestion = petal_slab_inter_y_first - m.vx_y(torg);
                             } else {
                                 // slab intersection point is further
                                 // away (acute.c:1210-1211)
                                 if testTriangleAngle(
                                     b,
-                                    m.vx_real(middleAngleCorner, 0),
-                                    m.vx_real(middleAngleCorner, 1),
-                                    m.vx_real(largestAngleCorner, 0),
-                                    m.vx_real(largestAngleCorner, 1),
+                                    m.vx_x(middleAngleCorner),
+                                    m.vx_y(middleAngleCorner),
+                                    m.vx_x(largestAngleCorner),
+                                    m.vx_y(largestAngleCorner),
                                     line_inter_x,
                                     line_inter_y,
                                 ) != 0
@@ -2025,10 +2003,10 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                                         line_inter_y + ay * pertConst * shortestEdgeDist.sqrt();
                                     if testTriangleAngle(
                                         b,
-                                        m.vx_real(middleAngleCorner, 0),
-                                        m.vx_real(middleAngleCorner, 1),
-                                        m.vx_real(largestAngleCorner, 0),
-                                        m.vx_real(largestAngleCorner, 1),
+                                        m.vx_x(middleAngleCorner),
+                                        m.vx_y(middleAngleCorner),
+                                        m.vx_x(largestAngleCorner),
+                                        m.vx_y(largestAngleCorner),
                                         line_inter_x,
                                         line_inter_y,
                                     ) != 0
@@ -2040,8 +2018,8 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                                     } else {
                                         // intersection point is
                                         // suggested (acute.c:1230-1234)
-                                        dxFirstSuggestion = line_inter_x - m.vx_real(torg, 0);
-                                        dyFirstSuggestion = line_inter_y - m.vx_real(torg, 1);
+                                        dxFirstSuggestion = line_inter_x - m.vx_x(torg);
+                                        dyFirstSuggestion = line_inter_y - m.vx_y(torg);
                                     }
                                 } else {
                                     // we are not creating a bad
@@ -2050,8 +2028,8 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                                     // C assigns line_result[2]/[3] -
                                     // the pointBetweenPoints output,
                                     // not the slab intersection
-                                    dxFirstSuggestion = line_result[2] - m.vx_real(torg, 0);
-                                    dyFirstSuggestion = line_result[3] - m.vx_real(torg, 1);
+                                    dxFirstSuggestion = line_result[2] - m.vx_x(torg);
+                                    dyFirstSuggestion = line_result[3] - m.vx_y(torg);
                                 }
                             }
                         } else {
@@ -2059,10 +2037,10 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                             // VORONOI (acute.c:1248-1263)
                             if testTriangleAngle(
                                 b,
-                                m.vx_real(middleAngleCorner, 0),
-                                m.vx_real(middleAngleCorner, 1),
-                                m.vx_real(largestAngleCorner, 0),
-                                m.vx_real(largestAngleCorner, 1),
+                                m.vx_x(middleAngleCorner),
+                                m.vx_y(middleAngleCorner),
+                                m.vx_x(largestAngleCorner),
+                                m.vx_y(largestAngleCorner),
                                 neighborCircumcenter[0],
                                 neighborCircumcenter[1],
                             ) != 0
@@ -2070,8 +2048,8 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                                 dxFirstSuggestion = dx;
                                 dyFirstSuggestion = dy;
                             } else {
-                                dxFirstSuggestion = voronoiOrInter[2] - m.vx_real(torg, 0);
-                                dyFirstSuggestion = voronoiOrInter[3] - m.vx_real(torg, 1);
+                                dxFirstSuggestion = voronoiOrInter[2] - m.vx_x(torg);
+                                dyFirstSuggestion = voronoiOrInter[3] - m.vx_y(torg);
                             }
                         }
                     } else {
@@ -2094,22 +2072,21 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                             // calculate the distance to the smallest
                             // angle corner; check if we create a bad
                             // triangle or not (acute.c:1271-1280)
-                            if ((m.vx_real(smallestAngleCorner, 0) - petal_slab_inter_x_first)
-                                * (m.vx_real(smallestAngleCorner, 0) - petal_slab_inter_x_first)
-                                + (m.vx_real(smallestAngleCorner, 1) - petal_slab_inter_y_first)
-                                    * (m.vx_real(smallestAngleCorner, 1)
-                                        - petal_slab_inter_y_first)
+                            if ((m.vx_x(smallestAngleCorner) - petal_slab_inter_x_first)
+                                * (m.vx_x(smallestAngleCorner) - petal_slab_inter_x_first)
+                                + (m.vx_y(smallestAngleCorner) - petal_slab_inter_y_first)
+                                    * (m.vx_y(smallestAngleCorner) - petal_slab_inter_y_first)
                                 > lengthConst
-                                    * ((m.vx_real(smallestAngleCorner, 0) - line_inter_x)
-                                        * (m.vx_real(smallestAngleCorner, 0) - line_inter_x)
-                                        + (m.vx_real(smallestAngleCorner, 1) - line_inter_y)
-                                            * (m.vx_real(smallestAngleCorner, 1) - line_inter_y)))
+                                    * ((m.vx_x(smallestAngleCorner) - line_inter_x)
+                                        * (m.vx_x(smallestAngleCorner) - line_inter_x)
+                                        + (m.vx_y(smallestAngleCorner) - line_inter_y)
+                                            * (m.vx_y(smallestAngleCorner) - line_inter_y)))
                                 && testTriangleAngle(
                                     b,
-                                    m.vx_real(middleAngleCorner, 0),
-                                    m.vx_real(middleAngleCorner, 1),
-                                    m.vx_real(largestAngleCorner, 0),
-                                    m.vx_real(largestAngleCorner, 1),
+                                    m.vx_x(middleAngleCorner),
+                                    m.vx_y(middleAngleCorner),
+                                    m.vx_x(largestAngleCorner),
+                                    m.vx_y(largestAngleCorner),
                                     petal_slab_inter_x_first,
                                     petal_slab_inter_y_first,
                                 ) != 0
@@ -2131,17 +2108,17 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                                 // which one if better: slab and petal
                                 // intersection is advised
                                 // (acute.c:1282-1283)
-                                dxFirstSuggestion = petal_slab_inter_x_first - m.vx_real(torg, 0);
-                                dyFirstSuggestion = petal_slab_inter_y_first - m.vx_real(torg, 1);
+                                dxFirstSuggestion = petal_slab_inter_x_first - m.vx_x(torg);
+                                dyFirstSuggestion = petal_slab_inter_y_first - m.vx_y(torg);
                             } else {
                                 // slab intersection point is further
                                 // away (acute.c:1285-1286)
                                 if testTriangleAngle(
                                     b,
-                                    m.vx_real(largestAngleCorner, 0),
-                                    m.vx_real(largestAngleCorner, 1),
-                                    m.vx_real(middleAngleCorner, 0),
-                                    m.vx_real(middleAngleCorner, 1),
+                                    m.vx_x(largestAngleCorner),
+                                    m.vx_y(largestAngleCorner),
+                                    m.vx_x(middleAngleCorner),
+                                    m.vx_y(middleAngleCorner),
                                     line_inter_x,
                                     line_inter_y,
                                 ) != 0
@@ -2173,10 +2150,10 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                                         line_inter_y + ay * pertConst * shortestEdgeDist.sqrt();
                                     if testTriangleAngle(
                                         b,
-                                        m.vx_real(middleAngleCorner, 0),
-                                        m.vx_real(middleAngleCorner, 1),
-                                        m.vx_real(largestAngleCorner, 0),
-                                        m.vx_real(largestAngleCorner, 1),
+                                        m.vx_x(middleAngleCorner),
+                                        m.vx_y(middleAngleCorner),
+                                        m.vx_x(largestAngleCorner),
+                                        m.vx_y(largestAngleCorner),
                                         line_inter_x,
                                         line_inter_y,
                                     ) != 0
@@ -2188,8 +2165,8 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                                     } else {
                                         // intersection point is
                                         // suggested (acute.c:1305-1308)
-                                        dxFirstSuggestion = line_inter_x - m.vx_real(torg, 0);
-                                        dyFirstSuggestion = line_inter_y - m.vx_real(torg, 1);
+                                        dxFirstSuggestion = line_inter_x - m.vx_x(torg);
+                                        dyFirstSuggestion = line_inter_y - m.vx_y(torg);
                                     }
                                 } else {
                                     // we are not creating a bad
@@ -2198,18 +2175,18 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                                     // C assigns line_result[2]/[3] -
                                     // the pointBetweenPoints output,
                                     // not the slab intersection
-                                    dxFirstSuggestion = line_result[2] - m.vx_real(torg, 0);
-                                    dyFirstSuggestion = line_result[3] - m.vx_real(torg, 1);
+                                    dxFirstSuggestion = line_result[2] - m.vx_x(torg);
+                                    dyFirstSuggestion = line_result[3] - m.vx_y(torg);
                                 }
                             }
                         } else {
                             // (acute.c:1322-1324)
                             if testTriangleAngle(
                                 b,
-                                m.vx_real(largestAngleCorner, 0),
-                                m.vx_real(largestAngleCorner, 1),
-                                m.vx_real(middleAngleCorner, 0),
-                                m.vx_real(middleAngleCorner, 1),
+                                m.vx_x(largestAngleCorner),
+                                m.vx_y(largestAngleCorner),
+                                m.vx_x(middleAngleCorner),
+                                m.vx_y(middleAngleCorner),
                                 inter_x,
                                 inter_y,
                             ) != 0
@@ -2236,10 +2213,10 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                                 inter_y = inter_y + ay * pertConst * shortestEdgeDist.sqrt();
                                 if testTriangleAngle(
                                     b,
-                                    m.vx_real(middleAngleCorner, 0),
-                                    m.vx_real(middleAngleCorner, 1),
-                                    m.vx_real(largestAngleCorner, 0),
-                                    m.vx_real(largestAngleCorner, 1),
+                                    m.vx_x(middleAngleCorner),
+                                    m.vx_y(middleAngleCorner),
+                                    m.vx_x(largestAngleCorner),
+                                    m.vx_y(largestAngleCorner),
                                     inter_x,
                                     inter_y,
                                 ) != 0
@@ -2251,14 +2228,14 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                                 } else {
                                     // intersection point is suggested
                                     // (acute.c:1345-1350)
-                                    dxFirstSuggestion = inter_x - m.vx_real(torg, 0);
-                                    dyFirstSuggestion = inter_y - m.vx_real(torg, 1);
+                                    dxFirstSuggestion = inter_x - m.vx_x(torg);
+                                    dyFirstSuggestion = inter_y - m.vx_y(torg);
                                 }
                             } else {
                                 // intersection point is suggested
                                 // (acute.c:1353-1356)
-                                dxFirstSuggestion = inter_x - m.vx_real(torg, 0);
-                                dyFirstSuggestion = inter_y - m.vx_real(torg, 1);
+                                dxFirstSuggestion = inter_x - m.vx_x(torg);
+                                dyFirstSuggestion = inter_y - m.vx_y(torg);
                             }
                         }
                     }
@@ -2266,19 +2243,18 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                     // good enough location: for acute triangle case,
                     // we need to check if it is ok to use either of
                     // them (acute.c:1361-1373)
-                    if (m.vx_real(smallestAngleCorner, 0) - myCircumcenter[0])
-                        * (m.vx_real(smallestAngleCorner, 0) - myCircumcenter[0])
-                        + (m.vx_real(smallestAngleCorner, 1) - myCircumcenter[1])
-                            * (m.vx_real(smallestAngleCorner, 1) - myCircumcenter[1])
+                    if (m.vx_x(smallestAngleCorner) - myCircumcenter[0])
+                        * (m.vx_x(smallestAngleCorner) - myCircumcenter[0])
+                        + (m.vx_y(smallestAngleCorner) - myCircumcenter[1])
+                            * (m.vx_y(smallestAngleCorner) - myCircumcenter[1])
                         > lengthConst
-                            * ((m.vx_real(smallestAngleCorner, 0)
-                                - (dxFirstSuggestion + m.vx_real(torg, 0)))
-                                * (m.vx_real(smallestAngleCorner, 0)
-                                    - (dxFirstSuggestion + m.vx_real(torg, 0)))
-                                + (m.vx_real(smallestAngleCorner, 1)
-                                    - (dyFirstSuggestion + m.vx_real(torg, 1)))
-                                    * (m.vx_real(smallestAngleCorner, 1)
-                                        - (dyFirstSuggestion + m.vx_real(torg, 1))))
+                            * ((m.vx_x(smallestAngleCorner) - (dxFirstSuggestion + m.vx_x(torg)))
+                                * (m.vx_x(smallestAngleCorner)
+                                    - (dxFirstSuggestion + m.vx_x(torg)))
+                                + (m.vx_y(smallestAngleCorner)
+                                    - (dyFirstSuggestion + m.vx_y(torg)))
+                                    * (m.vx_y(smallestAngleCorner)
+                                        - (dyFirstSuggestion + m.vx_y(torg))))
                     {
                         // use circumcenter (acute.c:1370-1372)
                         dxFirstSuggestion = dx;
@@ -2296,10 +2272,10 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
             neighborNotFound_second = getNeighborsVertex(
                 m,
                 badotri,
-                m.vx_real(largestAngleCorner, 0),
-                m.vx_real(largestAngleCorner, 1),
-                m.vx_real(smallestAngleCorner, 0),
-                m.vx_real(smallestAngleCorner, 1),
+                m.vx_x(largestAngleCorner),
+                m.vx_y(largestAngleCorner),
+                m.vx_x(smallestAngleCorner),
+                m.vx_y(smallestAngleCorner),
                 &mut thirdPoint,
                 &mut neighborotri,
             );
@@ -2311,10 +2287,8 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
             // choose the correct intersection point: calculate middle
             // point of the longest edge(bisector) (the variable is C's
             // xMidOfMiddleEdge, acute.c:1388-1389)
-            xMidOfMiddleEdge =
-                (m.vx_real(largestAngleCorner, 0) + m.vx_real(smallestAngleCorner, 0)) / 2.0;
-            yMidOfMiddleEdge =
-                (m.vx_real(largestAngleCorner, 1) + m.vx_real(smallestAngleCorner, 1)) / 2.0;
+            xMidOfMiddleEdge = (m.vx_x(largestAngleCorner) + m.vx_x(smallestAngleCorner)) / 2.0;
+            yMidOfMiddleEdge = (m.vx_y(largestAngleCorner) + m.vx_y(smallestAngleCorner)) / 2.0;
             // if there is a neighbor triangle (acute.c:1390-1391)
             if neighborNotFound_second == 0 {
                 neighborvertex_1 = m.org(neighborotri);
@@ -2335,8 +2309,8 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                 // compute petal and Voronoi edge intersection: in
                 // order to avoid degenerate cases, we need to do a
                 // vector based calculation for line (acute.c:1398-1403)
-                vector_x = m.vx_real(largestAngleCorner, 1) - m.vx_real(smallestAngleCorner, 1); // (-y, x)
-                vector_y = m.vx_real(smallestAngleCorner, 0) - m.vx_real(largestAngleCorner, 0);
+                vector_x = m.vx_y(largestAngleCorner) - m.vx_y(smallestAngleCorner); // (-y, x)
+                vector_y = m.vx_x(smallestAngleCorner) - m.vx_x(largestAngleCorner);
                 vector_x = myCircumcenter[0] + vector_x;
                 vector_y = myCircumcenter[1] + vector_y;
 
@@ -2377,8 +2351,8 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
 
                 // calculate the intersection of angle lines and Voronoi:
                 // for slab calculation (acute.c:1424-1426)
-                linepnt1_x = m.vx_real(largestAngleCorner, 0);
-                linepnt1_y = m.vx_real(largestAngleCorner, 1);
+                linepnt1_x = m.vx_x(largestAngleCorner);
+                linepnt1_y = m.vx_y(largestAngleCorner);
                 // C: line_vector_x = middleAngleCorner[0] -
                 // largestAngleCorner[0]; line_vector_y =
                 // middleAngleCorner[1] - largestAngleCorner[1];
@@ -2449,22 +2423,21 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                             // calculate the distance to the smallest
                             // angle corner; check if we create a bad
                             // triangle or not (acute.c:1460-1470)
-                            if ((m.vx_real(smallestAngleCorner, 0) - petal_slab_inter_x_second)
-                                * (m.vx_real(smallestAngleCorner, 0) - petal_slab_inter_x_second)
-                                + (m.vx_real(smallestAngleCorner, 1) - petal_slab_inter_y_second)
-                                    * (m.vx_real(smallestAngleCorner, 1)
-                                        - petal_slab_inter_y_second)
+                            if ((m.vx_x(smallestAngleCorner) - petal_slab_inter_x_second)
+                                * (m.vx_x(smallestAngleCorner) - petal_slab_inter_x_second)
+                                + (m.vx_y(smallestAngleCorner) - petal_slab_inter_y_second)
+                                    * (m.vx_y(smallestAngleCorner) - petal_slab_inter_y_second)
                                 > lengthConst
-                                    * ((m.vx_real(smallestAngleCorner, 0) - line_inter_x)
-                                        * (m.vx_real(smallestAngleCorner, 0) - line_inter_x)
-                                        + (m.vx_real(smallestAngleCorner, 1) - line_inter_y)
-                                            * (m.vx_real(smallestAngleCorner, 1) - line_inter_y)))
+                                    * ((m.vx_x(smallestAngleCorner) - line_inter_x)
+                                        * (m.vx_x(smallestAngleCorner) - line_inter_x)
+                                        + (m.vx_y(smallestAngleCorner) - line_inter_y)
+                                            * (m.vx_y(smallestAngleCorner) - line_inter_y)))
                                 && testTriangleAngle(
                                     b,
-                                    m.vx_real(middleAngleCorner, 0),
-                                    m.vx_real(middleAngleCorner, 1),
-                                    m.vx_real(largestAngleCorner, 0),
-                                    m.vx_real(largestAngleCorner, 1),
+                                    m.vx_x(middleAngleCorner),
+                                    m.vx_y(middleAngleCorner),
+                                    m.vx_x(largestAngleCorner),
+                                    m.vx_y(largestAngleCorner),
                                     petal_slab_inter_x_second,
                                     petal_slab_inter_y_second,
                                 ) != 0
@@ -2486,17 +2459,17 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                                 // which one if better: slab and petal
                                 // intersection is advised
                                 // (acute.c:1472-1473)
-                                dxSecondSuggestion = petal_slab_inter_x_second - m.vx_real(torg, 0);
-                                dySecondSuggestion = petal_slab_inter_y_second - m.vx_real(torg, 1);
+                                dxSecondSuggestion = petal_slab_inter_x_second - m.vx_x(torg);
+                                dySecondSuggestion = petal_slab_inter_y_second - m.vx_y(torg);
                             } else {
                                 // slab intersection point is further
                                 // away (acute.c:1477)
                                 if testTriangleAngle(
                                     b,
-                                    m.vx_real(middleAngleCorner, 0),
-                                    m.vx_real(middleAngleCorner, 1),
-                                    m.vx_real(largestAngleCorner, 0),
-                                    m.vx_real(largestAngleCorner, 1),
+                                    m.vx_x(middleAngleCorner),
+                                    m.vx_y(middleAngleCorner),
+                                    m.vx_x(largestAngleCorner),
+                                    m.vx_y(largestAngleCorner),
                                     line_inter_x,
                                     line_inter_y,
                                 ) != 0
@@ -2528,10 +2501,10 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                                         line_inter_y + ay * pertConst * shortestEdgeDist.sqrt();
                                     if testTriangleAngle(
                                         b,
-                                        m.vx_real(middleAngleCorner, 0),
-                                        m.vx_real(middleAngleCorner, 1),
-                                        m.vx_real(largestAngleCorner, 0),
-                                        m.vx_real(largestAngleCorner, 1),
+                                        m.vx_x(middleAngleCorner),
+                                        m.vx_y(middleAngleCorner),
+                                        m.vx_x(largestAngleCorner),
+                                        m.vx_y(largestAngleCorner),
                                         line_inter_x,
                                         line_inter_y,
                                     ) != 0
@@ -2543,8 +2516,8 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                                     } else {
                                         // intersection point is
                                         // suggested (acute.c:1498-1500)
-                                        dxSecondSuggestion = line_inter_x - m.vx_real(torg, 0);
-                                        dySecondSuggestion = line_inter_y - m.vx_real(torg, 1);
+                                        dxSecondSuggestion = line_inter_x - m.vx_x(torg);
+                                        dySecondSuggestion = line_inter_y - m.vx_y(torg);
                                     }
                                 } else {
                                     // we are not creating a bad
@@ -2553,8 +2526,8 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                                     // C assigns line_result[2]/[3] -
                                     // the pointBetweenPoints output,
                                     // not the slab intersection
-                                    dxSecondSuggestion = line_result[2] - m.vx_real(torg, 0);
-                                    dySecondSuggestion = line_result[3] - m.vx_real(torg, 1);
+                                    dxSecondSuggestion = line_result[2] - m.vx_x(torg);
+                                    dySecondSuggestion = line_result[3] - m.vx_y(torg);
                                 }
                             }
                         } else {
@@ -2562,10 +2535,10 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                             // VORONOI (acute.c:1513-1526)
                             if testTriangleAngle(
                                 b,
-                                m.vx_real(middleAngleCorner, 0),
-                                m.vx_real(middleAngleCorner, 1),
-                                m.vx_real(largestAngleCorner, 0),
-                                m.vx_real(largestAngleCorner, 1),
+                                m.vx_x(middleAngleCorner),
+                                m.vx_y(middleAngleCorner),
+                                m.vx_x(largestAngleCorner),
+                                m.vx_y(largestAngleCorner),
                                 neighborCircumcenter[0],
                                 neighborCircumcenter[1],
                             ) != 0
@@ -2573,8 +2546,8 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                                 dxSecondSuggestion = dx;
                                 dySecondSuggestion = dy;
                             } else {
-                                dxSecondSuggestion = voronoiOrInter[2] - m.vx_real(torg, 0);
-                                dySecondSuggestion = voronoiOrInter[3] - m.vx_real(torg, 1);
+                                dxSecondSuggestion = voronoiOrInter[2] - m.vx_x(torg);
+                                dySecondSuggestion = voronoiOrInter[3] - m.vx_y(torg);
                             }
                         }
                     } else {
@@ -2597,22 +2570,21 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                             // calculate the distance to the smallest
                             // angle corner; check if we create a bad
                             // triangle or not (acute.c:1533-1542)
-                            if ((m.vx_real(smallestAngleCorner, 0) - petal_slab_inter_x_second)
-                                * (m.vx_real(smallestAngleCorner, 0) - petal_slab_inter_x_second)
-                                + (m.vx_real(smallestAngleCorner, 1) - petal_slab_inter_y_second)
-                                    * (m.vx_real(smallestAngleCorner, 1)
-                                        - petal_slab_inter_y_second)
+                            if ((m.vx_x(smallestAngleCorner) - petal_slab_inter_x_second)
+                                * (m.vx_x(smallestAngleCorner) - petal_slab_inter_x_second)
+                                + (m.vx_y(smallestAngleCorner) - petal_slab_inter_y_second)
+                                    * (m.vx_y(smallestAngleCorner) - petal_slab_inter_y_second)
                                 > lengthConst
-                                    * ((m.vx_real(smallestAngleCorner, 0) - line_inter_x)
-                                        * (m.vx_real(smallestAngleCorner, 0) - line_inter_x)
-                                        + (m.vx_real(smallestAngleCorner, 1) - line_inter_y)
-                                            * (m.vx_real(smallestAngleCorner, 1) - line_inter_y)))
+                                    * ((m.vx_x(smallestAngleCorner) - line_inter_x)
+                                        * (m.vx_x(smallestAngleCorner) - line_inter_x)
+                                        + (m.vx_y(smallestAngleCorner) - line_inter_y)
+                                            * (m.vx_y(smallestAngleCorner) - line_inter_y)))
                                 && testTriangleAngle(
                                     b,
-                                    m.vx_real(middleAngleCorner, 0),
-                                    m.vx_real(middleAngleCorner, 1),
-                                    m.vx_real(largestAngleCorner, 0),
-                                    m.vx_real(largestAngleCorner, 1),
+                                    m.vx_x(middleAngleCorner),
+                                    m.vx_y(middleAngleCorner),
+                                    m.vx_x(largestAngleCorner),
+                                    m.vx_y(largestAngleCorner),
                                     petal_slab_inter_x_second,
                                     petal_slab_inter_y_second,
                                 ) != 0
@@ -2634,17 +2606,17 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                                 // which one if better: slab and petal
                                 // intersection is advised
                                 // (acute.c:1544-1545)
-                                dxSecondSuggestion = petal_slab_inter_x_second - m.vx_real(torg, 0);
-                                dySecondSuggestion = petal_slab_inter_y_second - m.vx_real(torg, 1);
+                                dxSecondSuggestion = petal_slab_inter_x_second - m.vx_x(torg);
+                                dySecondSuggestion = petal_slab_inter_y_second - m.vx_y(torg);
                             } else {
                                 // slab intersection point is further
                                 // away (acute.c:1548)
                                 if testTriangleAngle(
                                     b,
-                                    m.vx_real(largestAngleCorner, 0),
-                                    m.vx_real(largestAngleCorner, 1),
-                                    m.vx_real(middleAngleCorner, 0),
-                                    m.vx_real(middleAngleCorner, 1),
+                                    m.vx_x(largestAngleCorner),
+                                    m.vx_y(largestAngleCorner),
+                                    m.vx_x(middleAngleCorner),
+                                    m.vx_y(middleAngleCorner),
                                     line_inter_x,
                                     line_inter_y,
                                 ) != 0
@@ -2676,10 +2648,10 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                                         line_inter_y + ay * pertConst * shortestEdgeDist.sqrt();
                                     if testTriangleAngle(
                                         b,
-                                        m.vx_real(middleAngleCorner, 0),
-                                        m.vx_real(middleAngleCorner, 1),
-                                        m.vx_real(largestAngleCorner, 0),
-                                        m.vx_real(largestAngleCorner, 1),
+                                        m.vx_x(middleAngleCorner),
+                                        m.vx_y(middleAngleCorner),
+                                        m.vx_x(largestAngleCorner),
+                                        m.vx_y(largestAngleCorner),
                                         line_inter_x,
                                         line_inter_y,
                                     ) != 0
@@ -2691,8 +2663,8 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                                     } else {
                                         // intersection point is
                                         // suggested (acute.c:1569-1570)
-                                        dxSecondSuggestion = line_inter_x - m.vx_real(torg, 0);
-                                        dySecondSuggestion = line_inter_y - m.vx_real(torg, 1);
+                                        dxSecondSuggestion = line_inter_x - m.vx_x(torg);
+                                        dySecondSuggestion = line_inter_y - m.vx_y(torg);
                                     }
                                 } else {
                                     // we are not creating a bad
@@ -2701,8 +2673,8 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                                     // C assigns line_result[2]/[3] -
                                     // the pointBetweenPoints output,
                                     // not the slab intersection
-                                    dxSecondSuggestion = line_result[2] - m.vx_real(torg, 0);
-                                    dySecondSuggestion = line_result[3] - m.vx_real(torg, 1);
+                                    dxSecondSuggestion = line_result[2] - m.vx_x(torg);
+                                    dySecondSuggestion = line_result[3] - m.vx_y(torg);
                                 }
                             }
                         } else {
@@ -2712,10 +2684,10 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                             // largest corner first (acute.c:1324)
                             if testTriangleAngle(
                                 b,
-                                m.vx_real(middleAngleCorner, 0),
-                                m.vx_real(middleAngleCorner, 1),
-                                m.vx_real(largestAngleCorner, 0),
-                                m.vx_real(largestAngleCorner, 1),
+                                m.vx_x(middleAngleCorner),
+                                m.vx_y(middleAngleCorner),
+                                m.vx_x(largestAngleCorner),
+                                m.vx_y(largestAngleCorner),
                                 inter_x,
                                 inter_y,
                             ) != 0
@@ -2742,10 +2714,10 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                                 inter_y = inter_y + ay * pertConst * shortestEdgeDist.sqrt();
                                 if testTriangleAngle(
                                     b,
-                                    m.vx_real(middleAngleCorner, 0),
-                                    m.vx_real(middleAngleCorner, 1),
-                                    m.vx_real(largestAngleCorner, 0),
-                                    m.vx_real(largestAngleCorner, 1),
+                                    m.vx_x(middleAngleCorner),
+                                    m.vx_y(middleAngleCorner),
+                                    m.vx_x(largestAngleCorner),
+                                    m.vx_y(largestAngleCorner),
                                     inter_x,
                                     inter_y,
                                 ) != 0
@@ -2757,14 +2729,14 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                                 } else {
                                     // intersection point is suggested
                                     // (acute.c:1607-1609)
-                                    dxSecondSuggestion = inter_x - m.vx_real(torg, 0);
-                                    dySecondSuggestion = inter_y - m.vx_real(torg, 1);
+                                    dxSecondSuggestion = inter_x - m.vx_x(torg);
+                                    dySecondSuggestion = inter_y - m.vx_y(torg);
                                 }
                             } else {
                                 // intersection point is suggested
                                 // (acute.c:1612-1616)
-                                dxSecondSuggestion = inter_x - m.vx_real(torg, 0);
-                                dySecondSuggestion = inter_y - m.vx_real(torg, 1);
+                                dxSecondSuggestion = inter_x - m.vx_x(torg);
+                                dySecondSuggestion = inter_y - m.vx_y(torg);
                             }
                         }
                     }
@@ -2772,19 +2744,18 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                     // good enough location: for acute triangle case,
                     // we need to check if it is ok to use either of
                     // them (acute.c:1622-1634)
-                    if (m.vx_real(smallestAngleCorner, 0) - myCircumcenter[0])
-                        * (m.vx_real(smallestAngleCorner, 0) - myCircumcenter[0])
-                        + (m.vx_real(smallestAngleCorner, 1) - myCircumcenter[1])
-                            * (m.vx_real(smallestAngleCorner, 1) - myCircumcenter[1])
+                    if (m.vx_x(smallestAngleCorner) - myCircumcenter[0])
+                        * (m.vx_x(smallestAngleCorner) - myCircumcenter[0])
+                        + (m.vx_y(smallestAngleCorner) - myCircumcenter[1])
+                            * (m.vx_y(smallestAngleCorner) - myCircumcenter[1])
                         > lengthConst
-                            * ((m.vx_real(smallestAngleCorner, 0)
-                                - (dxSecondSuggestion + m.vx_real(torg, 0)))
-                                * (m.vx_real(smallestAngleCorner, 0)
-                                    - (dxSecondSuggestion + m.vx_real(torg, 0)))
-                                + (m.vx_real(smallestAngleCorner, 1)
-                                    - (dySecondSuggestion + m.vx_real(torg, 1)))
-                                    * (m.vx_real(smallestAngleCorner, 1)
-                                        - (dySecondSuggestion + m.vx_real(torg, 1))))
+                            * ((m.vx_x(smallestAngleCorner) - (dxSecondSuggestion + m.vx_x(torg)))
+                                * (m.vx_x(smallestAngleCorner)
+                                    - (dxSecondSuggestion + m.vx_x(torg)))
+                                + (m.vx_y(smallestAngleCorner)
+                                    - (dySecondSuggestion + m.vx_y(torg)))
+                                    * (m.vx_y(smallestAngleCorner)
+                                        - (dySecondSuggestion + m.vx_y(torg))))
                     {
                         // use circumcenter (acute.c:1631-1633)
                         dxSecondSuggestion = dx;
@@ -2803,14 +2774,14 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                     // both directions are on the boundary: compare the
                     // two edge-midpoint distances (acute.c:1638-1655)
                     if justAcute
-                        * ((m.vx_real(smallestAngleCorner, 0) - xMidOfMiddleEdge)
-                            * (m.vx_real(smallestAngleCorner, 0) - xMidOfMiddleEdge)
-                            + (m.vx_real(smallestAngleCorner, 1) - yMidOfMiddleEdge)
-                                * (m.vx_real(smallestAngleCorner, 1) - yMidOfMiddleEdge))
-                        > (m.vx_real(smallestAngleCorner, 0) - xMidOfLongestEdge)
-                            * (m.vx_real(smallestAngleCorner, 0) - xMidOfLongestEdge)
-                            + (m.vx_real(smallestAngleCorner, 1) - yMidOfLongestEdge)
-                                * (m.vx_real(smallestAngleCorner, 1) - yMidOfLongestEdge)
+                        * ((m.vx_x(smallestAngleCorner) - xMidOfMiddleEdge)
+                            * (m.vx_x(smallestAngleCorner) - xMidOfMiddleEdge)
+                            + (m.vx_y(smallestAngleCorner) - yMidOfMiddleEdge)
+                                * (m.vx_y(smallestAngleCorner) - yMidOfMiddleEdge))
+                        > (m.vx_x(smallestAngleCorner) - xMidOfLongestEdge)
+                            * (m.vx_x(smallestAngleCorner) - xMidOfLongestEdge)
+                            + (m.vx_y(smallestAngleCorner) - yMidOfLongestEdge)
+                                * (m.vx_y(smallestAngleCorner) - yMidOfLongestEdge)
                     {
                         dx = dxSecondSuggestion;
                         dy = dySecondSuggestion;
@@ -2822,18 +2793,15 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                     // the first direction is on the boundary
                     // (acute.c:1656-1673)
                     if justAcute
-                        * ((m.vx_real(smallestAngleCorner, 0)
-                            - (dxSecondSuggestion + m.vx_real(torg, 0)))
-                            * (m.vx_real(smallestAngleCorner, 0)
-                                - (dxSecondSuggestion + m.vx_real(torg, 0)))
-                            + (m.vx_real(smallestAngleCorner, 1)
-                                - (dySecondSuggestion + m.vx_real(torg, 1)))
-                                * (m.vx_real(smallestAngleCorner, 1)
-                                    - (dySecondSuggestion + m.vx_real(torg, 1))))
-                        > (m.vx_real(smallestAngleCorner, 0) - xMidOfLongestEdge)
-                            * (m.vx_real(smallestAngleCorner, 0) - xMidOfLongestEdge)
-                            + (m.vx_real(smallestAngleCorner, 1) - yMidOfLongestEdge)
-                                * (m.vx_real(smallestAngleCorner, 1) - yMidOfLongestEdge)
+                        * ((m.vx_x(smallestAngleCorner) - (dxSecondSuggestion + m.vx_x(torg)))
+                            * (m.vx_x(smallestAngleCorner) - (dxSecondSuggestion + m.vx_x(torg)))
+                            + (m.vx_y(smallestAngleCorner) - (dySecondSuggestion + m.vx_y(torg)))
+                                * (m.vx_y(smallestAngleCorner)
+                                    - (dySecondSuggestion + m.vx_y(torg))))
+                        > (m.vx_x(smallestAngleCorner) - xMidOfLongestEdge)
+                            * (m.vx_x(smallestAngleCorner) - xMidOfLongestEdge)
+                            + (m.vx_y(smallestAngleCorner) - yMidOfLongestEdge)
+                                * (m.vx_y(smallestAngleCorner) - yMidOfLongestEdge)
                     {
                         dx = dxSecondSuggestion;
                         dy = dySecondSuggestion;
@@ -2845,18 +2813,14 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                     // the second direction is on the boundary
                     // (acute.c:1674-1691)
                     if justAcute
-                        * ((m.vx_real(smallestAngleCorner, 0) - xMidOfMiddleEdge)
-                            * (m.vx_real(smallestAngleCorner, 0) - xMidOfMiddleEdge)
-                            + (m.vx_real(smallestAngleCorner, 1) - yMidOfMiddleEdge)
-                                * (m.vx_real(smallestAngleCorner, 1) - yMidOfMiddleEdge))
-                        > (m.vx_real(smallestAngleCorner, 0)
-                            - (dxFirstSuggestion + m.vx_real(torg, 0)))
-                            * (m.vx_real(smallestAngleCorner, 0)
-                                - (dxFirstSuggestion + m.vx_real(torg, 0)))
-                            + (m.vx_real(smallestAngleCorner, 1)
-                                - (dyFirstSuggestion + m.vx_real(torg, 1)))
-                                * (m.vx_real(smallestAngleCorner, 1)
-                                    - (dyFirstSuggestion + m.vx_real(torg, 1)))
+                        * ((m.vx_x(smallestAngleCorner) - xMidOfMiddleEdge)
+                            * (m.vx_x(smallestAngleCorner) - xMidOfMiddleEdge)
+                            + (m.vx_y(smallestAngleCorner) - yMidOfMiddleEdge)
+                                * (m.vx_y(smallestAngleCorner) - yMidOfMiddleEdge))
+                        > (m.vx_x(smallestAngleCorner) - (dxFirstSuggestion + m.vx_x(torg)))
+                            * (m.vx_x(smallestAngleCorner) - (dxFirstSuggestion + m.vx_x(torg)))
+                            + (m.vx_y(smallestAngleCorner) - (dyFirstSuggestion + m.vx_y(torg)))
+                                * (m.vx_y(smallestAngleCorner) - (dyFirstSuggestion + m.vx_y(torg)))
                     {
                         dx = dxSecondSuggestion;
                         dy = dySecondSuggestion;
@@ -2868,22 +2832,15 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                     // both directions have neighbors: compare the two
                     // suggestions (acute.c:1692-1709)
                     if justAcute
-                        * ((m.vx_real(smallestAngleCorner, 0)
-                            - (dxSecondSuggestion + m.vx_real(torg, 0)))
-                            * (m.vx_real(smallestAngleCorner, 0)
-                                - (dxSecondSuggestion + m.vx_real(torg, 0)))
-                            + (m.vx_real(smallestAngleCorner, 1)
-                                - (dySecondSuggestion + m.vx_real(torg, 1)))
-                                * (m.vx_real(smallestAngleCorner, 1)
-                                    - (dySecondSuggestion + m.vx_real(torg, 1))))
-                        > (m.vx_real(smallestAngleCorner, 0)
-                            - (dxFirstSuggestion + m.vx_real(torg, 0)))
-                            * (m.vx_real(smallestAngleCorner, 0)
-                                - (dxFirstSuggestion + m.vx_real(torg, 0)))
-                            + (m.vx_real(smallestAngleCorner, 1)
-                                - (dyFirstSuggestion + m.vx_real(torg, 1)))
-                                * (m.vx_real(smallestAngleCorner, 1)
-                                    - (dyFirstSuggestion + m.vx_real(torg, 1)))
+                        * ((m.vx_x(smallestAngleCorner) - (dxSecondSuggestion + m.vx_x(torg)))
+                            * (m.vx_x(smallestAngleCorner) - (dxSecondSuggestion + m.vx_x(torg)))
+                            + (m.vx_y(smallestAngleCorner) - (dySecondSuggestion + m.vx_y(torg)))
+                                * (m.vx_y(smallestAngleCorner)
+                                    - (dySecondSuggestion + m.vx_y(torg))))
+                        > (m.vx_x(smallestAngleCorner) - (dxFirstSuggestion + m.vx_x(torg)))
+                            * (m.vx_x(smallestAngleCorner) - (dxFirstSuggestion + m.vx_x(torg)))
+                            + (m.vx_y(smallestAngleCorner) - (dyFirstSuggestion + m.vx_y(torg)))
+                                * (m.vx_y(smallestAngleCorner) - (dyFirstSuggestion + m.vx_y(torg)))
                     {
                         dx = dxSecondSuggestion;
                         dy = dySecondSuggestion;
@@ -2900,14 +2857,14 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                     // both directions are on the boundary
                     // (acute.c:1713-1730)
                     if justAcute
-                        * ((m.vx_real(smallestAngleCorner, 0) - xMidOfMiddleEdge)
-                            * (m.vx_real(smallestAngleCorner, 0) - xMidOfMiddleEdge)
-                            + (m.vx_real(smallestAngleCorner, 1) - yMidOfMiddleEdge)
-                                * (m.vx_real(smallestAngleCorner, 1) - yMidOfMiddleEdge))
-                        > (m.vx_real(smallestAngleCorner, 0) - xMidOfLongestEdge)
-                            * (m.vx_real(smallestAngleCorner, 0) - xMidOfLongestEdge)
-                            + (m.vx_real(smallestAngleCorner, 1) - yMidOfLongestEdge)
-                                * (m.vx_real(smallestAngleCorner, 1) - yMidOfLongestEdge)
+                        * ((m.vx_x(smallestAngleCorner) - xMidOfMiddleEdge)
+                            * (m.vx_x(smallestAngleCorner) - xMidOfMiddleEdge)
+                            + (m.vx_y(smallestAngleCorner) - yMidOfMiddleEdge)
+                                * (m.vx_y(smallestAngleCorner) - yMidOfMiddleEdge))
+                        > (m.vx_x(smallestAngleCorner) - xMidOfLongestEdge)
+                            * (m.vx_x(smallestAngleCorner) - xMidOfLongestEdge)
+                            + (m.vx_y(smallestAngleCorner) - yMidOfLongestEdge)
+                                * (m.vx_y(smallestAngleCorner) - yMidOfLongestEdge)
                     {
                         dx = dxSecondSuggestion;
                         dy = dySecondSuggestion;
@@ -2919,18 +2876,15 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                     // the first direction is on the boundary
                     // (acute.c:1731-1748)
                     if justAcute
-                        * ((m.vx_real(smallestAngleCorner, 0)
-                            - (dxSecondSuggestion + m.vx_real(torg, 0)))
-                            * (m.vx_real(smallestAngleCorner, 0)
-                                - (dxSecondSuggestion + m.vx_real(torg, 0)))
-                            + (m.vx_real(smallestAngleCorner, 1)
-                                - (dySecondSuggestion + m.vx_real(torg, 1)))
-                                * (m.vx_real(smallestAngleCorner, 1)
-                                    - (dySecondSuggestion + m.vx_real(torg, 1))))
-                        > (m.vx_real(smallestAngleCorner, 0) - xMidOfLongestEdge)
-                            * (m.vx_real(smallestAngleCorner, 0) - xMidOfLongestEdge)
-                            + (m.vx_real(smallestAngleCorner, 1) - yMidOfLongestEdge)
-                                * (m.vx_real(smallestAngleCorner, 1) - yMidOfLongestEdge)
+                        * ((m.vx_x(smallestAngleCorner) - (dxSecondSuggestion + m.vx_x(torg)))
+                            * (m.vx_x(smallestAngleCorner) - (dxSecondSuggestion + m.vx_x(torg)))
+                            + (m.vx_y(smallestAngleCorner) - (dySecondSuggestion + m.vx_y(torg)))
+                                * (m.vx_y(smallestAngleCorner)
+                                    - (dySecondSuggestion + m.vx_y(torg))))
+                        > (m.vx_x(smallestAngleCorner) - xMidOfLongestEdge)
+                            * (m.vx_x(smallestAngleCorner) - xMidOfLongestEdge)
+                            + (m.vx_y(smallestAngleCorner) - yMidOfLongestEdge)
+                                * (m.vx_y(smallestAngleCorner) - yMidOfLongestEdge)
                     {
                         dx = dxSecondSuggestion;
                         dy = dySecondSuggestion;
@@ -2942,18 +2896,14 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                     // the second direction is on the boundary
                     // (acute.c:1749-1766)
                     if justAcute
-                        * ((m.vx_real(smallestAngleCorner, 0) - xMidOfMiddleEdge)
-                            * (m.vx_real(smallestAngleCorner, 0) - xMidOfMiddleEdge)
-                            + (m.vx_real(smallestAngleCorner, 1) - yMidOfMiddleEdge)
-                                * (m.vx_real(smallestAngleCorner, 1) - yMidOfMiddleEdge))
-                        > (m.vx_real(smallestAngleCorner, 0)
-                            - (dxFirstSuggestion + m.vx_real(torg, 0)))
-                            * (m.vx_real(smallestAngleCorner, 0)
-                                - (dxFirstSuggestion + m.vx_real(torg, 0)))
-                            + (m.vx_real(smallestAngleCorner, 1)
-                                - (dyFirstSuggestion + m.vx_real(torg, 1)))
-                                * (m.vx_real(smallestAngleCorner, 1)
-                                    - (dyFirstSuggestion + m.vx_real(torg, 1)))
+                        * ((m.vx_x(smallestAngleCorner) - xMidOfMiddleEdge)
+                            * (m.vx_x(smallestAngleCorner) - xMidOfMiddleEdge)
+                            + (m.vx_y(smallestAngleCorner) - yMidOfMiddleEdge)
+                                * (m.vx_y(smallestAngleCorner) - yMidOfMiddleEdge))
+                        > (m.vx_x(smallestAngleCorner) - (dxFirstSuggestion + m.vx_x(torg)))
+                            * (m.vx_x(smallestAngleCorner) - (dxFirstSuggestion + m.vx_x(torg)))
+                            + (m.vx_y(smallestAngleCorner) - (dyFirstSuggestion + m.vx_y(torg)))
+                                * (m.vx_y(smallestAngleCorner) - (dyFirstSuggestion + m.vx_y(torg)))
                     {
                         dx = dxSecondSuggestion;
                         dy = dySecondSuggestion;
@@ -2964,22 +2914,15 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                 } else {
                     // both directions have neighbors (acute.c:1767-1784)
                     if justAcute
-                        * ((m.vx_real(smallestAngleCorner, 0)
-                            - (dxSecondSuggestion + m.vx_real(torg, 0)))
-                            * (m.vx_real(smallestAngleCorner, 0)
-                                - (dxSecondSuggestion + m.vx_real(torg, 0)))
-                            + (m.vx_real(smallestAngleCorner, 1)
-                                - (dySecondSuggestion + m.vx_real(torg, 1)))
-                                * (m.vx_real(smallestAngleCorner, 1)
-                                    - (dySecondSuggestion + m.vx_real(torg, 1))))
-                        > (m.vx_real(smallestAngleCorner, 0)
-                            - (dxFirstSuggestion + m.vx_real(torg, 0)))
-                            * (m.vx_real(smallestAngleCorner, 0)
-                                - (dxFirstSuggestion + m.vx_real(torg, 0)))
-                            + (m.vx_real(smallestAngleCorner, 1)
-                                - (dyFirstSuggestion + m.vx_real(torg, 1)))
-                                * (m.vx_real(smallestAngleCorner, 1)
-                                    - (dyFirstSuggestion + m.vx_real(torg, 1)))
+                        * ((m.vx_x(smallestAngleCorner) - (dxSecondSuggestion + m.vx_x(torg)))
+                            * (m.vx_x(smallestAngleCorner) - (dxSecondSuggestion + m.vx_x(torg)))
+                            + (m.vx_y(smallestAngleCorner) - (dySecondSuggestion + m.vx_y(torg)))
+                                * (m.vx_y(smallestAngleCorner)
+                                    - (dySecondSuggestion + m.vx_y(torg))))
+                        > (m.vx_x(smallestAngleCorner) - (dxFirstSuggestion + m.vx_x(torg)))
+                            * (m.vx_x(smallestAngleCorner) - (dxFirstSuggestion + m.vx_x(torg)))
+                            + (m.vx_y(smallestAngleCorner) - (dyFirstSuggestion + m.vx_y(torg)))
+                                * (m.vx_y(smallestAngleCorner) - (dyFirstSuggestion + m.vx_y(torg)))
                     {
                         dx = dxSecondSuggestion;
                         dy = dySecondSuggestion;
@@ -2994,12 +2937,12 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
 
     if relocated <= 0 {
         // (acute.c:1791-1793)
-        m.vx_set_real(circumcenter, 0, m.vx_real(torg, 0) + dx);
-        m.vx_set_real(circumcenter, 1, m.vx_real(torg, 1) + dy);
+        m.set_vx_x(circumcenter, m.vx_x(torg) + dx);
+        m.set_vx_y(circumcenter, m.vx_y(torg) + dy);
     } else {
         // (acute.c:1795-1796)
-        m.vx_set_real(circumcenter, 0, origin_x + dx);
-        m.vx_set_real(circumcenter, 1, origin_y + dy);
+        m.set_vx_x(circumcenter, origin_x + dx);
+        m.set_vx_y(circumcenter, origin_y + dy);
     }
 
     // (acute.c:1798-1799)
@@ -3311,28 +3254,28 @@ pub(crate) fn getStarPoints(
     // C: switch(whichPoint){ (acute.c:2056-2081)
     match whichPoint {
         1 => {
-            first_x = m.vx_real(p, 0); // point at the center
-            first_y = m.vx_real(p, 1);
-            second_x = m.vx_real(r, 0); // second vertex of first edge to consider
-            second_y = m.vx_real(r, 1);
-            third_x = m.vx_real(q, 0); // for terminating the search
-            third_y = m.vx_real(q, 1);
+            first_x = m.vx_x(p); // point at the center
+            first_y = m.vx_y(p);
+            second_x = m.vx_x(r); // second vertex of first edge to consider
+            second_y = m.vx_y(r);
+            third_x = m.vx_x(q); // for terminating the search
+            third_y = m.vx_y(q);
         }
         2 => {
-            first_x = m.vx_real(q, 0); // point at the center
-            first_y = m.vx_real(q, 1);
-            second_x = m.vx_real(p, 0); // second vertex of first edge to consider
-            second_y = m.vx_real(p, 1);
-            third_x = m.vx_real(r, 0); // for terminating the search
-            third_y = m.vx_real(r, 1);
+            first_x = m.vx_x(q); // point at the center
+            first_y = m.vx_y(q);
+            second_x = m.vx_x(p); // second vertex of first edge to consider
+            second_y = m.vx_y(p);
+            third_x = m.vx_x(r); // for terminating the search
+            third_y = m.vx_y(r);
         }
         3 => {
-            first_x = m.vx_real(r, 0); // point at the center
-            first_y = m.vx_real(r, 1);
-            second_x = m.vx_real(q, 0); // second vertex of first edge to consider
-            second_y = m.vx_real(q, 1);
-            third_x = m.vx_real(p, 0); // for terminating the search
-            third_y = m.vx_real(p, 1);
+            first_x = m.vx_x(r); // point at the center
+            first_y = m.vx_y(r);
+            second_x = m.vx_x(q); // second vertex of first edge to consider
+            second_y = m.vx_y(q);
+            third_x = m.vx_x(p); // for terminating the search
+            third_y = m.vx_y(p);
         }
         // C's switch has no default arm (acute.c:2056-2081); the only
         // callers pass 1, 2 or 3 (acute.c:1884, 1927, 1969).
@@ -3469,42 +3412,42 @@ pub(crate) fn getNeighborsVertex(
             neighborvertex_3 = m.apex(neighbor);
 
             // check if it is really a triangle
-            if (m.vx_real(neighborvertex_1, 0) == m.vx_real(neighborvertex_2, 0)
-                && m.vx_real(neighborvertex_1, 1) == m.vx_real(neighborvertex_2, 1))
-                || (m.vx_real(neighborvertex_2, 0) == m.vx_real(neighborvertex_3, 0)
-                    && m.vx_real(neighborvertex_2, 1) == m.vx_real(neighborvertex_3, 1))
-                || (m.vx_real(neighborvertex_1, 0) == m.vx_real(neighborvertex_3, 0)
-                    && m.vx_real(neighborvertex_1, 1) == m.vx_real(neighborvertex_3, 1))
+            if (m.vx_x(neighborvertex_1) == m.vx_x(neighborvertex_2)
+                && m.vx_y(neighborvertex_1) == m.vx_y(neighborvertex_2))
+                || (m.vx_x(neighborvertex_2) == m.vx_x(neighborvertex_3)
+                    && m.vx_y(neighborvertex_2) == m.vx_y(neighborvertex_3))
+                || (m.vx_x(neighborvertex_1) == m.vx_x(neighborvertex_3)
+                    && m.vx_y(neighborvertex_1) == m.vx_y(neighborvertex_3))
             {
                 //printf("Two vertices are the same!!!!!!!\n");
             } else {
                 // begin searching for the correct neighbor triangle
                 firstVertexMatched = 0;
-                if (first_x - m.vx_real(neighborvertex_1, 0)).abs() < compConst
-                    && (first_y - m.vx_real(neighborvertex_1, 1)).abs() < compConst
+                if (first_x - m.vx_x(neighborvertex_1)).abs() < compConst
+                    && (first_y - m.vx_y(neighborvertex_1)).abs() < compConst
                 {
                     firstVertexMatched = 11; // neighbor's 1st vertex is matched to first vertex
-                } else if (first_x - m.vx_real(neighborvertex_2, 0)).abs() < compConst
-                    && (first_y - m.vx_real(neighborvertex_2, 1)).abs() < compConst
+                } else if (first_x - m.vx_x(neighborvertex_2)).abs() < compConst
+                    && (first_y - m.vx_y(neighborvertex_2)).abs() < compConst
                 {
                     firstVertexMatched = 12; // neighbor's 2nd vertex is matched to first vertex
-                } else if (first_x - m.vx_real(neighborvertex_3, 0)).abs() < compConst
-                    && (first_y - m.vx_real(neighborvertex_3, 1)).abs() < compConst
+                } else if (first_x - m.vx_x(neighborvertex_3)).abs() < compConst
+                    && (first_y - m.vx_y(neighborvertex_3)).abs() < compConst
                 {
                     firstVertexMatched = 13; // neighbor's 3rd vertex is matched to first vertex
                 }
 
                 secondVertexMatched = 0;
-                if (second_x - m.vx_real(neighborvertex_1, 0)).abs() < compConst
-                    && (second_y - m.vx_real(neighborvertex_1, 1)).abs() < compConst
+                if (second_x - m.vx_x(neighborvertex_1)).abs() < compConst
+                    && (second_y - m.vx_y(neighborvertex_1)).abs() < compConst
                 {
                     secondVertexMatched = 21; // neighbor's 1st vertex is matched to second vertex
-                } else if (second_x - m.vx_real(neighborvertex_2, 0)).abs() < compConst
-                    && (second_y - m.vx_real(neighborvertex_2, 1)).abs() < compConst
+                } else if (second_x - m.vx_x(neighborvertex_2)).abs() < compConst
+                    && (second_y - m.vx_y(neighborvertex_2)).abs() < compConst
                 {
                     secondVertexMatched = 22; // neighbor's 2nd vertex is matched to second vertex
-                } else if (second_x - m.vx_real(neighborvertex_3, 0)).abs() < compConst
-                    && (second_y - m.vx_real(neighborvertex_3, 1)).abs() < compConst
+                } else if (second_x - m.vx_x(neighborvertex_3)).abs() < compConst
+                    && (second_y - m.vx_y(neighborvertex_3)).abs() < compConst
                 {
                     secondVertexMatched = 23; // neighbor's 3rd vertex is matched to second vertex
                 }
@@ -3530,33 +3473,33 @@ pub(crate) fn getNeighborsVertex(
         }
         11 => {
             if secondVertexMatched == 22 {
-                thirdpoint[0] = m.vx_real(neighborvertex_3, 0);
-                thirdpoint[1] = m.vx_real(neighborvertex_3, 1);
+                thirdpoint[0] = m.vx_x(neighborvertex_3);
+                thirdpoint[1] = m.vx_y(neighborvertex_3);
             } else if secondVertexMatched == 23 {
-                thirdpoint[0] = m.vx_real(neighborvertex_2, 0);
-                thirdpoint[1] = m.vx_real(neighborvertex_2, 1);
+                thirdpoint[0] = m.vx_x(neighborvertex_2);
+                thirdpoint[1] = m.vx_y(neighborvertex_2);
             } else {
                 notFound = 1;
             }
         }
         12 => {
             if secondVertexMatched == 21 {
-                thirdpoint[0] = m.vx_real(neighborvertex_3, 0);
-                thirdpoint[1] = m.vx_real(neighborvertex_3, 1);
+                thirdpoint[0] = m.vx_x(neighborvertex_3);
+                thirdpoint[1] = m.vx_y(neighborvertex_3);
             } else if secondVertexMatched == 23 {
-                thirdpoint[0] = m.vx_real(neighborvertex_1, 0);
-                thirdpoint[1] = m.vx_real(neighborvertex_1, 1);
+                thirdpoint[0] = m.vx_x(neighborvertex_1);
+                thirdpoint[1] = m.vx_y(neighborvertex_1);
             } else {
                 notFound = 1;
             }
         }
         13 => {
             if secondVertexMatched == 21 {
-                thirdpoint[0] = m.vx_real(neighborvertex_2, 0);
-                thirdpoint[1] = m.vx_real(neighborvertex_2, 1);
+                thirdpoint[0] = m.vx_x(neighborvertex_2);
+                thirdpoint[1] = m.vx_y(neighborvertex_2);
             } else if secondVertexMatched == 22 {
-                thirdpoint[0] = m.vx_real(neighborvertex_1, 0);
-                thirdpoint[1] = m.vx_real(neighborvertex_1, 1);
+                thirdpoint[0] = m.vx_x(neighborvertex_1);
+                thirdpoint[1] = m.vx_y(neighborvertex_1);
             } else {
                 notFound = 1;
             }
@@ -5478,8 +5421,8 @@ pub(crate) fn minDistanceToNeigbor(
     // routes through the funnel instead of C's exit.
     let newvertex = m.vx_alloc()?;
     // C: newvertex[0] = newlocX; newvertex[1] = newlocY; (acute.c:3592-3593)
-    m.vx_set_real(newvertex, 0, newlocX);
-    m.vx_set_real(newvertex, 1, newlocY);
+    m.set_vx_x(newvertex, newlocX);
+    m.set_vx_y(newvertex, newlocY);
     /* Find the location of the vertex to be inserted.  Check if a good */
     /*   starting triangle has already been provided by the caller.     */
     /* Where are we? */
@@ -5489,12 +5432,12 @@ pub(crate) fn minDistanceToNeigbor(
     /* Check the starting triangle's vertices. */
     // C: if ((torg[0] == newvertex[0]) && (torg[1] == newvertex[1]))
     // (acute.c:3607)
-    if m.vx_real(torg, 0) == newlocX && m.vx_real(torg, 1) == newlocY {
+    if m.vx_x(torg) == newlocX && m.vx_y(torg) == newlocY {
         // C: intersect = ONVERTEX; (acute.c:3608)
         intersect = LocateResult::OnVertex;
         // C: otricopy(*searchtri, horiz); (acute.c:3609)
         horiz = *searchtri;
-    } else if m.vx_real(tdest, 0) == newlocX && m.vx_real(tdest, 1) == newlocY {
+    } else if m.vx_x(tdest) == newlocX && m.vx_y(tdest) == newlocY {
         // C: lnextself(*searchtri); (acute.c:3612): the caller's handle
         // is rotated, exactly as C mutates through its otri pointer.
         searchtri.lnextself();
@@ -5527,8 +5470,8 @@ pub(crate) fn minDistanceToNeigbor(
             // C: if (((torg[0] < newvertex[0]) == (newvertex[0] < tdest[0])) &&
             //     ((torg[1] < newvertex[1]) == (newvertex[1] < tdest[1])))
             // (acute.c:3626-3627)
-            if (m.vx_real(torg, 0) < newlocX) == (newlocX < m.vx_real(tdest, 0))
-                && (m.vx_real(torg, 1) < newlocY) == (newlocY < m.vx_real(tdest, 1))
+            if (m.vx_x(torg) < newlocX) == (newlocX < m.vx_x(tdest))
+                && (m.vx_y(torg) < newlocY) == (newlocY < m.vx_y(tdest))
             {
                 // C: intersect = ONEDGE; (acute.c:3628)
                 intersect = LocateResult::OnEdge;
@@ -5562,12 +5505,12 @@ pub(crate) fn minDistanceToNeigbor(
         let v3 = m.apex(horiz);
         // C: d1 = (v1[0] - newvertex[0]) * (v1[0] - newvertex[0]) + ...;
         // d2/d3 likewise (acute.c:3646-3648)
-        let d1 = (m.vx_real(v1, 0) - newlocX) * (m.vx_real(v1, 0) - newlocX)
-            + (m.vx_real(v1, 1) - newlocY) * (m.vx_real(v1, 1) - newlocY);
-        let d2 = (m.vx_real(v2, 0) - newlocX) * (m.vx_real(v2, 0) - newlocX)
-            + (m.vx_real(v2, 1) - newlocY) * (m.vx_real(v2, 1) - newlocY);
-        let d3 = (m.vx_real(v3, 0) - newlocX) * (m.vx_real(v3, 0) - newlocX)
-            + (m.vx_real(v3, 1) - newlocY) * (m.vx_real(v3, 1) - newlocY);
+        let d1 = (m.vx_x(v1) - newlocX) * (m.vx_x(v1) - newlocX)
+            + (m.vx_y(v1) - newlocY) * (m.vx_y(v1) - newlocY);
+        let d2 = (m.vx_x(v2) - newlocX) * (m.vx_x(v2) - newlocX)
+            + (m.vx_y(v2) - newlocY) * (m.vx_y(v2) - newlocY);
+        let d3 = (m.vx_x(v3) - newlocX) * (m.vx_x(v3) - newlocX)
+            + (m.vx_y(v3) - newlocY) * (m.vx_y(v3) - newlocY);
         // C: vertexdealloc(m,newvertex); (acute.c:3649)
         m.vx_dealloc(newvertex);
         // find minimum of the distance
@@ -5873,8 +5816,8 @@ mod tests {
 
     fn vxy(m: &mut Mesh, x: f64, y: f64) -> u32 {
         let v = m.vx_alloc().expect("vertex alloc");
-        m.vx_set_real(v, 0, x);
-        m.vx_set_real(v, 1, y);
+        m.set_vx_x(v, x);
+        m.set_vx_y(v, y);
         v
     }
 
@@ -6155,9 +6098,9 @@ mod tests {
             tri: DUMMY_TRI,
             orient: 0,
         };
-        let cc = (m.vx_real(c, 0), m.vx_real(c, 1));
+        let cc = (m.vx_x(c), m.vx_y(c));
         let r1v = m.apex(tris[0]);
-        let r1 = (m.vx_real(r1v, 0), m.vx_real(r1v, 1));
+        let r1 = (m.vx_x(r1v), m.vx_y(r1v));
         assert_eq!(
             getNeighborsVertex(&m, tris[0], cc.0, cc.1, r1.0, r1.1, &mut third, &mut neigh),
             0
@@ -6172,7 +6115,7 @@ mod tests {
         // whose sym is the real T1 (not the dummy of the orient-1
         // hull side, which the loop has already moved past).
         let r0v = m.dest(tris[0]);
-        let r0 = (m.vx_real(r0v, 0), m.vx_real(r0v, 1));
+        let r0 = (m.vx_x(r0v), m.vx_y(r0v));
         assert_eq!(
             getNeighborsVertex(&m, tris[0], r0.0, r0.1, r1.0, r1.1, &mut third, &mut neigh),
             1
@@ -6452,8 +6395,8 @@ mod tests {
         let cc = vxy(&mut m, 99.0, 99.0);
         let (xi, eta) = findNewSPLocation(&mut m, &b, torg, tdest, tapex, cc, true, t)
             .expect("findNewSPLocation");
-        assert!((m.vx_real(cc, 0) - 1.2306141135681588).abs() <= 1e-12);
-        assert!((m.vx_real(cc, 1) + 2.6438588643184127).abs() <= 1e-12);
+        assert!((m.vx_x(cc) - 1.2306141135681588).abs() <= 1e-12);
+        assert!((m.vx_y(cc) + 2.6438588643184127).abs() <= 1e-12);
         assert!((xi - 13.834601378376144).abs() <= 1e-12);
         assert!((eta + 26.438588643184126).abs() <= 1e-12);
     }
@@ -6473,8 +6416,8 @@ mod tests {
         let cc = vxy(&mut m, 99.0, 99.0);
         let (xi, eta) = findNewSPLocation(&mut m, &b, torg, tdest, tapex, cc, true, t)
             .expect("findNewSPLocation");
-        assert!((m.vx_real(cc, 0) - 1.2306141135681588).abs() <= 1e-12);
-        assert!((m.vx_real(cc, 1) + 2.6438588643184127).abs() <= 1e-12);
+        assert!((m.vx_x(cc) - 1.2306141135681588).abs() <= 1e-12);
+        assert!((m.vx_y(cc) + 2.6438588643184127).abs() <= 1e-12);
         assert!((xi - 13.834601378376144).abs() <= 1e-12);
         assert!((eta + 26.438588643184126).abs() <= 1e-12);
     }
@@ -6506,8 +6449,8 @@ mod tests {
         let cc = vxy(&mut m, 99.0, 99.0);
         let (xi, eta) = findNewSPLocation(&mut m, &b, torg, tdest, tapex, cc, true, t)
             .expect("findNewSPLocation");
-        assert!((m.vx_real(cc, 0) - 0.5).abs() <= 1e-12);
-        assert!((m.vx_real(cc, 1) - 0.6).abs() <= 1e-12);
+        assert!((m.vx_x(cc) - 0.5).abs() <= 1e-12);
+        assert!((m.vx_y(cc) - 0.6).abs() <= 1e-12);
         assert!((xi - 0.5).abs() <= 1e-12);
         assert!((eta - 0.5).abs() <= 1e-12);
     }
@@ -6556,8 +6499,8 @@ mod tests {
         // quality flank of deletevertex adds no Steiner).
         assert_eq!(m.triangles.live_count(), 2);
         // The row and the interpolants sit at the smoothed location.
-        assert!((m.vx_real(cc, 0) - newloc[0]).abs() <= 1e-12);
-        assert!((m.vx_real(cc, 1) - newloc[1]).abs() <= 1e-12);
+        assert!((m.vx_x(cc) - newloc[0]).abs() <= 1e-12);
+        assert!((m.vx_y(cc) - newloc[1]).abs() <= 1e-12);
         assert!((xi - newloc[0]).abs() <= 1e-12);
         assert!((eta - newloc[1]).abs() <= 1e-12);
     }

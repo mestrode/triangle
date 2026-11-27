@@ -77,7 +77,7 @@ pub(crate) fn preciselocate(
     let mut fapex = m.apex(*searchtri);
     loop {
         // Check whether the apex is the point we seek.
-        if m.vx_real(fapex, 0) == searchpoint.0 && m.vx_real(fapex, 1) == searchpoint.1 {
+        if m.vx_x(fapex) == searchpoint.0 && m.vx_y(fapex) == searchpoint.1 {
             searchtri.lprevself();
             return LocateResult::OnVertex;
         }
@@ -97,10 +97,8 @@ pub(crate) fn preciselocate(
                 //   a line perpendicular to the line (forg, fdest) and passing
                 //   through 'fapex', and determining which side of this line
                 //   'searchpoint' falls on.
-                moveleft = (m.vx_real(fapex, 0) - searchpoint.0)
-                    * (m.vx_real(fdest, 0) - m.vx_real(forg, 0))
-                    + (m.vx_real(fapex, 1) - searchpoint.1)
-                        * (m.vx_real(fdest, 1) - m.vx_real(forg, 1))
+                moveleft = (m.vx_x(fapex) - searchpoint.0) * (m.vx_x(fdest) - m.vx_x(forg))
+                    + (m.vx_y(fapex) - searchpoint.1) * (m.vx_y(fdest) - m.vx_y(forg))
                     > 0.0;
             } else {
                 moveleft = true;
@@ -183,21 +181,20 @@ pub(crate) fn locate(
     // Record the distance from the suggested starting triangle to the
     //   point we seek.
     let mut torg = m.org(*searchtri);
-    let mut searchdist = (searchpoint.0 - m.vx_real(torg, 0))
-        * (searchpoint.0 - m.vx_real(torg, 0))
-        + (searchpoint.1 - m.vx_real(torg, 1)) * (searchpoint.1 - m.vx_real(torg, 1));
+    let mut searchdist = (searchpoint.0 - m.vx_x(torg)) * (searchpoint.0 - m.vx_x(torg))
+        + (searchpoint.1 - m.vx_y(torg)) * (searchpoint.1 - m.vx_y(torg));
 
     // If a recently encountered triangle has been recorded and has not been
     //   deallocated, test it as a good starting point.
     if let Some(recenttri) = m.recenttri {
         if !m.deadtri(recenttri.tri) {
             torg = m.org(recenttri);
-            if m.vx_real(torg, 0) == searchpoint.0 && m.vx_real(torg, 1) == searchpoint.1 {
+            if m.vx_x(torg) == searchpoint.0 && m.vx_y(torg) == searchpoint.1 {
                 *searchtri = recenttri;
                 return LocateResult::OnVertex;
             }
-            let dist = (searchpoint.0 - m.vx_real(torg, 0)) * (searchpoint.0 - m.vx_real(torg, 0))
-                + (searchpoint.1 - m.vx_real(torg, 1)) * (searchpoint.1 - m.vx_real(torg, 1));
+            let dist = (searchpoint.0 - m.vx_x(torg)) * (searchpoint.0 - m.vx_x(torg))
+                + (searchpoint.1 - m.vx_y(torg)) * (searchpoint.1 - m.vx_y(torg));
             if dist < searchdist {
                 *searchtri = recenttri;
                 searchdist = dist;
@@ -246,9 +243,8 @@ pub(crate) fn locate(
             sampletri.tri = firsttri + randomnation(m, population as u32) as u32;
             if !m.deadtri(sampletri.tri) {
                 torg = m.org(sampletri);
-                let dist = (searchpoint.0 - m.vx_real(torg, 0))
-                    * (searchpoint.0 - m.vx_real(torg, 0))
-                    + (searchpoint.1 - m.vx_real(torg, 1)) * (searchpoint.1 - m.vx_real(torg, 1));
+                let dist = (searchpoint.0 - m.vx_x(torg)) * (searchpoint.0 - m.vx_x(torg))
+                    + (searchpoint.1 - m.vx_y(torg)) * (searchpoint.1 - m.vx_y(torg));
                 if dist < searchdist {
                     *searchtri = sampletri;
                     searchdist = dist;
@@ -276,10 +272,10 @@ pub(crate) fn locate(
     torg = m.org(*searchtri);
     let tdest = m.dest(*searchtri);
     // Check the starting triangle's vertices.
-    if m.vx_real(torg, 0) == searchpoint.0 && m.vx_real(torg, 1) == searchpoint.1 {
+    if m.vx_x(torg) == searchpoint.0 && m.vx_y(torg) == searchpoint.1 {
         return LocateResult::OnVertex;
     }
-    if m.vx_real(tdest, 0) == searchpoint.0 && m.vx_real(tdest, 1) == searchpoint.1 {
+    if m.vx_x(tdest) == searchpoint.0 && m.vx_y(tdest) == searchpoint.1 {
         searchtri.lnextself();
         return LocateResult::OnVertex;
     }
@@ -291,8 +287,8 @@ pub(crate) fn locate(
         m.symself(searchtri);
     } else if ahead == 0.0 {
         // Check if 'searchpoint' is between 'torg' and 'tdest'.
-        if (m.vx_real(torg, 0) < searchpoint.0) == (searchpoint.0 < m.vx_real(tdest, 0))
-            && (m.vx_real(torg, 1) < searchpoint.1) == (searchpoint.1 < m.vx_real(tdest, 1))
+        if (m.vx_x(torg) < searchpoint.0) == (searchpoint.0 < m.vx_x(tdest))
+            && (m.vx_y(torg) < searchpoint.1) == (searchpoint.1 < m.vx_y(tdest))
         {
             return LocateResult::OnEdge;
         }
@@ -311,14 +307,14 @@ mod tests {
     fn fan(n: i32) -> (Mesh, u32, Vec<u32>, Vec<Otri>) {
         let mut m = Mesh::new(&Behavior::default_form(), n + 1, 2, 0, 0).expect("mesh init");
         let center = m.vx_alloc().expect("alloc");
-        m.vx_set_real(center, 0, 0.0);
-        m.vx_set_real(center, 1, 0.0);
+        m.set_vx_x(center, 0.0);
+        m.set_vx_y(center, 0.0);
         let mut outer = vec![];
         for k in 0..n {
             let v = m.vx_alloc().expect("alloc");
             let ang = 2.0 * std::f64::consts::PI * (k as f64) / (n as f64);
-            m.vx_set_real(v, 0, ang.cos());
-            m.vx_set_real(v, 1, ang.sin());
+            m.set_vx_x(v, ang.cos());
+            m.set_vx_y(v, ang.sin());
             outer.push(v);
         }
         // triangles (org=center, dest=outer[k], apex=outer[k+1]), CCW
@@ -369,7 +365,7 @@ mod tests {
         );
         assert_eq!(st.tri, tris[0].tri);
         // exactly on an existing vertex (outer[2])
-        let onv = (m.vx_real(outer[2], 0), m.vx_real(outer[2], 1));
+        let onv = (m.vx_x(outer[2]), m.vx_y(outer[2]));
         let mut st = start;
         assert_eq!(
             locate(&mut m, &Behavior::default_form(), onv, &mut st),
@@ -378,8 +374,8 @@ mod tests {
         assert_eq!(m.org(st), outer[2]);
         // on the spoke edge (center, outer[1]) shared by triangles 0 and 1
         let one = (
-            0.5 * m.vx_real(center, 0) + 0.5 * m.vx_real(outer[1], 0),
-            0.5 * m.vx_real(center, 1) + 0.5 * m.vx_real(outer[1], 1),
+            0.5 * m.vx_x(center) + 0.5 * m.vx_x(outer[1]),
+            0.5 * m.vx_y(center) + 0.5 * m.vx_y(outer[1]),
         );
         let mut st = start;
         assert_eq!(
@@ -411,7 +407,7 @@ mod tests {
             orient: 1,
         };
         m.recenttri = Some(recent);
-        let onv = (m.vx_real(outer[3], 0), m.vx_real(outer[3], 1));
+        let onv = (m.vx_x(outer[3]), m.vx_y(outer[3]));
         // a deliberately bad starting handle must not matter: the recenttri
         // branch wins before any walk
         let mut st = tris[0].lnext();

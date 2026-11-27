@@ -44,6 +44,19 @@
 //! (e) exact-LIFO reuse - the pool's dead pop, pinned by the pool and
 //! chokepoint tests; output-observable and untouched.
 //!
+//! R3 typed-seam note (ADR 0002 stage 1, storage typing): the raw word
+//! accessors below are private to this module; consumers reach storage
+//! through the typed row-group methods - the compile-time-fixed groups
+//! of the C rows (triangle neighbors 0-2 / vertices 3-5 / subsegments
+//! 6-8; the subseg row's groups; the vertex coordinate pair), plus the
+//! shape-computed midpoint group. Each adds the group-range half of
+//! the slot-role invariant (c) on top of the raw layer's checks; the
+//! runtime-indexed payload (element attributes, the area bound, the
+//! numbering int, vertex attributes) keeps its shape-computed word
+//! methods. The row-size formulas in mesh.rs stay the record of the
+//! layout: packed word rows, no SoA (the ADR 0002 rematch evaluated
+//! at R3, see docs/perf-r1-findings and the R3 PR).
+//!
 //! The Mesh struct itself lives in mesh.rs (C: struct mesh, triangle.h:476;
 //! lifecycle rows per the mapping); its pool fields are pub(crate) for the
 //! constructors there, with the chokepoint contract - only this module calls
@@ -183,8 +196,10 @@ fn infvertex_index(v: u32) -> Option<usize> {
 }
 
 // ---------------------------------------------------------------------------
-// Raw slot access (the chokepoint's innermost layer; everything below debug
-// asserts the slot-role invariant, ADR 0002 section 3).
+// Raw slot access (the chokepoint's innermost layer; private to this
+// module since R3 - consumers go through the typed row groups below).
+// Everything here debug asserts the slot-role invariant (ADR 0002
+// section 3).
 // ---------------------------------------------------------------------------
 
 impl Mesh {
@@ -198,7 +213,7 @@ impl Mesh {
     /// reserved null row reads as its never-written zeros (see the
     /// module audit map).
     #[inline]
-    pub(crate) fn tri_slot(&self, t: u32, slot: usize) -> u64 {
+    fn tri_slot(&self, t: u32, slot: usize) -> u64 {
         debug_assert!(slot < self.tri_shape.stride, "tri slot {} out of row", slot);
         self.triangles.word(t, slot)
     }
@@ -207,7 +222,7 @@ impl Mesh {
     /// 0002 section 3) are debug_asserted - slot-role (c) here, range (a)
     /// at the pool seam (the null discipline (b) is decode-side).
     #[inline]
-    pub(crate) fn set_tri_slot(&mut self, t: u32, slot: usize, w: u64) {
+    fn set_tri_slot(&mut self, t: u32, slot: usize, w: u64) {
         debug_assert!(slot < self.tri_shape.stride, "tri slot {} out of row", slot);
         self.triangles.set_word(t, slot, w);
     }
@@ -217,7 +232,7 @@ impl Mesh {
     /// the row id at the pool seam (the null discipline (b) is
     /// decode-side).
     #[inline]
-    pub(crate) fn sub_slot(&self, s: u32, slot: usize) -> u64 {
+    fn sub_slot(&self, s: u32, slot: usize) -> u64 {
         debug_assert!(slot < 9, "subseg slot out of row (C rows are 9 words)");
         self.subsegs.word(s, slot)
     }
@@ -225,9 +240,185 @@ impl Mesh {
     /// The write mirror of [`Mesh::sub_slot`]; the same invariants (ADR
     /// 0002 section 3).
     #[inline]
-    pub(crate) fn set_sub_slot(&mut self, s: u32, slot: usize, w: u64) {
+    fn set_sub_slot(&mut self, s: u32, slot: usize, w: u64) {
         debug_assert!(slot < 9, "subseg slot out of row (C rows are 9 words)");
         self.subsegs.set_word(s, slot, w);
+    }
+
+    // -----------------------------------------------------------------------
+    // Typed row groups (R3, ADR 0002 stage 1): the compile-time-fixed slot
+    // groups of the C rows (triangle.h:225-232, 246-248), named at the
+    // seam. Each maps a group index to its fixed slot and rides the raw
+    // layer above, inheriting its invariants; the group-range half of the
+    // slot-role invariant (c) is debug_asserted here. The runtime-indexed
+    // payload keeps the shape-computed word methods (tri_attribute,
+    // tri_areabound, tri_int, vx_real for comp >= 2); the midpoint group
+    // sits on a shape-computed base but is fixed in size.
+    // -----------------------------------------------------------------------
+
+    /// The packed neighbor handle word of a triangle row's neighbor
+    /// group (C `tri[0..2]`, the three adjoining triangles;
+    /// triangle.h:225-232; sym decodes this word at the oriented edge,
+    /// triangle.h:743). `edge` in 0..3 names the edge exactly like the
+    /// orientation of a handle does.
+    ///
+    /// Invariants (ADR 0002 section 3): the group range `edge < 3` (c)
+    /// debug_asserted here; slot-role, range (a) and the null
+    /// discipline (b) ride tri_slot.
+    #[inline]
+    pub(crate) fn tri_neighbor_word(&self, t: u32, edge: usize) -> u64 {
+        debug_assert!(edge < 3, "triangle neighbor edge {} out of group", edge);
+        self.tri_slot(t, edge)
+    }
+
+    /// The write mirror of [`Mesh::tri_neighbor_word`]; the group range
+    /// (c) is debug_asserted here, the rest ride set_tri_slot.
+    #[inline]
+    pub(crate) fn set_tri_neighbor_word(&mut self, t: u32, edge: usize, w: u64) {
+        debug_assert!(edge < 3, "triangle neighbor edge {} out of group", edge);
+        self.set_tri_slot(t, edge, w)
+    }
+
+    /// The raw vertex id word of a triangle row's vertex group (C
+    /// `tri[3..5]`, the three vertices; triangle.h:225-232; org/dest/apex
+    /// read these slots at orientation-computed corners,
+    /// triangle.h:850-861). `corner` in 0..3 maps to slot 3 + corner.
+    ///
+    /// Invariants (ADR 0002 section 3): the group range `corner < 3` (c)
+    /// debug_asserted here; slot-role, range (a) and the null discipline
+    /// (b) ride tri_slot (the NULL vertex slots are data, exactly like
+    /// C).
+    #[inline]
+    pub(crate) fn tri_vertex_word(&self, t: u32, corner: usize) -> u64 {
+        debug_assert!(corner < 3, "triangle vertex corner {} out of group", corner);
+        self.tri_slot(t, 3 + corner)
+    }
+
+    /// The write mirror of [`Mesh::tri_vertex_word`]; the group range
+    /// (c) is debug_asserted here, the rest ride set_tri_slot.
+    #[inline]
+    pub(crate) fn set_tri_vertex_word(&mut self, t: u32, corner: usize, w: u64) {
+        debug_assert!(corner < 3, "triangle vertex corner {} out of group", corner);
+        self.set_tri_slot(t, 3 + corner, w)
+    }
+
+    /// The raw word of a triangle row's subsegment group (C `tri[6..8]`,
+    /// live only under -p; triangle.h:225-232; tspivot reads the slot
+    /// at the oriented edge, triangle.h:1043). `edge` in 0..3 maps to
+    /// slot 6 + edge. C reuses these three fixed slots before
+    /// subsegments exist, as the vertex-to-triangle adjacency stack of
+    /// transfernodes (the link-the-current-triangle machinery,
+    /// triangle.c:5612), so the payload is a subseg handle or that
+    /// stack word - both are the same raw word in C.
+    ///
+    /// Invariants (ADR 0002 section 3): the group range `edge < 3` (c)
+    /// debug_asserted here; the slot-role half (slot < stride, so words
+    /// 6..9 exist only under -p), range (a) and the null discipline
+    /// (b) ride tri_slot.
+    #[inline]
+    pub(crate) fn tri_subseg_word(&self, t: u32, edge: usize) -> u64 {
+        debug_assert!(edge < 3, "triangle subseg edge {} out of group", edge);
+        self.tri_slot(t, 6 + edge)
+    }
+
+    /// The write mirror of [`Mesh::tri_subseg_word`]; the group range
+    /// (c) is debug_asserted here, the rest ride set_tri_slot.
+    #[inline]
+    pub(crate) fn set_tri_subseg_word(&mut self, t: u32, edge: usize, w: u64) {
+        debug_assert!(edge < 3, "triangle subseg edge {} out of group", edge);
+        self.set_tri_slot(t, 6 + edge, w)
+    }
+
+    /// A high-order mid-edge node id of a triangle row (C: the -o2
+    /// midpoint words highorder records at highorderindex + k;
+    /// triangle.c:7675 writes them, triangle.c:7906-7915 reads them
+    /// back). `k` in 0..3 maps to slot highorderindex + k; the base is
+    /// runtime (6 + usesegments * 3, the shape-computed formula in
+    /// mesh.rs), which is why this payload stays word-indexed behind a
+    /// typed method.
+    ///
+    /// Invariants (ADR 0002 section 3): the group range `k < 3` (c)
+    /// debug_asserted here; slot-role (the stride covers the node words
+    /// only when the row was sized for them), range (a) and the null
+    /// discipline (b) ride tri_slot.
+    #[inline]
+    pub(crate) fn tri_midnode(&self, t: u32, k: usize) -> u64 {
+        debug_assert!(k < 3, "midpoint {} out of the order-2 node group", k);
+        self.tri_slot(t, self.tri_shape.highorderindex + k)
+    }
+
+    /// The write mirror of [`Mesh::tri_midnode`]; the group range (c)
+    /// is debug_asserted here, the rest ride set_tri_slot.
+    #[inline]
+    pub(crate) fn set_tri_midnode(&mut self, t: u32, k: usize, w: u64) {
+        debug_assert!(k < 3, "midpoint {} out of the order-2 node group", k);
+        self.set_tri_slot(t, self.tri_shape.highorderindex + k, w)
+    }
+
+    /// The packed subsegment handle word of a subseg row's neighbor
+    /// group (C `ss[0..1]`, the two adjoining subsegments;
+    /// triangle.h:246-248; spivot/snext read them, triangle.h:947/958).
+    /// `side` in 0..2 maps to slot side.
+    ///
+    /// Invariants (ADR 0002 section 3): the group range `side < 2` (c)
+    /// debug_asserted here; slot-role, range (a) and the null
+    /// discipline (b) ride sub_slot.
+    #[inline]
+    pub(crate) fn sub_neighbor_word(&self, s: u32, side: usize) -> u64 {
+        debug_assert!(side < 2, "subseg neighbor side {} out of group", side);
+        self.sub_slot(s, side)
+    }
+
+    /// The write mirror of [`Mesh::sub_neighbor_word`]; the group range
+    /// (c) is debug_asserted here, the rest ride set_sub_slot.
+    #[inline]
+    pub(crate) fn set_sub_neighbor_word(&mut self, s: u32, side: usize, w: u64) {
+        debug_assert!(side < 2, "subseg neighbor side {} out of group", side);
+        self.set_sub_slot(s, side, w)
+    }
+
+    /// The raw vertex id word of a subseg row's vertex group (C
+    /// `ss[2..5]`, the four vertex slots; triangle.h:246-248; sorg/sdest
+    /// read the endpoint slots, triangle.h:969-978). `i` in 0..4 maps
+    /// to slot 2 + i.
+    ///
+    /// Invariants (ADR 0002 section 3): the group range `i < 4` (c)
+    /// debug_asserted here; slot-role, range (a) and the null
+    /// discipline (b) ride sub_slot.
+    #[inline]
+    pub(crate) fn sub_vertex_word(&self, s: u32, i: usize) -> u64 {
+        debug_assert!(i < 4, "subseg vertex index {} out of group", i);
+        self.sub_slot(s, 2 + i)
+    }
+
+    /// The write mirror of [`Mesh::sub_vertex_word`]; the group range
+    /// (c) is debug_asserted here, the rest ride set_sub_slot.
+    #[inline]
+    pub(crate) fn set_sub_vertex_word(&mut self, s: u32, i: usize, w: u64) {
+        debug_assert!(i < 4, "subseg vertex index {} out of group", i);
+        self.set_sub_slot(s, 2 + i, w)
+    }
+
+    /// The packed triangle handle word of a subseg row's triangle group
+    /// (C `ss[6..7]`, the two adjoining triangles; triangle.h:246-248;
+    /// stpivot reads them, triangle.h:1050). `side` in 0..2 maps to
+    /// slot 6 + side.
+    ///
+    /// Invariants (ADR 0002 section 3): the group range `side < 2` (c)
+    /// debug_asserted here; slot-role, range (a) and the null
+    /// discipline (b) ride sub_slot.
+    #[inline]
+    pub(crate) fn sub_tri_word(&self, s: u32, side: usize) -> u64 {
+        debug_assert!(side < 2, "subseg triangle side {} out of group", side);
+        self.sub_slot(s, 6 + side)
+    }
+
+    /// The write mirror of [`Mesh::sub_tri_word`]; the group range (c)
+    /// is debug_asserted here, the rest ride set_sub_slot.
+    #[inline]
+    pub(crate) fn set_sub_tri_word(&mut self, s: u32, side: usize, w: u64) {
+        debug_assert!(side < 2, "subseg triangle side {} out of group", side);
+        self.set_sub_slot(s, 6 + side, w)
     }
 
     /// A whole-word f64 view of a triangle row slot (attributes and area
@@ -327,6 +518,9 @@ impl Mesh {
     }
 
     /// A vertex coordinate / attribute word (C: `vx[comp]`, a REAL).
+    /// Since R3 the two coordinate words go through the typed pair
+    /// (vx_x / vx_y below); this method stays for the runtime-indexed
+    /// payload (attributes, comp >= 2) and as the typed pair's store.
     ///
     /// Invariants (ADR 0002 section 3): comp < stride (c) debug_asserted
     /// here (the D12 infvertex store carries two coordinates); range (a)
@@ -370,6 +564,37 @@ impl Mesh {
             comp
         );
         self.vertices.set_word(v, comp, x.to_bits());
+    }
+
+    /// The x coordinate of a vertex (C `vx[0]`, the first of the row's
+    /// two fixed coordinate words; the row formula: triangle.c:1100-1124).
+    /// The typed pair names the words fixed at every shape; the
+    /// runtime-indexed payload (comp >= 2: attributes) stays with
+    /// vx_real, as does the D12 out-of-pool store.
+    ///
+    /// Invariants (ADR 0002 section 3): as vx_real (c here, a at the
+    /// pool seam; b decode-side).
+    #[inline]
+    pub(crate) fn vx_x(&self, v: u32) -> f64 {
+        self.vx_real(v, 0)
+    }
+
+    /// The write mirror of [`Mesh::vx_x`]; the same invariants.
+    #[inline]
+    pub(crate) fn set_vx_x(&mut self, v: u32, x: f64) {
+        self.vx_set_real(v, 0, x)
+    }
+
+    /// The y coordinate of a vertex (C `vx[1]`); as vx_x.
+    #[inline]
+    pub(crate) fn vx_y(&self, v: u32) -> f64 {
+        self.vx_real(v, 1)
+    }
+
+    /// The write mirror of [`Mesh::vx_y`]; the same invariants.
+    #[inline]
+    pub(crate) fn set_vx_y(&mut self, v: u32, y: f64) {
+        self.vx_set_real(v, 1, y)
     }
 
     /// The vertex boundary marker (C vertexmark, triangle.h:1074-1077).
@@ -1480,10 +1705,53 @@ mod tests {
         // vertex rows are written only after allocation (C rows come from
         // poolalloc; a never-allocated row has no storage)
         let v = m.vx_alloc().expect("alloc");
-        m.vx_set_real(v, 0, -0.0);
-        m.vx_set_real(v, 1, f64::NAN);
-        assert_eq!(m.vx_real(v, 0).to_bits(), (-0.0f64).to_bits());
-        assert!(m.vx_real(v, 1).is_nan());
+        m.set_vx_x(v, -0.0);
+        m.set_vx_y(v, f64::NAN);
+        assert_eq!(m.vx_x(v).to_bits(), (-0.0f64).to_bits());
+        assert!(m.vx_y(v).is_nan());
+    }
+
+    #[test]
+    fn typed_row_groups_pin_the_c_layout() {
+        // R3: the typed accessors name the compile-time-fixed slot
+        // groups of the C rows (triangle.h:225-232, 246-248); this pin
+        // welds every group index to the raw slot it denotes, so a
+        // later reshuffle can never silently move a group.
+        let mut m = mesh(true);
+        let t = m.maketriangle(true, false).expect("alloc");
+        let s = m.makesubseg().expect("alloc");
+        let v = m.vx_alloc().expect("alloc");
+        m.set_tri_neighbor_word(t.tri, 2, 0x11);
+        m.set_tri_vertex_word(t.tri, 0, 0x22);
+        m.set_tri_subseg_word(t.tri, 1, 0x33);
+        // neighbor group base 0, vertex group base 3, subseg group base 6
+        assert_eq!(m.tri_slot(t.tri, 2), 0x11);
+        assert_eq!(m.tri_slot(t.tri, 3), 0x22);
+        assert_eq!(m.tri_slot(t.tri, 7), 0x33);
+        m.set_sub_neighbor_word(s.ss, 1, 0x44);
+        m.set_sub_vertex_word(s.ss, 2, 0x55);
+        m.set_sub_tri_word(s.ss, 0, 0x66);
+        // subseg groups: neighbor base 0, vertex base 2, triangle base 6
+        assert_eq!(m.sub_slot(s.ss, 1), 0x44);
+        assert_eq!(m.sub_slot(s.ss, 4), 0x55);
+        assert_eq!(m.sub_slot(s.ss, 6), 0x66);
+        // the coordinate pair rides vx_real's store
+        m.set_vx_x(v, 1.5);
+        m.set_vx_y(v, -2.5);
+        assert_eq!(m.vx_real(v, 0), 1.5);
+        assert_eq!(m.vx_real(v, 1), -2.5);
+        // the midpoint group rides the shape-computed base (order 2)
+        let mut b = Behavior::default_form();
+        b.poly = true;
+        b.usesegments = true;
+        b.order = 2;
+        b.behavior_update();
+        let mut m2 = Mesh::new(&b, 16, 2, 0, 0).expect("init");
+        let t2 = m2.maketriangle(true, false).expect("alloc");
+        let hi = m2.tri_shape.highorderindex;
+        m2.set_tri_midnode(t2.tri, 1, 0x77);
+        assert_eq!(m2.tri_slot(t2.tri, hi + 1), 0x77);
+        assert_eq!(m2.tri_midnode(t2.tri, 1), 0x77);
     }
 
     #[test]

@@ -206,10 +206,10 @@ pub(crate) fn eps_draw_edges(
                 write!(
                     file,
                     "{} {} {} {} L\n",
-                    tx(m.vx_real(p, 0), ps, ms),
-                    ty(m.vx_real(p, 1), ps, ms),
-                    tx(m.vx_real(q, 0), ps, ms),
-                    ty(m.vx_real(q, 1), ps, ms)
+                    tx(m.vx_x(p), ps, ms),
+                    ty(m.vx_y(p), ps, ms),
+                    tx(m.vx_x(q), ps, ms),
+                    ty(m.vx_y(q), ps, ms)
                 )?;
             }
         }
@@ -238,10 +238,10 @@ pub(crate) fn eps_draw_segments(
         write!(
             file,
             "{} {} {} {} L\n",
-            tx(m.vx_real(p, 0), ps, ms),
-            ty(m.vx_real(p, 1), ps, ms),
-            tx(m.vx_real(q, 0), ps, ms),
-            ty(m.vx_real(q, 1), ps, ms)
+            tx(m.vx_x(p), ps, ms),
+            ty(m.vx_y(p), ps, ms),
+            tx(m.vx_x(q), ps, ms),
+            ty(m.vx_y(q), ps, ms)
         )?;
     }
     Ok(())
@@ -272,8 +272,8 @@ pub(crate) fn eps_draw_points(
             write!(
                 file,
                 "{} {} P\n",
-                tx(m.vx_real(v, 0), ps, ms),
-                ty(m.vx_real(v, 1), ps, ms)
+                tx(m.vx_x(v), ps, ms),
+                ty(m.vx_y(v), ps, ms)
             )?;
         }
     }
@@ -372,17 +372,17 @@ mod tests {
     fn square_two_triangles(b: &crate::options::Behavior) -> (Mesh, u32, u32, [u32; 4]) {
         let mut m = Mesh::new(b, 8, 2, 0, 0).expect("mesh init");
         let a = m.vx_alloc().expect("vx");
-        m.vx_set_real(a, 0, 0.0);
-        m.vx_set_real(a, 1, 0.0);
+        m.set_vx_x(a, 0.0);
+        m.set_vx_y(a, 0.0);
         let e = m.vx_alloc().expect("vx");
-        m.vx_set_real(e, 0, 1.0);
-        m.vx_set_real(e, 1, 0.0);
+        m.set_vx_x(e, 1.0);
+        m.set_vx_y(e, 0.0);
         let c = m.vx_alloc().expect("vx");
-        m.vx_set_real(c, 0, 1.0);
-        m.vx_set_real(c, 1, 1.0);
+        m.set_vx_x(c, 1.0);
+        m.set_vx_y(c, 1.0);
         let d = m.vx_alloc().expect("vx");
-        m.vx_set_real(d, 0, 0.0);
-        m.vx_set_real(d, 1, 1.0);
+        m.set_vx_x(d, 0.0);
+        m.set_vx_y(d, 1.0);
         let t1 = m.maketriangle(b.usesegments, b.vararea).expect("tri");
         m.setorg(t1, a);
         m.setdest(t1, e);

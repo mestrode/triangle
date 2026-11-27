@@ -289,7 +289,7 @@ pub(crate) fn insertvertex(
 ) -> Result<InsertVertexResult, Oom> {
     // The search point as locate and the predicates see it (C: the REAL*
     // newvertex pointer; D1 copies the coordinates through the chokepoint).
-    let newvertex_pt = (m.vx_real(newvertex, 0), m.vx_real(newvertex, 1));
+    let newvertex_pt = (m.vx_x(newvertex), m.vx_y(newvertex));
     let newvertex_v = [newvertex_pt.0, newvertex_pt.1, 0.0];
 
     let mut horiz: Otri;
@@ -1090,8 +1090,8 @@ mod tests {
     /// locate.rs; vx ids start at 1, D1).
     fn vxy(m: &mut Mesh, x: f64, y: f64) -> u32 {
         let v = m.vx_alloc().expect("vertex alloc");
-        m.vx_set_real(v, 0, x);
-        m.vx_set_real(v, 1, y);
+        m.set_vx_x(v, x);
+        m.set_vx_y(v, y);
         v
     }
 

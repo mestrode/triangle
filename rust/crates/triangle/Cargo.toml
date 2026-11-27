@@ -14,3 +14,24 @@ acute = []
 
 [lints]
 workspace = true
+
+# The R3 rung-boundary measurement instrument (issue #57, PART A):
+# benches/corpus.rs, one criterion bench per timed corpus workload.
+# A measurement instrument, never a CI job; it drives the public API
+# only and does not touch the library. Criterion is pinned exact so
+# every protocol run (baseline, noise, drift, candidate) resolves the
+# identical measurement code; serde/serde_json parse the corpus
+# manifest and are already criterion's own transitive dependencies,
+# so the dependency tree does not grow beyond criterion itself.
+# default-features stay off (no rayon, no plotting): the suite is
+# single-threaded on purpose and the measurement box has 2 vCPUs.
+[dev-dependencies]
+criterion = { version = "=0.8.2", default-features = false, features = ["cargo_bench_support"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# The rung-boundary instrument: one bench per timed corpus workload
+# (the m+l timed set of run-bench.sh, 80 benches).
+[[bench]]
+name = "corpus"
+harness = false

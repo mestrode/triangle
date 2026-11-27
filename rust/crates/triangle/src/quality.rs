@@ -629,23 +629,19 @@ pub(crate) fn testtriangle(m: &mut Mesh, b: &Behavior, testtri: Otri) -> Result<
                 //   C compares the shared endpoint by coordinate equality
                 //   (REAL loads), mirrored exactly.
                 let mut joinvertex = NULL;
-                if m.vx_real(dest1, 0) == m.vx_real(org2, 0)
-                    && m.vx_real(dest1, 1) == m.vx_real(org2, 1)
-                {
+                if m.vx_x(dest1) == m.vx_x(org2) && m.vx_y(dest1) == m.vx_y(org2) {
                     joinvertex = dest1;
-                } else if m.vx_real(org1, 0) == m.vx_real(dest2, 0)
-                    && m.vx_real(org1, 1) == m.vx_real(dest2, 1)
-                {
+                } else if m.vx_x(org1) == m.vx_x(dest2) && m.vx_y(org1) == m.vx_y(dest2) {
                     joinvertex = org1;
                 }
                 if joinvertex != NULL {
                     // Compute the distance from the common endpoint (of the
                     //   two segments) to each of the endpoints of the shortest
                     //   edge.
-                    let x1 = m.vx_real(base1, 0) - m.vx_real(joinvertex, 0);
-                    let y1 = m.vx_real(base1, 1) - m.vx_real(joinvertex, 1);
-                    let x2 = m.vx_real(base2, 0) - m.vx_real(joinvertex, 0);
-                    let y2 = m.vx_real(base2, 1) - m.vx_real(joinvertex, 1);
+                    let x1 = m.vx_x(base1) - m.vx_x(joinvertex);
+                    let y1 = m.vx_y(base1) - m.vx_y(joinvertex);
+                    let x2 = m.vx_x(base2) - m.vx_x(joinvertex);
+                    let y2 = m.vx_y(base2) - m.vx_y(joinvertex);
                     let dist1 = x1 * x1 + y1 * y1;
                     let dist2 = x2 * x2 + y2 * y2;
                     // If the two distances are equal, don't split the triangle.
@@ -849,8 +845,8 @@ mod tests {
 
     fn vxy(m: &mut Mesh, x: f64, y: f64) -> u32 {
         let v = m.vx_alloc().expect("vertex alloc");
-        m.vx_set_real(v, 0, x);
-        m.vx_set_real(v, 1, y);
+        m.set_vx_x(v, x);
+        m.set_vx_y(v, y);
         v
     }
 
@@ -1348,8 +1344,8 @@ mod tests {
         let mut m = Mesh::new(&b, 4, 2, 0, 0).expect("mesh init");
         for (x, y) in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)] {
             let v = m.vx_alloc().expect("vertex alloc");
-            m.vx_set_real(v, 0, x);
-            m.vx_set_real(v, 1, y);
+            m.set_vx_x(v, x);
+            m.set_vx_y(v, y);
         }
         assert_eq!(delaunay(&mut m, &b).expect("delaunay"), 4);
 
@@ -1554,8 +1550,8 @@ mod tests {
         let mut m = Mesh::new(&b, 4, 2, 0, 0).expect("mesh init");
         for (x, y) in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)] {
             let v = m.vx_alloc().expect("vertex alloc");
-            m.vx_set_real(v, 0, x);
-            m.vx_set_real(v, 1, y);
+            m.set_vx_x(v, x);
+            m.set_vx_y(v, y);
         }
         assert_eq!(delaunay(&mut m, &b).expect("delaunay"), 4);
         makevertexmap(&mut m, &b);

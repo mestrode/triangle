@@ -21,7 +21,7 @@ use crate::mesh::Mesh;
 /// beyond the coordinates never exists under D1).
 #[inline]
 pub(crate) fn vertex_coords(m: &Mesh, v: u32) -> [f64; 3] {
-    [m.vx_real(v, 0), m.vx_real(v, 1), 0.0]
+    [m.vx_x(v), m.vx_y(v), 0.0]
 }
 
 /// C: interpolate (triangle.c:238-263). Interpolate the attributes of
@@ -40,15 +40,15 @@ pub(crate) fn interpolate(
     apex: u32,
     nextras: i32,
 ) {
-    let xdo = m.vx_real(dest, 0) - m.vx_real(org, 0);
-    let ydo = m.vx_real(dest, 1) - m.vx_real(org, 1);
-    let xao = m.vx_real(apex, 0) - m.vx_real(org, 0);
-    let yao = m.vx_real(apex, 1) - m.vx_real(org, 1);
+    let xdo = m.vx_x(dest) - m.vx_x(org);
+    let ydo = m.vx_y(dest) - m.vx_y(org);
+    let xao = m.vx_x(apex) - m.vx_x(org);
+    let yao = m.vx_y(apex) - m.vx_y(org);
 
     let denominator = 0.5 / (xdo * yao - xao * ydo);
 
-    let dx = m.vx_real(newvertex, 0) - m.vx_real(org, 0);
-    let dy = m.vx_real(newvertex, 1) - m.vx_real(org, 1);
+    let dx = m.vx_x(newvertex) - m.vx_x(org);
+    let dy = m.vx_y(newvertex) - m.vx_y(org);
 
     // To interpolate vertex attributes for the new vertex, define a
     // coordinate system with a xi-axis directed from the triangle's
@@ -103,8 +103,8 @@ mod tests {
     }
 
     fn set_xy(m: &mut Mesh, v: u32, x: f64, y: f64) {
-        m.vx_set_real(v, 0, x);
-        m.vx_set_real(v, 1, y);
+        m.set_vx_x(v, x);
+        m.set_vx_y(v, y);
     }
 
     #[test]
@@ -171,8 +171,8 @@ mod tests {
         // 1.0 + 0.5 * (3.0 - 1.0) + 0.25 * (2.0 - 1.0) = 2.25
         assert_eq!(m.vx_real(newvertex, 2), 2.25);
         // the coordinates themselves are untouched
-        assert_eq!(m.vx_real(newvertex, 0), 0.5);
-        assert_eq!(m.vx_real(newvertex, 1), 0.25);
+        assert_eq!(m.vx_x(newvertex), 0.5);
+        assert_eq!(m.vx_y(newvertex), 0.25);
         // multiple attributes all interpolate
         let mut m2 = Mesh::new(
             &Behavior {
