@@ -1,16 +1,13 @@
-# Oracle harness: self-check now, permanent serial byte-identity gate later.
+# Oracle harness: the permanent serial byte-identity gate.
 #
-# Wayfinder ticket #13. Until the Rust port's CLI exists (stage 1 + I/O +
-# CLI phases), this job keeps the differential harness itself green: it
-# builds the pinned C oracle, regenerates the corpus, verifies oracle
-# self-determinism over the corpus, and re-validates detection/localization
-# against the injected-divergence stub.
-#
-# Once the Rust CLI lands, switch this job to the differential run:
-#   tools/oracle/run-harness.sh --candidate <path-to-built-rust-cli>
-# That job is then the permanent serial-path byte-identity gate required by
-# ADR docs/adr/0001-port-strategy.md (serial byte-identity stays binding,
-# including when internal multithreading lands).
+# Wayfinder ticket #13. The Rust port's stage-1 core + I/O + CLI phases
+# exist, so per tools/oracle/README.md ("Wiring") this job runs the
+# differential command with the built Rust CLI as the candidate: the
+# pinned C oracle against the Rust CLI over the 120-run corpus,
+# byte-for-byte. From now on this job IS the permanent serial-path
+# byte-identity gate required by ADR docs/adr/0001-port-strategy.md
+# (serial byte-identity stays binding, including when internal
+# multithreading lands).
 name: oracle-harness
 
 on:
@@ -19,9 +16,15 @@ on:
   pull_request:
 
 jobs:
-  self-check:
+  byte-parity:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Pinned oracle build + corpus + harness self-check
-        run: tools/oracle/run-harness.sh
+      - name: Pinned oracle build
+        run: bash tools/oracle/build-oracle.sh
+      # rust/rust-toolchain.toml pins the exact stable channel.
+      - name: Rust CLI build (release, default features, locked)
+        working-directory: rust
+        run: cargo build --release --locked -p triangle-cli
+      - name: Differential run (oracle vs Rust CLI over the 120-run corpus)
+        run: tools/oracle/run-harness.sh --candidate rust/target/release/triangle-cli
