@@ -12,3 +12,11 @@ edition = "2021"
 # in its own PR, together with a docs/deviation-register.md entry.
 [workspace.lints.rust]
 unsafe_code = "forbid"
+
+# R1 fix 4: fat LTO for the release profile. Measured effect on the
+# benchmark box (see the PR): the m+l aggregate candidate total drops
+# ~5-7% vs the default profile and the candidate aggregate runs faster
+# than the oracle; codegen-units/strip/panic/opt-level variants showed
+# no measurable additional effect. Byte parity is unaffected (120/120).
+[profile.release]
+lto = "fat"
