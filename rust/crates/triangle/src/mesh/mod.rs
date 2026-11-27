@@ -1,10 +1,10 @@
-//! Mesh-level lifecycle (the mesh.rs rows of docs/function-mapping.md):
+//! Mesh-level lifecycle (the mesh/mod.rs rows of docs/function-mapping.md):
 //! C struct mesh (triangle.h:476) owning the eight pools, the init geometry
 //! (triangleinit, initializevertexpool, initializetrisubpools, dummyinit),
 //! and the constructors maketriangle / makesubseg. All storage access goes
-//! through the slots.rs chokepoint; only the pool construction happens
+//! through the mesh/mesh/slots.rs chokepoint; only the pool construction happens
 //! here (the fields are pub(crate) for this module, and nothing outside
-//! slots.rs calls the pools' word/alloc/dealloc - review-enforced).
+//! mesh/mesh/slots.rs calls the pools' word/alloc/dealloc - review-enforced).
 //!
 //! R1 accessor-invariant rung (ADR 0002 section 3): the init functions
 //! here are the only builders of the row-shape role tables (invariant
@@ -20,7 +20,7 @@
 //! dummyinit, maketriangle, makesubseg.
 //!
 //! NOT landed (their C rows arrive with the modules that use them; the
-//! chokepoint primitives they reduce to are already in slots.rs):
+//! chokepoint primitives they reduce to are already in mesh/mesh/slots.rs):
 //! triangledealloc, subsegdealloc, vertexdealloc, triangledeinit
 //! (triangle.c:1196-1408). When triangledeinit lands, its acute free
 //! (trifree(m->acute_mem) and the NULL store, triangle.c:1395-1396)
@@ -29,7 +29,7 @@
 //! vertextraverse (triangle.c:1276) landed with
 //! the delaunay part-1 PR (the divconqdelaunay consumer), triangletraverse
 //! and getvertex with their consumers, and badsubsegdealloc /
-//! badsubsegtraverse (triangle.c:1298-1304, 1316-1327) with refine.rs
+//! badsubsegtraverse (triangle.c:1298-1304, 1316-1327) with algorithm/algorithm/refine.rs
 //! (the splitencsegs consumer).
 //!
 //! The behavior fields the init functions read arrive on the normalized
@@ -39,22 +39,22 @@
 //! modules land.
 #![allow(dead_code)]
 
-use crate::handles::{encode, sencode, Osub, Otri, DUMMY_SUB, DUMMY_TRI, NULL};
+use crate::mesh::handles::{encode, encode_subseg, Osub, Otri, DUMMY_SUB, DUMMY_TRI, NULL_ROW};
+use crate::mesh::pool::{Oom, WordPool};
+use crate::mesh::slots::{HalfWord, TriShape, VertexShape};
 use crate::options::Behavior;
-use crate::pool::{Oom, WordPool};
-use crate::slots::{HalfWord, TriShape, VertexShape};
 
 // The C per-block constants (triangle_config.h:120-131). Their values are
 // part of the contract: block geometry feeds oracle_address_order (ADR 0003
 // section 5) and the initial capacity hints.
-const TRIPERBLOCK: i32 = 4092;
-const SUBSEGPERBLOCK: i32 = 508;
-const VERTEXPERBLOCK: i32 = 4092;
-const VIRUSPERBLOCK: i32 = 1020;
-const BADSUBSEGPERBLOCK: i32 = 252;
-const BADTRIPERBLOCK: i32 = 4092;
-const FLIPSTACKERPERBLOCK: i32 = 252;
-const SPLAYNODEPERBLOCK: i32 = 508;
+const TRI_PER_BLOCK: i32 = 4092;
+const SUBSEG_PER_BLOCK: i32 = 508;
+const VERTEX_PER_BLOCK: i32 = 4092;
+const VIRUS_PER_BLOCK: i32 = 1020;
+const BAD_SUBSEG_PER_BLOCK: i32 = 252;
+const BAD_TRI_PER_BLOCK: i32 = 4092;
+const FLIP_STACKER_PER_BLOCK: i32 = 252;
+const SPLAY_NODE_PER_BLOCK: i32 = 508;
 
 /// C: struct mesh (triangle.h:476). Only the fields the landed functions
 /// need exist at this stage; the rest of the C field set (bounds, counters,
@@ -86,8 +86,8 @@ pub(crate) struct Mesh {
     /// bounds tri_attribute).
     pub(crate) eextras: i32,
     /// Input bounds (C m->xmin, xmax, ymin, ymax; REAL, triangle.h:513):
-    /// written by transfernodes (ioarrays.rs) and
-    /// read by boundingbox (delaunay.rs part 1) and sweeplinedelaunay
+    /// written by transfernodes (io/arrays.rs) and
+    /// read by boundingbox (algorithm/algorithm/delaunay.rs part 1) and sweeplinedelaunay
     /// (part 2). Zero superset of C's uninitialized read-before-write
     /// (D11).
     pub(crate) xmin: f64,
@@ -95,14 +95,14 @@ pub(crate) struct Mesh {
     pub(crate) ymin: f64,
     pub(crate) ymax: f64,
     /// C m->xminextreme (triangle.h:514): 10 * xmin - 9 * xmax, written
-    /// by transfernodes (triangle.c:7754, ioarrays.rs)
+    /// by transfernodes (triangle.c:7754, io/arrays.rs)
     /// and read by sweeplinedelaunay as the circle-event x key
     /// (triangle.c:5382/5397). Zero superset of C's uninitialized
     /// read-before-write (D11).
     pub(crate) xminextreme: f64,
     /// C m->undeads (triangle.h:520, int to i32): duplicate vertices
     /// moved to the graveyard (type UNDEADVERTEX); counted by
-    /// divconqdelaunay (delaunay.rs) and later by sweeplinedelaunay and
+    /// divconqdelaunay (algorithm/algorithm/delaunay.rs) and later by sweeplinedelaunay and
     /// the quality rows. Never read before the first write; the
     /// #[allow(dead_code)] mirrors the hullsize/cyclefail convention (the
     /// every-build readers land with later rows).
@@ -151,7 +151,7 @@ pub(crate) struct Mesh {
     /// port of C long). Iterated by the predicates (predicates.rs, one
     /// increment per test, plus the findcircumcenter decrement mirror of
     /// its internal counterclockwise call) and by the sweepline rows
-    /// (delaunay.rs part 2: rightofhyperbola counts every hyperbola test,
+    /// (algorithm/algorithm/delaunay.rs part 2: rightofhyperbola counts every hyperbola test,
     /// circletop every circle-top test, exactly at the C increment
     /// sites); read by the future statistics rows.
     pub(crate) incirclecount: i64,
@@ -162,7 +162,7 @@ pub(crate) struct Mesh {
     pub(crate) circletopcount: i64,
 
     /// C m->randomseed (triangle.c:220, unsigned long: u64 on the LP64
-    /// port): the LCG state of randomnation (util.rs). Deviation D10: an
+    /// port): the LCG state of randomnation (mesh/mesh/util.rs). Deviation D10: an
     /// owned per-run field, never a thread-local; seeded 1 by triangleinit
     /// (triangle.c:1502), mirrored by Mesh::new.
     pub(crate) randomseed: u64,
@@ -198,8 +198,8 @@ pub(crate) struct Mesh {
     /// C m->infvertex1, infvertex2, infvertex3 (triangle.h:547): the three
     /// vertices of the incremental/sweepline bounding box, treated as if
     /// infinitely distant by insertvertex; NULL (the null row id) until
-    /// boundingbox (delaunay.rs part 1) sets them to the reserved
-    /// out-of-pool INFVERTEX ids (D12, slots.rs); NULL again after
+    /// boundingbox (algorithm/algorithm/delaunay.rs part 1) sets them to the reserved
+    /// out-of-pool INFVERTEX ids (D12, mesh/mesh/slots.rs); NULL again after
     /// removebox.
     pub(crate) infvertex1: u32,
     pub(crate) infvertex2: u32,
@@ -207,7 +207,7 @@ pub(crate) struct Mesh {
     /// Deviation D12 (docs/deviation-register.md): C bounds the box with
     /// three trimalloc'd vertices outside the vertex pool
     /// (triangle.c:4634-4650); the port's reserved out-of-pool INFVERTEX
-    /// ids (slots.rs) carry the two coordinates of each infinite vertex in
+    /// ids (mesh/mesh/slots.rs) carry the two coordinates of each infinite vertex in
     /// this owned store, read and written only through the
     /// vx_real/vx_set_real chokepoint; removebox zeroes it like C's
     /// trifree (triangle.c:4741-4743).
@@ -232,7 +232,7 @@ pub(crate) struct Mesh {
 
     // -----------------------------------------------------------------
     // The bad-triangle queues (C triangle.h:502-505, the mesh fields the
-    // enqueuebadtriang/dequeuebadtriang rows of quality.rs drive: 4096
+    // enqueuebadtriang/dequeuebadtriang rows of algorithm/algorithm/quality.rs drive: 4096
     // queues keyed by the square of the shortest edge, front/tail links
     // into the badtriangles pool, the nextnonemptyq chain and its head).
     // D4: the C badtriang pointers mirror as u32 pool row ids, the null
@@ -279,7 +279,7 @@ impl Mesh {
         // C triangleinit ends with tri_exactinit (triangle.c:1504): the
         // exact-arithmetic constants are computed before any predicate can
         // run. Mirrored here (idempotent via its OnceLock guard).
-        crate::predicates::tri_exactinit();
+        crate::predicates::exact_init();
         let mut m = Mesh {
             // poolzero state for the three structural pools (dormant until
             // the init calls below); the small pools take their C geometry
@@ -290,24 +290,29 @@ impl Mesh {
             triangles: WordPool::new(0, 0, 0, false)?,
             subsegs: WordPool::new(0, 0, 0, false)?,
             vertices: WordPool::new(0, 0, 0, false)?,
-            viri: WordPool::new(8, VIRUSPERBLOCK as u32, VIRUSPERBLOCK as u32, false)?,
+            viri: WordPool::new(8, VIRUS_PER_BLOCK as u32, VIRUS_PER_BLOCK as u32, false)?,
             badsubsegs: WordPool::new(
                 24,
-                BADSUBSEGPERBLOCK as u32,
-                BADSUBSEGPERBLOCK as u32,
+                BAD_SUBSEG_PER_BLOCK as u32,
+                BAD_SUBSEG_PER_BLOCK as u32,
                 false,
             )?,
-            badtriangles: WordPool::new(48, BADTRIPERBLOCK as u32, BADTRIPERBLOCK as u32, false)?,
+            badtriangles: WordPool::new(
+                48,
+                BAD_TRI_PER_BLOCK as u32,
+                BAD_TRI_PER_BLOCK as u32,
+                false,
+            )?,
             flipstackers: WordPool::new(
                 16,
-                FLIPSTACKERPERBLOCK as u32,
-                FLIPSTACKERPERBLOCK as u32,
+                FLIP_STACKER_PER_BLOCK as u32,
+                FLIP_STACKER_PER_BLOCK as u32,
                 false,
             )?,
             splaynodes: WordPool::new(
                 40,
-                SPLAYNODEPERBLOCK as u32,
-                SPLAYNODEPERBLOCK as u32,
+                SPLAY_NODE_PER_BLOCK as u32,
+                SPLAY_NODE_PER_BLOCK as u32,
                 false,
             )?,
             tri_shape: TriShape {
@@ -366,16 +371,16 @@ impl Mesh {
             cyclefail: false,
             hullsize: 0,
             edges: 0,
-            lastflip: NULL,
+            lastflip: NULL_ROW,
             inelements: 0,
             insegments: 0,
             holes: 0,
             regions: 0,
             scoutsteps: 0,
             steinerleft: b.steiner,
-            infvertex1: NULL,
-            infvertex2: NULL,
-            infvertex3: NULL,
+            infvertex1: NULL_ROW,
+            infvertex2: NULL_ROW,
+            infvertex3: NULL_ROW,
             infvertex_store: [[0; 2]; 3],
             recenttri: None,
             // The bad-triangle queue state (C triangle.h:502-505). C
@@ -384,15 +389,15 @@ impl Mesh {
             // tallyfaces fills the queues; queuetail[] and nextnonemptyq[]
             // are uninitialized struct memory there, never read before
             // their first enqueue writes them (the queue discipline of
-            // quality.rs). The port pins the whole state at construction:
+            // algorithm/algorithm/quality.rs). The port pins the whole state at construction:
             // the enforcequality-init values for the two C-initialized
             // members and the null superset for the other two, following
             // the established lazy-pool-init convention (ADR 0003
-            // section 4). refine.rs's enforcequality re-runs the C init
+            // section 4). algorithm/algorithm/refine.rs's enforcequality re-runs the C init
             // loop verbatim over these fields (the queuefront sweep and
             // firstnonemptyq reset of triangle.c:7559-7561).
-            queuefront: [NULL; 4096],
-            queuetail: [NULL; 4096],
+            queuefront: [NULL_ROW; 4096],
+            queuetail: [NULL_ROW; 4096],
             nextnonemptyq: [-1; 4096],
             firstnonemptyq: -1,
             // The aCute scratch pool (C m->acute_mem, triangle.h:496):
@@ -406,8 +411,8 @@ impl Mesh {
             #[cfg(feature = "acute")]
             acute_mem: crate::acute::AcutePool::new(20),
         };
-        m.initializevertexpool(b.poly)?;
-        m.initializetrisubpools(
+        m.init_vertex_pool(b.poly)?;
+        m.init_tri_and_subseg_pools(
             b.order,
             b.usesegments,
             b.vararea,
@@ -427,7 +432,7 @@ impl Mesh {
     /// Invariant (ADR 0002 section 3 c): the computed overlays and the
     /// vertex2tri word are debug_asserted inside the stride this function
     /// computes (the role table is built only here).
-    pub(crate) fn initializevertexpool(&mut self, poly: bool) -> Result<(), Oom> {
+    pub(crate) fn init_vertex_pool(&mut self, poly: bool) -> Result<(), Oom> {
         let mark_int = ((self.mesh_dim + self.nextras) * 8 + 3) / 4;
         let mut vertexsize = (mark_int + 2) * 4;
         let v2tri = if poly {
@@ -469,14 +474,14 @@ impl Mesh {
                 "vertex2tri word outside the row (slot-role invariant)"
             );
         }
-        let first = if self.invertices > VERTEXPERBLOCK {
+        let first = if self.invertices > VERTEX_PER_BLOCK {
             self.invertices
         } else {
-            VERTEXPERBLOCK
+            VERTEX_PER_BLOCK
         };
         self.vertices = WordPool::new(
             vertexsize as u32,
-            VERTEXPERBLOCK as u32,
+            VERTEX_PER_BLOCK as u32,
             first as u32,
             false,
         )?;
@@ -493,7 +498,7 @@ impl Mesh {
     /// Invariant (ADR 0002 section 3 c): the computed role indices are
     /// debug_asserted inside the stride this function computes (the role
     /// table is built only here).
-    pub(crate) fn initializetrisubpools(
+    pub(crate) fn init_tri_and_subseg_pools(
         &mut self,
         order: i32,
         usesegments: bool,
@@ -568,24 +573,24 @@ impl Mesh {
         // C: first block max(2 * invertices - 2, TRIPERBLOCK)
         let first = {
             let two_in = 2 * self.invertices - 2;
-            if two_in > TRIPERBLOCK {
+            if two_in > TRI_PER_BLOCK {
                 two_in
             } else {
-                TRIPERBLOCK
+                TRI_PER_BLOCK
             }
         };
-        self.triangles = WordPool::new(trisize as u32, TRIPERBLOCK as u32, first as u32, true)?;
+        self.triangles = WordPool::new(trisize as u32, TRI_PER_BLOCK as u32, first as u32, true)?;
         if usesegments {
             // C: 8 pointers + one boundary marker = 68 bytes, first block
             // SUBSEGPERBLOCK
             self.subsegs = WordPool::new(
                 8 * 8 + 4,
-                SUBSEGPERBLOCK as u32,
-                SUBSEGPERBLOCK as u32,
+                SUBSEG_PER_BLOCK as u32,
+                SUBSEG_PER_BLOCK as u32,
                 true,
             )?;
         }
-        self.dummyinit();
+        self.init_sentinel_rows();
         Ok(())
     }
 
@@ -599,7 +604,7 @@ impl Mesh {
     /// Invariant (ADR 0002 section 3 a, D3): every stored word here is a
     /// legal decode target (the sentinels self-bond; every dissolve and
     /// sdissolve site later stores exactly these words).
-    pub(crate) fn dummyinit(&mut self) {
+    pub(crate) fn init_sentinel_rows(&mut self) {
         // encode of the sentinel row, orientation 0: the exact value the C
         // macros store for m->dummytri (the aligned raw pointer)
         let dummy_tri = encode(Otri {
@@ -615,9 +620,9 @@ impl Mesh {
             self.set_tri_vertex_word(DUMMY_TRI, i, 0);
         }
         if self.tri_shape.usesegments {
-            let dummy_sub = sencode(Osub {
+            let dummy_sub = encode_subseg(Osub {
                 ss: DUMMY_SUB,
-                ssorient: 0,
+                orient: 0,
             });
             // the omnipresent subsegment (C triangle.c:1056-1070): two
             // adjoining subsegs = itself, four NULL vertices, two
@@ -649,7 +654,7 @@ impl Mesh {
     /// decode (a: the dummy handles name the reserved sentinel rows);
     /// the NULL vertex slots are data, never decoded (b); the
     /// initialization writes stay below the stride (c).
-    pub(crate) fn maketriangle(&mut self, usesegments: bool, vararea: bool) -> Result<Otri, Oom> {
+    pub(crate) fn make_triangle(&mut self, usesegments: bool, vararea: bool) -> Result<Otri, Oom> {
         let tri = self.tri_alloc()?;
         let dummy_tri = encode(Otri {
             tri: DUMMY_TRI,
@@ -662,9 +667,9 @@ impl Mesh {
             self.set_tri_vertex_word(tri, i, 0);
         }
         if usesegments {
-            let dummy_sub = sencode(Osub {
+            let dummy_sub = encode_subseg(Osub {
                 ss: DUMMY_SUB,
-                ssorient: 0,
+                orient: 0,
             });
             for i in 0..3 {
                 self.set_tri_subseg_word(tri, i, dummy_sub);
@@ -674,7 +679,7 @@ impl Mesh {
             self.set_tri_attribute(tri, i as usize, 0.0);
         }
         if vararea {
-            self.set_tri_areabound(tri, -1.0);
+            self.set_tri_area_bound(tri, -1.0);
         }
         Ok(Otri { tri, orient: 0 })
     }
@@ -687,11 +692,11 @@ impl Mesh {
     /// Invariants (ADR 0002 section 3): as maketriangle (a, b, c) - the
     /// fresh row is legal on every decode, the NULL vertex slots are
     /// data, and the writes stay below the stride.
-    pub(crate) fn makesubseg(&mut self) -> Result<Osub, Oom> {
+    pub(crate) fn make_subseg(&mut self) -> Result<Osub, Oom> {
         let ss = self.sub_alloc()?;
-        let dummy_sub = sencode(Osub {
+        let dummy_sub = encode_subseg(Osub {
             ss: DUMMY_SUB,
-            ssorient: 0,
+            orient: 0,
         });
         for i in 0..2 {
             self.set_sub_neighbor_word(ss, i, dummy_sub);
@@ -707,7 +712,7 @@ impl Mesh {
             self.set_sub_tri_word(ss, i, dummy_tri);
         }
         self.set_sub_mark(ss, 0);
-        Ok(Osub { ss, ssorient: 0 })
+        Ok(Osub { ss, orient: 0 })
     }
 
     /// C: vertextraverse (triangle.c:1276-1288). Walk the vertex pool in
@@ -720,10 +725,10 @@ impl Mesh {
     /// DEADVERTEX overlay (d); the null row is never yielded (b,
     /// debug-pinned at the pool seam); the vertex pool has no sentinel
     /// row (D3).
-    pub(crate) fn vertextraverse(&self, t: &mut crate::pool::Traversal) -> Option<u32> {
+    pub(crate) fn traverse_vertex(&self, t: &mut crate::mesh::pool::Traversal) -> Option<u32> {
         loop {
             let newvertex = self.vertices.traverse_next(t)?;
-            if self.vx_type(newvertex) != crate::slots::DEADVERTEX {
+            if self.vx_type(newvertex) != crate::mesh::slots::DEAD_VERTEX {
                 return Some(newvertex);
             }
         }
@@ -738,10 +743,10 @@ impl Mesh {
     /// Invariants (ADR 0002 section 3): dead rows skipped (d); the
     /// reserved sentinel row is excluded by the pool walk (D3,
     /// debug-pinned); the null row is never yielded (b).
-    pub(crate) fn triangletraverse(&self, t: &mut crate::pool::Traversal) -> Option<u32> {
+    pub(crate) fn traverse_triangle(&self, t: &mut crate::mesh::pool::Traversal) -> Option<u32> {
         loop {
             let newtri = self.triangles.traverse_next(t)?;
-            if !self.deadtri(newtri) {
+            if !self.is_dead_tri(newtri) {
                 return Some(newtri);
             }
         }
@@ -750,10 +755,10 @@ impl Mesh {
     /// C: subsegtraverse (triangle.c:1243-1261). Same walk over the
     /// subsegment pool, skipping dead rows (ss[1] == NULL, killsubseg).
     /// Invariants (ADR 0002 section 3): as triangletraverse (d, D3, b).
-    pub(crate) fn subsegtraverse(&self, t: &mut crate::pool::Traversal) -> Option<u32> {
+    pub(crate) fn traverse_subseg(&self, t: &mut crate::mesh::pool::Traversal) -> Option<u32> {
         loop {
             let newsub = self.subsegs.traverse_next(t)?;
-            if !self.deadsubseg(newsub) {
+            if !self.is_dead_subseg(newsub) {
                 return Some(newsub);
             }
         }
@@ -762,13 +767,13 @@ impl Mesh {
     /// C: badsubsegdealloc (triangle.c:1298-1304). The dead-row idiom:
     /// subsegorg = NULL first (triangle.c:1302) so badsubsegtraverse
     /// skips the row, then pooldealloc (triangle.c:1303); splitencsegs
-    /// (refine.rs) is the consumer.
+    /// (algorithm/algorithm/refine.rs) is the consumer.
     ///
     /// Invariants (ADR 0002 section 3): the NULL word is the dead-row
     /// mark, never decoded (b); the push makes slot 0 pool-private (d);
     /// reuse stays exact-LIFO (e).
-    pub(crate) fn badsubsegdealloc(&mut self, dyingsubseg: u32) {
-        self.set_bad_sub_seg_org(dyingsubseg, NULL);
+    pub(crate) fn dealloc_bad_subseg(&mut self, dyingsubseg: u32) {
+        self.set_bad_sub_seg_org(dyingsubseg, NULL_ROW);
         self.badsubsegs.dealloc(dyingsubseg);
     }
 
@@ -780,10 +785,10 @@ impl Mesh {
     /// Invariants (ADR 0002 section 3): the NULL mark is the skip test
     /// (b); the null row itself is never yielded (b, debug-pinned at
     /// the pool seam).
-    pub(crate) fn badsubsegtraverse(&self, t: &mut crate::pool::Traversal) -> Option<u32> {
+    pub(crate) fn traverse_bad_subseg(&self, t: &mut crate::mesh::pool::Traversal) -> Option<u32> {
         loop {
             let newsub = self.badsubsegs.traverse_next(t)?;
-            if self.bad_sub_seg_org(newsub) != NULL {
+            if self.bad_subseg_org(newsub) != NULL_ROW {
                 return Some(newsub);
             }
         }
@@ -800,7 +805,7 @@ impl Mesh {
     ///
     /// Invariant (ADR 0002 section 3 a): the computed row id is
     /// debug_asserted inside the vertex pool's id space.
-    pub(crate) fn getvertex(&self, firstnumber: i32, number: i32) -> u32 {
+    pub(crate) fn get_vertex(&self, firstnumber: i32, number: i32) -> u32 {
         // C: getblock = m->vertices.firstblock; current = b->firstnumber.
         let mut block: u64 = 0;
         let mut current = firstnumber;
@@ -830,8 +835,8 @@ impl Mesh {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::handles::Otri;
-    use crate::slots::{HalfWord, TriShape};
+    use crate::mesh::handles::Otri;
+    use crate::mesh::slots::{HalfWord, TriShape};
 
     /// Test-assembled Behavior with exactly the fields the geometry
     /// reads; mirrors the direct C call shapes of the landed init rows.
@@ -895,7 +900,7 @@ mod tests {
         assert_eq!(m.triangles.stride(), 6);
         assert_eq!(
             m.vertex_shape,
-            crate::slots::VertexShape {
+            crate::mesh::slots::VertexShape {
                 stride: 3,
                 mark: HalfWord {
                     word: 2,
@@ -980,38 +985,50 @@ mod tests {
     }
 
     #[test]
-    fn sentinel_row_is_bonded_exactly_like_c_dummyinit() {
+    fn sentinel_row_is_bonded_exactly_like_c_init_sentinel_rows() {
         let m = mesh(true, 1, true, false, false, false);
-        let dummy_tri = crate::handles::encode(Otri {
-            tri: crate::handles::DUMMY_TRI,
+        let dummy_tri = crate::mesh::handles::encode(Otri {
+            tri: crate::mesh::handles::DUMMY_TRI,
             orient: 0,
         });
-        let dummy_sub = crate::handles::sencode(crate::handles::Osub {
-            ss: crate::handles::DUMMY_SUB,
-            ssorient: 0,
+        let dummy_sub = crate::mesh::handles::encode_subseg(crate::mesh::handles::Osub {
+            ss: crate::mesh::handles::DUMMY_SUB,
+            orient: 0,
         });
         // outer space (row 1 of the triangle pool)
         for i in 0..3 {
-            assert_eq!(m.tri_neighbor_word(crate::handles::DUMMY_TRI, i), dummy_tri);
+            assert_eq!(
+                m.tri_neighbor_word(crate::mesh::handles::DUMMY_TRI, i),
+                dummy_tri
+            );
         }
         for i in 0..3 {
-            assert_eq!(m.tri_vertex_word(crate::handles::DUMMY_TRI, i), 0);
+            assert_eq!(m.tri_vertex_word(crate::mesh::handles::DUMMY_TRI, i), 0);
         }
         for i in 0..3 {
-            assert_eq!(m.tri_subseg_word(crate::handles::DUMMY_TRI, i), dummy_sub);
+            assert_eq!(
+                m.tri_subseg_word(crate::mesh::handles::DUMMY_TRI, i),
+                dummy_sub
+            );
         }
         // the omnipresent subsegment (row 1 of the subseg pool)
         for i in 0..2 {
-            assert_eq!(m.sub_neighbor_word(crate::handles::DUMMY_SUB, i), dummy_sub);
+            assert_eq!(
+                m.sub_neighbor_word(crate::mesh::handles::DUMMY_SUB, i),
+                dummy_sub
+            );
         }
         for i in 0..4 {
-            assert_eq!(m.sub_vertex_word(crate::handles::DUMMY_SUB, i), 0);
+            assert_eq!(m.sub_vertex_word(crate::mesh::handles::DUMMY_SUB, i), 0);
         }
         for i in 0..2 {
-            assert_eq!(m.sub_tri_word(crate::handles::DUMMY_SUB, i), dummy_tri);
+            assert_eq!(
+                m.sub_tri_word(crate::mesh::handles::DUMMY_SUB, i),
+                dummy_tri
+            );
         }
         assert_eq!(
-            m.sub_mark(crate::handles::DUMMY_SUB),
+            m.sub_mark(crate::mesh::handles::DUMMY_SUB),
             0,
             "the dummy subseg's boundary marker is zero"
         );
@@ -1019,15 +1036,15 @@ mod tests {
         // folded off, exactly like C decode of the aligned dummy pointer
         for orient in 0..3 {
             let handle = Otri {
-                tri: crate::handles::DUMMY_TRI,
+                tri: crate::mesh::handles::DUMMY_TRI,
                 orient,
             };
             let mut flipped = handle;
-            m.symself(&mut flipped);
+            m.sym_self(&mut flipped);
             assert_eq!(
                 flipped,
                 Otri {
-                    tri: crate::handles::DUMMY_TRI,
+                    tri: crate::mesh::handles::DUMMY_TRI,
                     orient: 0
                 }
             );
@@ -1075,10 +1092,10 @@ mod tests {
     }
 
     #[test]
-    fn maketriangle_rows_start_from_id_two() {
+    fn make_triangle_rows_start_from_id_two() {
         let mut m = plain();
-        let a = m.maketriangle(false, false).expect("alloc");
-        let b = m.maketriangle(false, false).expect("alloc");
+        let a = m.make_triangle(false, false).expect("alloc");
+        let b = m.make_triangle(false, false).expect("alloc");
         assert_eq!(a.orient, 0);
         assert_eq!(b.orient, 0);
         assert_eq!((a.tri, b.tri), (2, 3));
@@ -1086,7 +1103,7 @@ mod tests {
         assert_eq!(
             m.sym(a),
             Otri {
-                tri: crate::handles::DUMMY_TRI,
+                tri: crate::mesh::handles::DUMMY_TRI,
                 orient: 0
             }
         );
@@ -1096,34 +1113,34 @@ mod tests {
     }
 
     #[test]
-    fn maketriangle_with_attributes_initializes_the_c_values() {
+    fn make_triangle_with_attributes_initializes_the_c_values() {
         let mut m =
             Mesh::new(&behavior(true, 1, true, true, false, false), 16, 2, 0, 2).expect("init");
-        let a = m.maketriangle(true, true).expect("alloc");
+        let a = m.make_triangle(true, true).expect("alloc");
         for i in 0..2 {
             assert_eq!(m.tri_attribute(a.tri, i), 0.0);
         }
-        assert_eq!(m.tri_areabound(a.tri), -1.0);
+        assert_eq!(m.tri_area_bound(a.tri), -1.0);
         // and the subseg sides are the omnipresent subsegment
         assert_eq!(
-            m.tspivot(a),
-            crate::handles::Osub {
-                ss: crate::handles::DUMMY_SUB,
-                ssorient: 0
+            m.tri_subseg(a),
+            crate::mesh::handles::Osub {
+                ss: crate::mesh::handles::DUMMY_SUB,
+                orient: 0
             }
         );
     }
 
     #[test]
-    fn makesubseg_rows_match_the_c_initialization() {
+    fn make_subseg_rows_match_the_c_initialization() {
         let mut m = mesh(true, 1, true, false, false, false);
-        let s = m.makesubseg().expect("alloc");
-        assert_eq!(s.ssorient, 0);
+        let s = m.make_subseg().expect("alloc");
+        assert_eq!(s.orient, 0);
         // subseg rows start at id 2 as well (sentinel at 1)
         assert_eq!(s.ss, 2);
-        let dummy_sub = crate::handles::sencode(crate::handles::Osub {
-            ss: crate::handles::DUMMY_SUB,
-            ssorient: 0,
+        let dummy_sub = crate::mesh::handles::encode_subseg(crate::mesh::handles::Osub {
+            ss: crate::mesh::handles::DUMMY_SUB,
+            orient: 0,
         });
         for i in 0..2 {
             assert_eq!(m.sub_neighbor_word(s.ss, i), dummy_sub);
@@ -1134,8 +1151,8 @@ mod tests {
         for i in 0..2 {
             assert_eq!(
                 m.sub_tri_word(s.ss, i),
-                crate::handles::encode(Otri {
-                    tri: crate::handles::DUMMY_TRI,
+                crate::mesh::handles::encode(Otri {
+                    tri: crate::mesh::handles::DUMMY_TRI,
                     orient: 0
                 })
             );
@@ -1144,16 +1161,16 @@ mod tests {
         assert_eq!(m.subsegs.live_count(), 1);
         // both ends pivot to the omnipresent subsegment
         assert_eq!(
-            m.spivot(s),
-            crate::handles::Osub {
-                ss: crate::handles::DUMMY_SUB,
-                ssorient: 0
+            m.pivot_subseg(s),
+            crate::mesh::handles::Osub {
+                ss: crate::mesh::handles::DUMMY_SUB,
+                orient: 0
             }
         );
         assert_eq!(
-            m.stpivot(s),
+            m.subseg_tri(s),
             Otri {
-                tri: crate::handles::DUMMY_TRI,
+                tri: crate::mesh::handles::DUMMY_TRI,
                 orient: 0
             }
         );
@@ -1170,15 +1187,15 @@ mod tests {
         let mut mp = mesh(true, 1, true, false, false, false);
         let v = mp.vx_alloc().expect("alloc");
         assert_eq!(v, 1);
-        let t = mp.maketriangle(true, false).expect("alloc");
-        mp.setorg(t, v);
+        let t = mp.make_triangle(true, false).expect("alloc");
+        mp.set_org(t, v);
         assert_eq!(mp.org(t), v);
-        mp.vx_set_2tri(v, crate::handles::encode(t));
-        assert_eq!(mp.vx_2tri(v), crate::handles::encode(t));
+        mp.vx_set_2tri(v, crate::mesh::handles::encode(t));
+        assert_eq!(mp.vx_2tri(v), crate::mesh::handles::encode(t));
     }
 
     #[test]
-    fn vertextraverse_walks_live_rows_and_skips_the_dead() {
+    fn traverse_vertex_walks_live_rows_and_skips_the_dead() {
         // C vertextraverse (triangle.c:1276-1288): allocation order over
         // the whole vertex pool, DEADVERTEX rows skipped (pool traversal
         // itself walks dead rows, D3), NULL at the end. vx_dealloc marks
@@ -1188,14 +1205,25 @@ mod tests {
         let b = m.vx_alloc().expect("alloc");
         let c = m.vx_alloc().expect("alloc");
         let mut t = m.vertices.traversal();
-        assert_eq!(m.vertextraverse(&mut t), Some(a));
-        assert_eq!(m.vertextraverse(&mut t), Some(b));
-        assert_eq!(m.vertextraverse(&mut t), Some(c));
-        assert_eq!(m.vertextraverse(&mut t), None);
+        assert_eq!(m.traverse_vertex(&mut t), Some(a));
+        assert_eq!(m.traverse_vertex(&mut t), Some(b));
+        assert_eq!(m.traverse_vertex(&mut t), Some(c));
+        assert_eq!(m.traverse_vertex(&mut t), None);
         m.vx_dealloc(b);
         let mut t = m.vertices.traversal();
-        assert_eq!(m.vertextraverse(&mut t), Some(a));
-        assert_eq!(m.vertextraverse(&mut t), Some(c));
-        assert_eq!(m.vertextraverse(&mut t), None);
+        assert_eq!(m.traverse_vertex(&mut t), Some(a));
+        assert_eq!(m.traverse_vertex(&mut t), Some(c));
+        assert_eq!(m.traverse_vertex(&mut t), None);
     }
 }
+
+// R4 module reorganization (docs/architecture-spec.md section 5): the
+// storage model lives under mesh/ - the packed-handle algebra
+// (mesh/handles.rs), the row/slot vocabulary (mesh/slots.rs), the word pool
+// (mesh/pool.rs), the mesh-local debugging and utility sections (mesh/debug.rs,
+// mesh/util.rs), and this module (the Mesh struct and its pool wiring).
+pub(crate) mod debug;
+pub(crate) mod handles;
+pub(crate) mod pool;
+pub(crate) mod slots;
+pub(crate) mod util;

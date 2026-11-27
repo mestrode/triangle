@@ -50,7 +50,7 @@ Gate invocation schedule (ticket #11, mapped to ADR 0001's sequence):
 | --- | --- | --- |
 | Stage 1, per PR | binding | advisory only |
 | Stage 1 completion (R0: parity green) | binding, full corpus | record the baseline number (transliteration may legitimately sit above the band; R0 becomes the no-regression reference) |
-| Idiomatization rungs 1 through 4, each boundary | binding | binding no-regression vs the best recorded milestone (a justified slowdown needs an explicit exception in the rung's ticket) |
+| Idiomatization rungs 1 through 4, each boundary | binding | binding: the rung-boundary instrument is the back-to-back binary A/B vs the pinned oracle (old master binary vs rung-head binary, same box, same session, bench order old-then-new; gate = aggregate and geomean ratio deltas within +/-0.75pp, demonstrated resolution 0.012pp from the R3 verification pair). The oracle-settle protocol is retired (cx23 class evidence; the failed settle record lives in the r3-settle-* reports); the criterion corpus suite stays a diagnostic only, never a gate (11.34% per-bench same-binary wander on cx23); bit-identity is excluded as a gate form (panic locations embed file:line, so any line or path shift changes the hash). A justified slowdown still needs an explicit exception in the rung's ticket |
 | End gate (after rung 4) | binding | binding absolute: 1.05 aggregate, 1.05 geomean, 1.35 per-run vs the pinned oracle |
 | MT milestone (on the CPX42) | binding, serial path unchanged | MT targets of section 5.5 plus the ST end gate re-run on that machine |
 
@@ -72,9 +72,9 @@ Hybrid, decided and user-confirmed:
 ### 5.2 Data model - ADR 0002
 
 - Every stored handle is a packed u64: 32-bit pool row index in the high bits, orientation in the low 2 bits (triangles) or 1 bit (subsegments); the all-zero word keeps the C NULL meaning. Exact C slot density: 8 bytes per neighbor slot, 48-byte triangle rows.
-- Register handles Otri { tri: u32, orient: u8 } and Osub { ss: u32, ssorient: u8 } are the unpacked C mirrors (struct otri/osub); ring rotations rotate only the orientation byte, encode/decode run only at slot stores and loads with identical semantics to the C macros (deviation D6: macros become methods).
+- Register handles Otri { tri: u32, orient: u8 } and Osub { ss: u32, orient: u8 } are the unpacked C mirrors (struct otri/osub); ring rotations rotate only the orientation byte, encode/decode run only at slot stores and loads with identical semantics to the C macros (deviation D6: macros become methods).
 - Triangle, subsegment and vertex rows are untyped u64 word arrays with runtime stride and slot roles fixed at init by the transliterated C formulas; vertex int fields (mark, type) are exact 4-byte half-word overlays through the accessors (deviation D2, no aliasing UB); with -p the vertex2tri word holds an encoded Otri exactly as C stores it.
-- One private accessor chokepoint (slots.rs) is the only code touching pool storage: values in and out, no storage references escape, bounds-checked indexing, bit-exact conversions. Everything outside it is safe by construction.
+- One private accessor chokepoint (mesh/slots.rs) is the only code touching pool storage: values in and out, no storage references escape, bounds-checked indexing, bit-exact conversions. Everything outside it is safe by construction.
 - Sentinels (dummytri/dummysub) become reserved fixed row ids, excluded from allocation, traversal and the dead stack (deviation D3). The dead stack threads u32 row ids through slot 0 (deviation D4); dead-detection keeps the C killtri NULL pattern.
 - Stage 1 unsafe: zero, enforced mechanically (unsafe_code = "forbid" workspace-wide). Invariants held by debug_asserts; the corpus runs under Miri. Any later unsafe is chokepoint-local and rung-gated (deviation D7; the single currently foreseen pocket is section 5.5).
 
@@ -89,7 +89,7 @@ Hybrid, decided and user-confirmed:
 
 - Workspace: rust/ with crates/triangle (lib, zero dependencies day one) and crates/triangle-cli (bin, executable triangle-cli, the #13 candidate contract). The C sources and tools/oracle are untouched. 64-bit enforcement in lib.rs; rust/Cargo.lock committed; rust/target ignored.
 - Feature gates: exactly one, acute (default on), the inverted NO_ACUTE switch; --no-default-features reproduces a C NO_ACUTE build and rejects -U exactly as C does.
-- Module map (the full 195-row assignment is docs/function-mapping.md): triangle.h to handles.rs + slots.rs; triangle.c splits along its section banners into util.rs, options.rs, debug.rs, pool.rs, mesh.rs, quality.rs, locate.rs, transform.rs, delaunay.rs, construct.rs, refine.rs, ioarrays.rs; acute.c to acute.rs (feature-gated); predicates.c to predicates.rs; eps_writer.c to eps.rs and triangle_io.c to io.rs (I/O phase); triangle_helper.c and triangle_api.c dissolve into options.rs, input.rs, api.rs, error.rs and lib.rs.
+- Module map (the full 195-row assignment is docs/function-mapping.md): triangle.h to mesh/handles.rs + mesh/slots.rs; triangle.c splits along its section banners into mesh/util.rs, options.rs, mesh/debug.rs, mesh/pool.rs, mesh/mod.rs, algorithm/quality.rs, algorithm/locate.rs, algorithm/transform.rs, algorithm/delaunay.rs, algorithm/segments.rs, algorithm/refine.rs, io/arrays.rs; acute.c to acute.rs (feature-gated); predicates.c to predicates.rs; eps_writer.c to io/eps.rs and triangle_io.c to io/mod.rs (I/O phase); triangle_helper.c and triangle_api.c dissolve into options.rs, input.rs, api.rs, error.rs and lib.rs. After the R4 reorganization (issue #60) the private core is grouped along its seams - mesh/ (the storage model: mod.rs, handles.rs, slots.rs, pool.rs, debug.rs, util.rs), algorithm/ (the triangle.c algorithm sections: locate.rs, transform.rs, delaunay.rs, segments.rs, quality.rs, refine.rs) and io/ (mod.rs, arrays.rs, eps.rs) - while the API shell and predicates.rs stay top-level and formatter.rs keeps its public path at the src root (ADR 0004).
 - Public surface day one: Options (the struct behavior mirror; Options::new defaults, Options::parse of the C options string 1:1, validate computing the derived-field tail; no options invented, none dropped), triangulate(), the owned Mesh handle (load_mesh, refine, output, statistics, quality, check_mesh, check_delaunay, memory_bytes), MeshInput/MeshOutput (owned Vecs, no libc types), Statistics/Quality/BoundingBox (exact C arithmetic), the Unsuitable trait (object-safe, one method, receives copied VertexSample values, deviation D9), VERSION (1, 7, 0) and HAS_ACUTE. The crate never exposes otri/osub, row ids, pools or chokepoint types.
 - Error funnel: internal status codes mirrored 1:1 as InternalStatus with the exact C discriminants until rung 2; the exit sites become returned statuses (internalerror, OOM; deviation D8); TRI_NULL dissolves into ownership. One translation point From<InternalStatus> for Error at the api.rs boundary. Public taxonomy: Error { Options, Input, SegmentRecovery(kind: FindDirection/Split/Intersect/Insert/Scout/Cycle), OutOfMemory, Internal, Io }. The lib never prints and never exits; C's messages survive verbatim as error payloads.
 - Lifecycle: RAII, Drop, no triangle_free (deviation D11); the LCG seed is an owned per-run field, not thread-local (deviation D10).
@@ -112,11 +112,11 @@ Lands as its own milestone after the ST end gate; entry condition is a parity-gr
 
 Stage 1 to R0 (transliteration to full byte parity), landing per module with docs/function-mapping.md as the shared assignment and the harness binding per PR:
 
-1. Foundation: handles.rs, slots.rs (the chokepoint), pool.rs (ADR 0003's WordPool), mesh.rs. Independently landable base for everything else.
+1. Foundation: mesh/handles.rs, mesh/slots.rs (the chokepoint), mesh/pool.rs (ADR 0003's WordPool), mesh/mod.rs. Independently landable base for everything else.
 2. Shell, early for parity visibility: options.rs + error.rs + input.rs + lib.rs (parsecommandline and validate are the cheapest full-family behavioral parity tests), api.rs as the surface lands.
 3. predicates.rs (independent; gates the geometry).
-4. Algorithm core in C call order: util.rs, delaunay.rs, locate.rs, transform.rs, construct.rs, quality.rs, refine.rs, acute.rs.
-5. ioarrays.rs (transfernodes early with the input path; array writers late, they serve Mesh::output).
+4. Algorithm core in C call order: mesh/util.rs, algorithm/delaunay.rs, algorithm/locate.rs, algorithm/transform.rs, algorithm/segments.rs, algorithm/quality.rs, algorithm/refine.rs, acute.rs.
+5. io/arrays.rs (transfernodes early with the input path; array writers late, they serve Mesh::output).
 6. Hermetic per-PR acceptance: run-harness.sh --candidate <rust-cli> on the committed subset green; a thin binary entry arrives with the first ioarrays capabilities (the candidate contract activates fully in the I/O phase).
 
 R0 completion: full 120-run corpus byte-identical, Miri subset green with debug asserts on, R0 performance baseline recorded.
@@ -125,7 +125,7 @@ Rungs R1-R4 per ADR 0001 (each boundary: corpus green, no-regression vs the best
 
 MT milestone per ADR 0005's cut: (a) scoped-phase scheduler + shard overlay + store wrapper, (b) construction fork-join with deterministic rebase, (c) claim queues + sidecar + refinement integration, (d) per-worker aCute scratch + worker-stream RNG, (e) output marshalling parallel body, (f) MT validation/telemetry and the CPX42 gate run.
 
-I/O phase (ticketed when the core API shape stands): .poly/node/ele readers, writers matching the oracle's byte formats exactly (%.17g), eps.rs, io.rs; the CLI argument compatibility surface and file-name conventions get pinned there, including whether a --threads flag joins TRIANGLE_THREADS.
+I/O phase (ticketed when the core API shape stands): .poly/node/ele readers, writers matching the oracle's byte formats exactly (%.17g), io/eps.rs, io/mod.rs; the CLI argument compatibility surface and file-name conventions get pinned there, including whether a --threads flag joins TRIANGLE_THREADS.
 
 CLI phase: triangle-cli graduates from stub to the full C-compatible surface; exit codes 0/1; stdout chatter parity is pinned there.
 

@@ -72,7 +72,7 @@ static PRED_CONSTS: OnceLock<PredConsts> = OnceLock::new();
 /// D5: the x87/CPU86 and LINUX _FPU_SETCW control-word blocks are dropped;
 /// every read of these constants on the pinned 64-bit targets is SSE2
 /// double precision.
-pub(crate) fn tri_exactinit() {
+pub(crate) fn exact_init() {
     let _ = PRED_CONSTS.get_or_init(compute_consts);
 }
 
@@ -276,7 +276,7 @@ fn two_one_product(a1: f64, a0: f64, b: f64) -> (f64, f64, f64, f64) {
 /// discards the value; a slice cannot) replace C's unguarded prefetch
 /// enow = e[++eindex]; the prefetched value is dead exactly when the guard
 /// fails, so this is branch-identical to the compiled C.
-fn tri_fast_expansion_sum_zeroelim(
+fn fast_expansion_sum_zeroelim(
     elen: usize,
     e: &[f64],
     flen: usize,
@@ -379,7 +379,7 @@ fn tri_fast_expansion_sum_zeroelim(
 /// C: tri_scale_expansion_zeroelim (predicates.c:330). Sets h = be with
 /// zeros eliminated; h must have 2 * elen slots.
 #[allow(clippy::needless_range_loop)] // C-parity cursor walk over e
-fn tri_scale_expansion_zeroelim(elen: usize, e: &[f64], b: f64, h: &mut [f64]) -> usize {
+fn scale_expansion_zeroelim(elen: usize, e: &[f64], b: f64, h: &mut [f64]) -> usize {
     debug_assert!(elen >= 1 && h.len() >= 2 * elen);
     let (bhi, blo) = split(b);
     let (mut q, hh) = two_product_presplit(e[0], b, bhi, blo);
@@ -414,7 +414,7 @@ fn tri_scale_expansion_zeroelim(elen: usize, e: &[f64], b: f64, h: &mut [f64]) -
 /// C: tri_estimate (predicates.c:377): a one-word estimate of an
 /// expansion's value.
 #[allow(clippy::needless_range_loop)] // C-parity cursor walk over e
-fn tri_estimate(elen: usize, e: &[f64]) -> f64 {
+fn estimate(elen: usize, e: &[f64]) -> f64 {
     let mut q = e[0];
     for eindex in 1..elen {
         q += e[eindex];
@@ -427,7 +427,7 @@ fn tri_estimate(elen: usize, e: &[f64]) -> f64 {
 // ---------------------------------------------------------------------------
 
 /// C: tri_counterclockwiseadapt (predicates.c:409).
-fn tri_counterclockwiseadapt(pa: Vertex, pb: Vertex, pc: Vertex, detsum: f64) -> f64 {
+fn counterclockwise_adapt(pa: Vertex, pb: Vertex, pc: Vertex, detsum: f64) -> f64 {
     let cst = consts();
 
     let acx = pa[0] - pc[0];
@@ -446,7 +446,7 @@ fn tri_counterclockwiseadapt(pa: Vertex, pb: Vertex, pc: Vertex, detsum: f64) ->
     b[2] = b2;
     b[3] = b3;
 
-    let mut det = tri_estimate(4, &b);
+    let mut det = estimate(4, &b);
     let mut errbound = cst.ccwerrboundB * detsum;
     if (det >= errbound) || (-det >= errbound) {
         return det;
@@ -478,7 +478,7 @@ fn tri_counterclockwiseadapt(pa: Vertex, pb: Vertex, pc: Vertex, detsum: f64) ->
     u[1] = u1;
     u[2] = u2;
     u[3] = u3;
-    let c1length = tri_fast_expansion_sum_zeroelim(4, &b, 4, &u, &mut c1);
+    let c1length = fast_expansion_sum_zeroelim(4, &b, 4, &u, &mut c1);
 
     let (s1, s0) = two_product(acx, bcytail);
     let (t1, t0) = two_product(acy, bcxtail);
@@ -487,7 +487,7 @@ fn tri_counterclockwiseadapt(pa: Vertex, pb: Vertex, pc: Vertex, detsum: f64) ->
     u[1] = u1;
     u[2] = u2;
     u[3] = u3;
-    let c2length = tri_fast_expansion_sum_zeroelim(c1length, &c1, 4, &u, &mut c2);
+    let c2length = fast_expansion_sum_zeroelim(c1length, &c1, 4, &u, &mut c2);
 
     let (s1, s0) = two_product(acxtail, bcytail);
     let (t1, t0) = two_product(acytail, bcxtail);
@@ -496,14 +496,14 @@ fn tri_counterclockwiseadapt(pa: Vertex, pb: Vertex, pc: Vertex, detsum: f64) ->
     u[1] = u1;
     u[2] = u2;
     u[3] = u3;
-    let dlength = tri_fast_expansion_sum_zeroelim(c2length, &c2, 4, &u, &mut dd);
+    let dlength = fast_expansion_sum_zeroelim(c2length, &c2, 4, &u, &mut dd);
 
     dd[dlength - 1]
 }
 
 /// C: tri_counterclockwise (predicates.c:489). Positive if pa, pb, pc occur
 /// in counterclockwise order; negative if clockwise; zero if collinear.
-pub(crate) fn tri_counterclockwise(
+pub(crate) fn counterclockwise(
     m: &mut Mesh,
     b: &Behavior,
     pa: Vertex,
@@ -542,7 +542,7 @@ pub(crate) fn tri_counterclockwise(
         return det;
     }
 
-    tri_counterclockwiseadapt(pa, pb, pc, detsum)
+    counterclockwise_adapt(pa, pb, pc, detsum)
 }
 
 // ---------------------------------------------------------------------------
@@ -552,7 +552,7 @@ pub(crate) fn tri_counterclockwise(
 /// C: tri_incircleadapt (predicates.c:548). The full adaptive cascade for
 /// the incircle test. Expansion arrays keep the C sizes so every
 /// intermediate fits exactly like the compiled C.
-fn tri_incircleadapt(pa: Vertex, pb: Vertex, pc: Vertex, pd: Vertex, permanent: f64) -> f64 {
+fn incircle_adapt(pa: Vertex, pb: Vertex, pc: Vertex, pd: Vertex, permanent: f64) -> f64 {
     let cst = consts();
 
     let adx = pa[0] - pd[0];
@@ -580,15 +580,15 @@ fn tri_incircleadapt(pa: Vertex, pb: Vertex, pc: Vertex, pd: Vertex, permanent: 
     bc[2] = bc2;
     bc[3] = bc3;
     let mut axbc = [0.0f64; 8];
-    let axbclen = tri_scale_expansion_zeroelim(4, &bc, adx, &mut axbc);
+    let axbclen = scale_expansion_zeroelim(4, &bc, adx, &mut axbc);
     let mut axxbc = [0.0f64; 16];
-    let axxbclen = tri_scale_expansion_zeroelim(axbclen, &axbc, adx, &mut axxbc);
+    let axxbclen = scale_expansion_zeroelim(axbclen, &axbc, adx, &mut axxbc);
     let mut aybc = [0.0f64; 8];
-    let aybclen = tri_scale_expansion_zeroelim(4, &bc, ady, &mut aybc);
+    let aybclen = scale_expansion_zeroelim(4, &bc, ady, &mut aybc);
     let mut ayybc = [0.0f64; 16];
-    let ayybclen = tri_scale_expansion_zeroelim(aybclen, &aybc, ady, &mut ayybc);
+    let ayybclen = scale_expansion_zeroelim(aybclen, &aybc, ady, &mut ayybc);
     let mut adet = [0.0f64; 32];
-    let alen = tri_fast_expansion_sum_zeroelim(axxbclen, &axxbc, ayybclen, &ayybc, &mut adet);
+    let alen = fast_expansion_sum_zeroelim(axxbclen, &axxbc, ayybclen, &ayybc, &mut adet);
 
     let (cdxady1, cdxady0) = two_product(cdx, ady);
     let (adxcdy1, adxcdy0) = two_product(adx, cdy);
@@ -598,15 +598,15 @@ fn tri_incircleadapt(pa: Vertex, pb: Vertex, pc: Vertex, pd: Vertex, permanent: 
     ca[2] = ca2;
     ca[3] = ca3;
     let mut bxca = [0.0f64; 8];
-    let bxcalen = tri_scale_expansion_zeroelim(4, &ca, bdx, &mut bxca);
+    let bxcalen = scale_expansion_zeroelim(4, &ca, bdx, &mut bxca);
     let mut bxxca = [0.0f64; 16];
-    let bxxcalen = tri_scale_expansion_zeroelim(bxcalen, &bxca, bdx, &mut bxxca);
+    let bxxcalen = scale_expansion_zeroelim(bxcalen, &bxca, bdx, &mut bxxca);
     let mut byca = [0.0f64; 8];
-    let bycalen = tri_scale_expansion_zeroelim(4, &ca, bdy, &mut byca);
+    let bycalen = scale_expansion_zeroelim(4, &ca, bdy, &mut byca);
     let mut byyca = [0.0f64; 16];
-    let byycalen = tri_scale_expansion_zeroelim(bycalen, &byca, bdy, &mut byyca);
+    let byycalen = scale_expansion_zeroelim(bycalen, &byca, bdy, &mut byyca);
     let mut bdet = [0.0f64; 32];
-    let blen = tri_fast_expansion_sum_zeroelim(bxxcalen, &bxxca, byycalen, &byyca, &mut bdet);
+    let blen = fast_expansion_sum_zeroelim(bxxcalen, &bxxca, byycalen, &byyca, &mut bdet);
 
     let (adxbdy1, adxbdy0) = two_product(adx, bdy);
     let (bdxady1, bdxady0) = two_product(bdx, ady);
@@ -616,15 +616,15 @@ fn tri_incircleadapt(pa: Vertex, pb: Vertex, pc: Vertex, pd: Vertex, permanent: 
     ab[2] = ab2;
     ab[3] = ab3;
     let mut cxab = [0.0f64; 8];
-    let cxablen = tri_scale_expansion_zeroelim(4, &ab, cdx, &mut cxab);
+    let cxablen = scale_expansion_zeroelim(4, &ab, cdx, &mut cxab);
     let mut cxxab = [0.0f64; 16];
-    let cxxablen = tri_scale_expansion_zeroelim(cxablen, &cxab, cdx, &mut cxxab);
+    let cxxablen = scale_expansion_zeroelim(cxablen, &cxab, cdx, &mut cxxab);
     let mut cyab = [0.0f64; 8];
-    let cyablen = tri_scale_expansion_zeroelim(4, &ab, cdy, &mut cyab);
+    let cyablen = scale_expansion_zeroelim(4, &ab, cdy, &mut cyab);
     let mut cyyab = [0.0f64; 16];
-    let cyyablen = tri_scale_expansion_zeroelim(cyablen, &cyab, cdy, &mut cyyab);
+    let cyyablen = scale_expansion_zeroelim(cyablen, &cyab, cdy, &mut cyyab);
     let mut cdet = [0.0f64; 32];
-    let clen = tri_fast_expansion_sum_zeroelim(cxxablen, &cxxab, cyyablen, &cyyab, &mut cdet);
+    let clen = fast_expansion_sum_zeroelim(cxxablen, &cxxab, cyyablen, &cyyab, &mut cdet);
 
     // C predicates.c:565: REAL fin1[1152], fin2[1152] holding the finnow/
     // finother accumulation pair; the C pointer swap becomes these two
@@ -634,22 +634,22 @@ fn tri_incircleadapt(pa: Vertex, pb: Vertex, pc: Vertex, pd: Vertex, permanent: 
     let mut fin2 = [0.0f64; 1152];
     let mut in_a = true;
     let mut abdet = [0.0f64; 64];
-    let ablen = tri_fast_expansion_sum_zeroelim(alen, &adet, blen, &bdet, &mut abdet);
-    let mut finlength = tri_fast_expansion_sum_zeroelim(ablen, &abdet, clen, &cdet, &mut fin1);
+    let ablen = fast_expansion_sum_zeroelim(alen, &adet, blen, &bdet, &mut abdet);
+    let mut finlength = fast_expansion_sum_zeroelim(ablen, &abdet, clen, &cdet, &mut fin1);
 
     macro_rules! finstep {
         ($fin1:ident, $fin2:ident, $in_a:ident, $flen:ident, $add:expr, $addlen:expr) => {
             if $in_a {
-                $flen = tri_fast_expansion_sum_zeroelim($flen, &$fin1, $addlen, $add, &mut $fin2);
+                $flen = fast_expansion_sum_zeroelim($flen, &$fin1, $addlen, $add, &mut $fin2);
                 $in_a = false;
             } else {
-                $flen = tri_fast_expansion_sum_zeroelim($flen, &$fin2, $addlen, $add, &mut $fin1);
+                $flen = fast_expansion_sum_zeroelim($flen, &$fin2, $addlen, $add, &mut $fin1);
                 $in_a = true;
             }
         };
     }
 
-    let mut det = tri_estimate(finlength, &fin1);
+    let mut det = estimate(finlength, &fin1);
     let mut errbound = cst.iccerrboundB * permanent;
     if (det >= errbound) || (-det >= errbound) {
         return det;
@@ -737,171 +737,111 @@ fn tri_incircleadapt(pa: Vertex, pb: Vertex, pc: Vertex, pd: Vertex, permanent: 
     let mut cytablen = 0usize;
 
     if adxtail != 0.0 {
-        axtbclen = tri_scale_expansion_zeroelim(4, &bc, adxtail, &mut axtbc);
-        let temp16alen = tri_scale_expansion_zeroelim(axtbclen, &axtbc, 2.0 * adx, &mut temp16a);
+        axtbclen = scale_expansion_zeroelim(4, &bc, adxtail, &mut axtbc);
+        let temp16alen = scale_expansion_zeroelim(axtbclen, &axtbc, 2.0 * adx, &mut temp16a);
 
         let mut axtcc = [0.0f64; 8];
-        let axtcclen = tri_scale_expansion_zeroelim(4, &cc, adxtail, &mut axtcc);
-        let temp16blen = tri_scale_expansion_zeroelim(axtcclen, &axtcc, bdy, &mut temp16b);
+        let axtcclen = scale_expansion_zeroelim(4, &cc, adxtail, &mut axtcc);
+        let temp16blen = scale_expansion_zeroelim(axtcclen, &axtcc, bdy, &mut temp16b);
 
         let mut axtbb = [0.0f64; 8];
-        let axtbblen = tri_scale_expansion_zeroelim(4, &bb, adxtail, &mut axtbb);
-        let temp16clen = tri_scale_expansion_zeroelim(axtbblen, &axtbb, -cdy, &mut temp16c);
+        let axtbblen = scale_expansion_zeroelim(4, &bb, adxtail, &mut axtbb);
+        let temp16clen = scale_expansion_zeroelim(axtbblen, &axtbb, -cdy, &mut temp16c);
 
-        let temp32alen = tri_fast_expansion_sum_zeroelim(
-            temp16alen,
-            &temp16a,
-            temp16blen,
-            &temp16b,
-            &mut temp32a,
-        );
-        let temp48len = tri_fast_expansion_sum_zeroelim(
-            temp16clen,
-            &temp16c,
-            temp32alen,
-            &temp32a,
-            &mut temp48,
-        );
+        let temp32alen =
+            fast_expansion_sum_zeroelim(temp16alen, &temp16a, temp16blen, &temp16b, &mut temp32a);
+        let temp48len =
+            fast_expansion_sum_zeroelim(temp16clen, &temp16c, temp32alen, &temp32a, &mut temp48);
         finstep!(fin1, fin2, in_a, finlength, &temp48, temp48len);
     }
     if adytail != 0.0 {
-        aytbclen = tri_scale_expansion_zeroelim(4, &bc, adytail, &mut aytbc);
-        let temp16alen = tri_scale_expansion_zeroelim(aytbclen, &aytbc, 2.0 * ady, &mut temp16a);
+        aytbclen = scale_expansion_zeroelim(4, &bc, adytail, &mut aytbc);
+        let temp16alen = scale_expansion_zeroelim(aytbclen, &aytbc, 2.0 * ady, &mut temp16a);
 
         let mut aytbb = [0.0f64; 8];
-        let aytbblen = tri_scale_expansion_zeroelim(4, &bb, adytail, &mut aytbb);
-        let temp16blen = tri_scale_expansion_zeroelim(aytbblen, &aytbb, cdx, &mut temp16b);
+        let aytbblen = scale_expansion_zeroelim(4, &bb, adytail, &mut aytbb);
+        let temp16blen = scale_expansion_zeroelim(aytbblen, &aytbb, cdx, &mut temp16b);
 
         let mut aytcc = [0.0f64; 8];
-        let aytcclen = tri_scale_expansion_zeroelim(4, &cc, adytail, &mut aytcc);
-        let temp16clen = tri_scale_expansion_zeroelim(aytcclen, &aytcc, -bdx, &mut temp16c);
+        let aytcclen = scale_expansion_zeroelim(4, &cc, adytail, &mut aytcc);
+        let temp16clen = scale_expansion_zeroelim(aytcclen, &aytcc, -bdx, &mut temp16c);
 
-        let temp32alen = tri_fast_expansion_sum_zeroelim(
-            temp16alen,
-            &temp16a,
-            temp16blen,
-            &temp16b,
-            &mut temp32a,
-        );
-        let temp48len = tri_fast_expansion_sum_zeroelim(
-            temp16clen,
-            &temp16c,
-            temp32alen,
-            &temp32a,
-            &mut temp48,
-        );
+        let temp32alen =
+            fast_expansion_sum_zeroelim(temp16alen, &temp16a, temp16blen, &temp16b, &mut temp32a);
+        let temp48len =
+            fast_expansion_sum_zeroelim(temp16clen, &temp16c, temp32alen, &temp32a, &mut temp48);
         finstep!(fin1, fin2, in_a, finlength, &temp48, temp48len);
     }
     if bdxtail != 0.0 {
-        bxtcalen = tri_scale_expansion_zeroelim(4, &ca, bdxtail, &mut bxtca);
-        let temp16alen = tri_scale_expansion_zeroelim(bxtcalen, &bxtca, 2.0 * bdx, &mut temp16a);
+        bxtcalen = scale_expansion_zeroelim(4, &ca, bdxtail, &mut bxtca);
+        let temp16alen = scale_expansion_zeroelim(bxtcalen, &bxtca, 2.0 * bdx, &mut temp16a);
 
         let mut bxtaa = [0.0f64; 8];
-        let bxtaalen = tri_scale_expansion_zeroelim(4, &aa, bdxtail, &mut bxtaa);
-        let temp16blen = tri_scale_expansion_zeroelim(bxtaalen, &bxtaa, cdy, &mut temp16b);
+        let bxtaalen = scale_expansion_zeroelim(4, &aa, bdxtail, &mut bxtaa);
+        let temp16blen = scale_expansion_zeroelim(bxtaalen, &bxtaa, cdy, &mut temp16b);
 
         let mut bxtcc = [0.0f64; 8];
-        let bxtcclen = tri_scale_expansion_zeroelim(4, &cc, bdxtail, &mut bxtcc);
-        let temp16clen = tri_scale_expansion_zeroelim(bxtcclen, &bxtcc, -ady, &mut temp16c);
+        let bxtcclen = scale_expansion_zeroelim(4, &cc, bdxtail, &mut bxtcc);
+        let temp16clen = scale_expansion_zeroelim(bxtcclen, &bxtcc, -ady, &mut temp16c);
 
-        let temp32alen = tri_fast_expansion_sum_zeroelim(
-            temp16alen,
-            &temp16a,
-            temp16blen,
-            &temp16b,
-            &mut temp32a,
-        );
-        let temp48len = tri_fast_expansion_sum_zeroelim(
-            temp16clen,
-            &temp16c,
-            temp32alen,
-            &temp32a,
-            &mut temp48,
-        );
+        let temp32alen =
+            fast_expansion_sum_zeroelim(temp16alen, &temp16a, temp16blen, &temp16b, &mut temp32a);
+        let temp48len =
+            fast_expansion_sum_zeroelim(temp16clen, &temp16c, temp32alen, &temp32a, &mut temp48);
         finstep!(fin1, fin2, in_a, finlength, &temp48, temp48len);
     }
     if bdytail != 0.0 {
-        bytcalen = tri_scale_expansion_zeroelim(4, &ca, bdytail, &mut bytca);
-        let temp16alen = tri_scale_expansion_zeroelim(bytcalen, &bytca, 2.0 * bdy, &mut temp16a);
+        bytcalen = scale_expansion_zeroelim(4, &ca, bdytail, &mut bytca);
+        let temp16alen = scale_expansion_zeroelim(bytcalen, &bytca, 2.0 * bdy, &mut temp16a);
 
         let mut bytcc = [0.0f64; 8];
-        let bytcclen = tri_scale_expansion_zeroelim(4, &cc, bdytail, &mut bytcc);
-        let temp16blen = tri_scale_expansion_zeroelim(bytcclen, &bytcc, adx, &mut temp16b);
+        let bytcclen = scale_expansion_zeroelim(4, &cc, bdytail, &mut bytcc);
+        let temp16blen = scale_expansion_zeroelim(bytcclen, &bytcc, adx, &mut temp16b);
 
         let mut bytaa = [0.0f64; 8];
-        let bytaalen = tri_scale_expansion_zeroelim(4, &aa, bdytail, &mut bytaa);
-        let temp16clen = tri_scale_expansion_zeroelim(bytaalen, &bytaa, -cdx, &mut temp16c);
+        let bytaalen = scale_expansion_zeroelim(4, &aa, bdytail, &mut bytaa);
+        let temp16clen = scale_expansion_zeroelim(bytaalen, &bytaa, -cdx, &mut temp16c);
 
-        let temp32alen = tri_fast_expansion_sum_zeroelim(
-            temp16alen,
-            &temp16a,
-            temp16blen,
-            &temp16b,
-            &mut temp32a,
-        );
-        let temp48len = tri_fast_expansion_sum_zeroelim(
-            temp16clen,
-            &temp16c,
-            temp32alen,
-            &temp32a,
-            &mut temp48,
-        );
+        let temp32alen =
+            fast_expansion_sum_zeroelim(temp16alen, &temp16a, temp16blen, &temp16b, &mut temp32a);
+        let temp48len =
+            fast_expansion_sum_zeroelim(temp16clen, &temp16c, temp32alen, &temp32a, &mut temp48);
         finstep!(fin1, fin2, in_a, finlength, &temp48, temp48len);
     }
     if cdxtail != 0.0 {
-        cxtablen = tri_scale_expansion_zeroelim(4, &ab, cdxtail, &mut cxtab);
-        let temp16alen = tri_scale_expansion_zeroelim(cxtablen, &cxtab, 2.0 * cdx, &mut temp16a);
+        cxtablen = scale_expansion_zeroelim(4, &ab, cdxtail, &mut cxtab);
+        let temp16alen = scale_expansion_zeroelim(cxtablen, &cxtab, 2.0 * cdx, &mut temp16a);
 
         let mut cxtbb = [0.0f64; 8];
-        let cxtbblen = tri_scale_expansion_zeroelim(4, &bb, cdxtail, &mut cxtbb);
-        let temp16blen = tri_scale_expansion_zeroelim(cxtbblen, &cxtbb, ady, &mut temp16b);
+        let cxtbblen = scale_expansion_zeroelim(4, &bb, cdxtail, &mut cxtbb);
+        let temp16blen = scale_expansion_zeroelim(cxtbblen, &cxtbb, ady, &mut temp16b);
 
         let mut cxtaa = [0.0f64; 8];
-        let cxtaalen = tri_scale_expansion_zeroelim(4, &aa, cdxtail, &mut cxtaa);
-        let temp16clen = tri_scale_expansion_zeroelim(cxtaalen, &cxtaa, -bdy, &mut temp16c);
+        let cxtaalen = scale_expansion_zeroelim(4, &aa, cdxtail, &mut cxtaa);
+        let temp16clen = scale_expansion_zeroelim(cxtaalen, &cxtaa, -bdy, &mut temp16c);
 
-        let temp32alen = tri_fast_expansion_sum_zeroelim(
-            temp16alen,
-            &temp16a,
-            temp16blen,
-            &temp16b,
-            &mut temp32a,
-        );
-        let temp48len = tri_fast_expansion_sum_zeroelim(
-            temp16clen,
-            &temp16c,
-            temp32alen,
-            &temp32a,
-            &mut temp48,
-        );
+        let temp32alen =
+            fast_expansion_sum_zeroelim(temp16alen, &temp16a, temp16blen, &temp16b, &mut temp32a);
+        let temp48len =
+            fast_expansion_sum_zeroelim(temp16clen, &temp16c, temp32alen, &temp32a, &mut temp48);
         finstep!(fin1, fin2, in_a, finlength, &temp48, temp48len);
     }
     if cdytail != 0.0 {
-        cytablen = tri_scale_expansion_zeroelim(4, &ab, cdytail, &mut cytab);
-        let temp16alen = tri_scale_expansion_zeroelim(cytablen, &cytab, 2.0 * cdy, &mut temp16a);
+        cytablen = scale_expansion_zeroelim(4, &ab, cdytail, &mut cytab);
+        let temp16alen = scale_expansion_zeroelim(cytablen, &cytab, 2.0 * cdy, &mut temp16a);
 
         let mut cytaa = [0.0f64; 8];
-        let cytaalen = tri_scale_expansion_zeroelim(4, &aa, cdytail, &mut cytaa);
-        let temp16blen = tri_scale_expansion_zeroelim(cytaalen, &cytaa, bdx, &mut temp16b);
+        let cytaalen = scale_expansion_zeroelim(4, &aa, cdytail, &mut cytaa);
+        let temp16blen = scale_expansion_zeroelim(cytaalen, &cytaa, bdx, &mut temp16b);
 
         let mut cytbb = [0.0f64; 8];
-        let cytbblen = tri_scale_expansion_zeroelim(4, &bb, cdytail, &mut cytbb);
-        let temp16clen = tri_scale_expansion_zeroelim(cytbblen, &cytbb, -adx, &mut temp16c);
+        let cytbblen = scale_expansion_zeroelim(4, &bb, cdytail, &mut cytbb);
+        let temp16clen = scale_expansion_zeroelim(cytbblen, &cytbb, -adx, &mut temp16c);
 
-        let temp32alen = tri_fast_expansion_sum_zeroelim(
-            temp16alen,
-            &temp16a,
-            temp16blen,
-            &temp16b,
-            &mut temp32a,
-        );
-        let temp48len = tri_fast_expansion_sum_zeroelim(
-            temp16clen,
-            &temp16c,
-            temp32alen,
-            &temp32a,
-            &mut temp48,
-        );
+        let temp32alen =
+            fast_expansion_sum_zeroelim(temp16alen, &temp16a, temp16blen, &temp16b, &mut temp32a);
+        let temp48len =
+            fast_expansion_sum_zeroelim(temp16clen, &temp16c, temp32alen, &temp32a, &mut temp48);
         finstep!(fin1, fin2, in_a, finlength, &temp48, temp48len);
     }
 
@@ -932,7 +872,7 @@ fn tri_incircleadapt(pa: Vertex, pb: Vertex, pc: Vertex, pd: Vertex, permanent: 
             v[1] = v1;
             v[2] = v2;
             v[3] = v3;
-            bctlen = tri_fast_expansion_sum_zeroelim(4, &u, 4, &v, &mut bct);
+            bctlen = fast_expansion_sum_zeroelim(4, &u, 4, &v, &mut bct);
 
             let (ti1, ti0) = two_product(bdxtail, cdytail);
             let (tj1, tj0) = two_product(cdxtail, bdytail);
@@ -950,12 +890,11 @@ fn tri_incircleadapt(pa: Vertex, pb: Vertex, pc: Vertex, pd: Vertex, permanent: 
         }
 
         if adxtail != 0.0 {
-            let temp16alen = tri_scale_expansion_zeroelim(axtbclen, &axtbc, adxtail, &mut temp16a);
+            let temp16alen = scale_expansion_zeroelim(axtbclen, &axtbc, adxtail, &mut temp16a);
             let mut axtbct = [0.0f64; 16];
-            let axtbctlen = tri_scale_expansion_zeroelim(bctlen, &bct, adxtail, &mut axtbct);
-            let temp32alen =
-                tri_scale_expansion_zeroelim(axtbctlen, &axtbct, 2.0 * adx, &mut temp32a);
-            let temp48len = tri_fast_expansion_sum_zeroelim(
+            let axtbctlen = scale_expansion_zeroelim(bctlen, &bct, adxtail, &mut axtbct);
+            let temp32alen = scale_expansion_zeroelim(axtbctlen, &axtbct, 2.0 * adx, &mut temp32a);
+            let temp48len = fast_expansion_sum_zeroelim(
                 temp16alen,
                 &temp16a,
                 temp32alen,
@@ -964,34 +903,30 @@ fn tri_incircleadapt(pa: Vertex, pb: Vertex, pc: Vertex, pd: Vertex, permanent: 
             );
             finstep!(fin1, fin2, in_a, finlength, &temp48, temp48len);
             if bdytail != 0.0 {
-                let temp8len = tri_scale_expansion_zeroelim(4, &cc, adxtail, &mut temp8);
-                let temp16alen =
-                    tri_scale_expansion_zeroelim(temp8len, &temp8, bdytail, &mut temp16a);
+                let temp8len = scale_expansion_zeroelim(4, &cc, adxtail, &mut temp8);
+                let temp16alen = scale_expansion_zeroelim(temp8len, &temp8, bdytail, &mut temp16a);
                 finstep!(fin1, fin2, in_a, finlength, &temp16a, temp16alen);
             }
             if cdytail != 0.0 {
-                let temp8len = tri_scale_expansion_zeroelim(4, &bb, -adxtail, &mut temp8);
-                let temp16alen =
-                    tri_scale_expansion_zeroelim(temp8len, &temp8, cdytail, &mut temp16a);
+                let temp8len = scale_expansion_zeroelim(4, &bb, -adxtail, &mut temp8);
+                let temp16alen = scale_expansion_zeroelim(temp8len, &temp8, cdytail, &mut temp16a);
                 finstep!(fin1, fin2, in_a, finlength, &temp16a, temp16alen);
             }
 
-            let temp32alen =
-                tri_scale_expansion_zeroelim(axtbctlen, &axtbct, adxtail, &mut temp32a);
+            let temp32alen = scale_expansion_zeroelim(axtbctlen, &axtbct, adxtail, &mut temp32a);
             let mut axtbctt = [0.0f64; 8];
-            let axtbcttlen = tri_scale_expansion_zeroelim(bcttlen, &bctt, adxtail, &mut axtbctt);
+            let axtbcttlen = scale_expansion_zeroelim(bcttlen, &bctt, adxtail, &mut axtbctt);
             let temp16alen =
-                tri_scale_expansion_zeroelim(axtbcttlen, &axtbctt, 2.0 * adx, &mut temp16a);
-            let temp16blen =
-                tri_scale_expansion_zeroelim(axtbcttlen, &axtbctt, adxtail, &mut temp16b);
-            let temp32blen = tri_fast_expansion_sum_zeroelim(
+                scale_expansion_zeroelim(axtbcttlen, &axtbctt, 2.0 * adx, &mut temp16a);
+            let temp16blen = scale_expansion_zeroelim(axtbcttlen, &axtbctt, adxtail, &mut temp16b);
+            let temp32blen = fast_expansion_sum_zeroelim(
                 temp16alen,
                 &temp16a,
                 temp16blen,
                 &temp16b,
                 &mut temp32b,
             );
-            let temp64len = tri_fast_expansion_sum_zeroelim(
+            let temp64len = fast_expansion_sum_zeroelim(
                 temp32alen,
                 &temp32a,
                 temp32blen,
@@ -1001,12 +936,11 @@ fn tri_incircleadapt(pa: Vertex, pb: Vertex, pc: Vertex, pd: Vertex, permanent: 
             finstep!(fin1, fin2, in_a, finlength, &temp64, temp64len);
         }
         if adytail != 0.0 {
-            let temp16alen = tri_scale_expansion_zeroelim(aytbclen, &aytbc, adytail, &mut temp16a);
+            let temp16alen = scale_expansion_zeroelim(aytbclen, &aytbc, adytail, &mut temp16a);
             let mut aytbct = [0.0f64; 16];
-            let aytbctlen = tri_scale_expansion_zeroelim(bctlen, &bct, adytail, &mut aytbct);
-            let temp32alen =
-                tri_scale_expansion_zeroelim(aytbctlen, &aytbct, 2.0 * ady, &mut temp32a);
-            let temp48len = tri_fast_expansion_sum_zeroelim(
+            let aytbctlen = scale_expansion_zeroelim(bctlen, &bct, adytail, &mut aytbct);
+            let temp32alen = scale_expansion_zeroelim(aytbctlen, &aytbct, 2.0 * ady, &mut temp32a);
+            let temp48len = fast_expansion_sum_zeroelim(
                 temp16alen,
                 &temp16a,
                 temp32alen,
@@ -1015,22 +949,20 @@ fn tri_incircleadapt(pa: Vertex, pb: Vertex, pc: Vertex, pd: Vertex, permanent: 
             );
             finstep!(fin1, fin2, in_a, finlength, &temp48, temp48len);
 
-            let temp32alen =
-                tri_scale_expansion_zeroelim(aytbctlen, &aytbct, adytail, &mut temp32a);
+            let temp32alen = scale_expansion_zeroelim(aytbctlen, &aytbct, adytail, &mut temp32a);
             let mut aytbctt = [0.0f64; 8];
-            let aytbcttlen = tri_scale_expansion_zeroelim(bcttlen, &bctt, adytail, &mut aytbctt);
+            let aytbcttlen = scale_expansion_zeroelim(bcttlen, &bctt, adytail, &mut aytbctt);
             let temp16alen =
-                tri_scale_expansion_zeroelim(aytbcttlen, &aytbctt, 2.0 * ady, &mut temp16a);
-            let temp16blen =
-                tri_scale_expansion_zeroelim(aytbcttlen, &aytbctt, adytail, &mut temp16b);
-            let temp32blen = tri_fast_expansion_sum_zeroelim(
+                scale_expansion_zeroelim(aytbcttlen, &aytbctt, 2.0 * ady, &mut temp16a);
+            let temp16blen = scale_expansion_zeroelim(aytbcttlen, &aytbctt, adytail, &mut temp16b);
+            let temp32blen = fast_expansion_sum_zeroelim(
                 temp16alen,
                 &temp16a,
                 temp16blen,
                 &temp16b,
                 &mut temp32b,
             );
-            let temp64len = tri_fast_expansion_sum_zeroelim(
+            let temp64len = fast_expansion_sum_zeroelim(
                 temp32alen,
                 &temp32a,
                 temp32blen,
@@ -1067,7 +999,7 @@ fn tri_incircleadapt(pa: Vertex, pb: Vertex, pc: Vertex, pd: Vertex, permanent: 
             v[1] = v1;
             v[2] = v2;
             v[3] = v3;
-            catlen = tri_fast_expansion_sum_zeroelim(4, &u, 4, &v, &mut cat);
+            catlen = fast_expansion_sum_zeroelim(4, &u, 4, &v, &mut cat);
 
             let (ti1, ti0) = two_product(cdxtail, adytail);
             let (tj1, tj0) = two_product(adxtail, cdytail);
@@ -1085,12 +1017,11 @@ fn tri_incircleadapt(pa: Vertex, pb: Vertex, pc: Vertex, pd: Vertex, permanent: 
         }
 
         if bdxtail != 0.0 {
-            let temp16alen = tri_scale_expansion_zeroelim(bxtcalen, &bxtca, bdxtail, &mut temp16a);
+            let temp16alen = scale_expansion_zeroelim(bxtcalen, &bxtca, bdxtail, &mut temp16a);
             let mut bxtcat = [0.0f64; 16];
-            let bxtcatlen = tri_scale_expansion_zeroelim(catlen, &cat, bdxtail, &mut bxtcat);
-            let temp32alen =
-                tri_scale_expansion_zeroelim(bxtcatlen, &bxtcat, 2.0 * bdx, &mut temp32a);
-            let temp48len = tri_fast_expansion_sum_zeroelim(
+            let bxtcatlen = scale_expansion_zeroelim(catlen, &cat, bdxtail, &mut bxtcat);
+            let temp32alen = scale_expansion_zeroelim(bxtcatlen, &bxtcat, 2.0 * bdx, &mut temp32a);
+            let temp48len = fast_expansion_sum_zeroelim(
                 temp16alen,
                 &temp16a,
                 temp32alen,
@@ -1099,34 +1030,30 @@ fn tri_incircleadapt(pa: Vertex, pb: Vertex, pc: Vertex, pd: Vertex, permanent: 
             );
             finstep!(fin1, fin2, in_a, finlength, &temp48, temp48len);
             if cdytail != 0.0 {
-                let temp8len = tri_scale_expansion_zeroelim(4, &aa, bdxtail, &mut temp8);
-                let temp16alen =
-                    tri_scale_expansion_zeroelim(temp8len, &temp8, cdytail, &mut temp16a);
+                let temp8len = scale_expansion_zeroelim(4, &aa, bdxtail, &mut temp8);
+                let temp16alen = scale_expansion_zeroelim(temp8len, &temp8, cdytail, &mut temp16a);
                 finstep!(fin1, fin2, in_a, finlength, &temp16a, temp16alen);
             }
             if adytail != 0.0 {
-                let temp8len = tri_scale_expansion_zeroelim(4, &cc, -bdxtail, &mut temp8);
-                let temp16alen =
-                    tri_scale_expansion_zeroelim(temp8len, &temp8, adytail, &mut temp16a);
+                let temp8len = scale_expansion_zeroelim(4, &cc, -bdxtail, &mut temp8);
+                let temp16alen = scale_expansion_zeroelim(temp8len, &temp8, adytail, &mut temp16a);
                 finstep!(fin1, fin2, in_a, finlength, &temp16a, temp16alen);
             }
 
-            let temp32alen =
-                tri_scale_expansion_zeroelim(bxtcatlen, &bxtcat, bdxtail, &mut temp32a);
+            let temp32alen = scale_expansion_zeroelim(bxtcatlen, &bxtcat, bdxtail, &mut temp32a);
             let mut bxtcatt = [0.0f64; 8];
-            let bxtcattlen = tri_scale_expansion_zeroelim(cattlen, &catt, bdxtail, &mut bxtcatt);
+            let bxtcattlen = scale_expansion_zeroelim(cattlen, &catt, bdxtail, &mut bxtcatt);
             let temp16alen =
-                tri_scale_expansion_zeroelim(bxtcattlen, &bxtcatt, 2.0 * bdx, &mut temp16a);
-            let temp16blen =
-                tri_scale_expansion_zeroelim(bxtcattlen, &bxtcatt, bdxtail, &mut temp16b);
-            let temp32blen = tri_fast_expansion_sum_zeroelim(
+                scale_expansion_zeroelim(bxtcattlen, &bxtcatt, 2.0 * bdx, &mut temp16a);
+            let temp16blen = scale_expansion_zeroelim(bxtcattlen, &bxtcatt, bdxtail, &mut temp16b);
+            let temp32blen = fast_expansion_sum_zeroelim(
                 temp16alen,
                 &temp16a,
                 temp16blen,
                 &temp16b,
                 &mut temp32b,
             );
-            let temp64len = tri_fast_expansion_sum_zeroelim(
+            let temp64len = fast_expansion_sum_zeroelim(
                 temp32alen,
                 &temp32a,
                 temp32blen,
@@ -1136,12 +1063,11 @@ fn tri_incircleadapt(pa: Vertex, pb: Vertex, pc: Vertex, pd: Vertex, permanent: 
             finstep!(fin1, fin2, in_a, finlength, &temp64, temp64len);
         }
         if bdytail != 0.0 {
-            let temp16alen = tri_scale_expansion_zeroelim(bytcalen, &bytca, bdytail, &mut temp16a);
+            let temp16alen = scale_expansion_zeroelim(bytcalen, &bytca, bdytail, &mut temp16a);
             let mut bytcat = [0.0f64; 16];
-            let bytcatlen = tri_scale_expansion_zeroelim(catlen, &cat, bdytail, &mut bytcat);
-            let temp32alen =
-                tri_scale_expansion_zeroelim(bytcatlen, &bytcat, 2.0 * bdy, &mut temp32a);
-            let temp48len = tri_fast_expansion_sum_zeroelim(
+            let bytcatlen = scale_expansion_zeroelim(catlen, &cat, bdytail, &mut bytcat);
+            let temp32alen = scale_expansion_zeroelim(bytcatlen, &bytcat, 2.0 * bdy, &mut temp32a);
+            let temp48len = fast_expansion_sum_zeroelim(
                 temp16alen,
                 &temp16a,
                 temp32alen,
@@ -1150,22 +1076,20 @@ fn tri_incircleadapt(pa: Vertex, pb: Vertex, pc: Vertex, pd: Vertex, permanent: 
             );
             finstep!(fin1, fin2, in_a, finlength, &temp48, temp48len);
 
-            let temp32alen =
-                tri_scale_expansion_zeroelim(bytcatlen, &bytcat, bdytail, &mut temp32a);
+            let temp32alen = scale_expansion_zeroelim(bytcatlen, &bytcat, bdytail, &mut temp32a);
             let mut bytcatt = [0.0f64; 8];
-            let bytcattlen = tri_scale_expansion_zeroelim(cattlen, &catt, bdytail, &mut bytcatt);
+            let bytcattlen = scale_expansion_zeroelim(cattlen, &catt, bdytail, &mut bytcatt);
             let temp16alen =
-                tri_scale_expansion_zeroelim(bytcattlen, &bytcatt, 2.0 * bdy, &mut temp16a);
-            let temp16blen =
-                tri_scale_expansion_zeroelim(bytcattlen, &bytcatt, bdytail, &mut temp16b);
-            let temp32blen = tri_fast_expansion_sum_zeroelim(
+                scale_expansion_zeroelim(bytcattlen, &bytcatt, 2.0 * bdy, &mut temp16a);
+            let temp16blen = scale_expansion_zeroelim(bytcattlen, &bytcatt, bdytail, &mut temp16b);
+            let temp32blen = fast_expansion_sum_zeroelim(
                 temp16alen,
                 &temp16a,
                 temp16blen,
                 &temp16b,
                 &mut temp32b,
             );
-            let temp64len = tri_fast_expansion_sum_zeroelim(
+            let temp64len = fast_expansion_sum_zeroelim(
                 temp32alen,
                 &temp32a,
                 temp32blen,
@@ -1202,7 +1126,7 @@ fn tri_incircleadapt(pa: Vertex, pb: Vertex, pc: Vertex, pd: Vertex, permanent: 
             v[1] = v1;
             v[2] = v2;
             v[3] = v3;
-            abtlen = tri_fast_expansion_sum_zeroelim(4, &u, 4, &v, &mut abt);
+            abtlen = fast_expansion_sum_zeroelim(4, &u, 4, &v, &mut abt);
 
             let (ti1, ti0) = two_product(adxtail, bdytail);
             let (tj1, tj0) = two_product(bdxtail, adytail);
@@ -1220,12 +1144,11 @@ fn tri_incircleadapt(pa: Vertex, pb: Vertex, pc: Vertex, pd: Vertex, permanent: 
         }
 
         if cdxtail != 0.0 {
-            let temp16alen = tri_scale_expansion_zeroelim(cxtablen, &cxtab, cdxtail, &mut temp16a);
+            let temp16alen = scale_expansion_zeroelim(cxtablen, &cxtab, cdxtail, &mut temp16a);
             let mut cxtabt = [0.0f64; 16];
-            let cxtabtlen = tri_scale_expansion_zeroelim(abtlen, &abt, cdxtail, &mut cxtabt);
-            let temp32alen =
-                tri_scale_expansion_zeroelim(cxtabtlen, &cxtabt, 2.0 * cdx, &mut temp32a);
-            let temp48len = tri_fast_expansion_sum_zeroelim(
+            let cxtabtlen = scale_expansion_zeroelim(abtlen, &abt, cdxtail, &mut cxtabt);
+            let temp32alen = scale_expansion_zeroelim(cxtabtlen, &cxtabt, 2.0 * cdx, &mut temp32a);
+            let temp48len = fast_expansion_sum_zeroelim(
                 temp16alen,
                 &temp16a,
                 temp32alen,
@@ -1234,34 +1157,30 @@ fn tri_incircleadapt(pa: Vertex, pb: Vertex, pc: Vertex, pd: Vertex, permanent: 
             );
             finstep!(fin1, fin2, in_a, finlength, &temp48, temp48len);
             if adytail != 0.0 {
-                let temp8len = tri_scale_expansion_zeroelim(4, &bb, cdxtail, &mut temp8);
-                let temp16alen =
-                    tri_scale_expansion_zeroelim(temp8len, &temp8, adytail, &mut temp16a);
+                let temp8len = scale_expansion_zeroelim(4, &bb, cdxtail, &mut temp8);
+                let temp16alen = scale_expansion_zeroelim(temp8len, &temp8, adytail, &mut temp16a);
                 finstep!(fin1, fin2, in_a, finlength, &temp16a, temp16alen);
             }
             if bdytail != 0.0 {
-                let temp8len = tri_scale_expansion_zeroelim(4, &aa, -cdxtail, &mut temp8);
-                let temp16alen =
-                    tri_scale_expansion_zeroelim(temp8len, &temp8, bdytail, &mut temp16a);
+                let temp8len = scale_expansion_zeroelim(4, &aa, -cdxtail, &mut temp8);
+                let temp16alen = scale_expansion_zeroelim(temp8len, &temp8, bdytail, &mut temp16a);
                 finstep!(fin1, fin2, in_a, finlength, &temp16a, temp16alen);
             }
 
-            let temp32alen =
-                tri_scale_expansion_zeroelim(cxtabtlen, &cxtabt, cdxtail, &mut temp32a);
+            let temp32alen = scale_expansion_zeroelim(cxtabtlen, &cxtabt, cdxtail, &mut temp32a);
             let mut cxtabtt = [0.0f64; 8];
-            let cxtabttlen = tri_scale_expansion_zeroelim(abttlen, &abtt, cdxtail, &mut cxtabtt);
+            let cxtabttlen = scale_expansion_zeroelim(abttlen, &abtt, cdxtail, &mut cxtabtt);
             let temp16alen =
-                tri_scale_expansion_zeroelim(cxtabttlen, &cxtabtt, 2.0 * cdx, &mut temp16a);
-            let temp16blen =
-                tri_scale_expansion_zeroelim(cxtabttlen, &cxtabtt, cdxtail, &mut temp16b);
-            let temp32blen = tri_fast_expansion_sum_zeroelim(
+                scale_expansion_zeroelim(cxtabttlen, &cxtabtt, 2.0 * cdx, &mut temp16a);
+            let temp16blen = scale_expansion_zeroelim(cxtabttlen, &cxtabtt, cdxtail, &mut temp16b);
+            let temp32blen = fast_expansion_sum_zeroelim(
                 temp16alen,
                 &temp16a,
                 temp16blen,
                 &temp16b,
                 &mut temp32b,
             );
-            let temp64len = tri_fast_expansion_sum_zeroelim(
+            let temp64len = fast_expansion_sum_zeroelim(
                 temp32alen,
                 &temp32a,
                 temp32blen,
@@ -1271,12 +1190,11 @@ fn tri_incircleadapt(pa: Vertex, pb: Vertex, pc: Vertex, pd: Vertex, permanent: 
             finstep!(fin1, fin2, in_a, finlength, &temp64, temp64len);
         }
         if cdytail != 0.0 {
-            let temp16alen = tri_scale_expansion_zeroelim(cytablen, &cytab, cdytail, &mut temp16a);
+            let temp16alen = scale_expansion_zeroelim(cytablen, &cytab, cdytail, &mut temp16a);
             let mut cytabt = [0.0f64; 16];
-            let cytabtlen = tri_scale_expansion_zeroelim(abtlen, &abt, cdytail, &mut cytabt);
-            let temp32alen =
-                tri_scale_expansion_zeroelim(cytabtlen, &cytabt, 2.0 * cdy, &mut temp32a);
-            let temp48len = tri_fast_expansion_sum_zeroelim(
+            let cytabtlen = scale_expansion_zeroelim(abtlen, &abt, cdytail, &mut cytabt);
+            let temp32alen = scale_expansion_zeroelim(cytabtlen, &cytabt, 2.0 * cdy, &mut temp32a);
+            let temp48len = fast_expansion_sum_zeroelim(
                 temp16alen,
                 &temp16a,
                 temp32alen,
@@ -1285,22 +1203,20 @@ fn tri_incircleadapt(pa: Vertex, pb: Vertex, pc: Vertex, pd: Vertex, permanent: 
             );
             finstep!(fin1, fin2, in_a, finlength, &temp48, temp48len);
 
-            let temp32alen =
-                tri_scale_expansion_zeroelim(cytabtlen, &cytabt, cdytail, &mut temp32a);
+            let temp32alen = scale_expansion_zeroelim(cytabtlen, &cytabt, cdytail, &mut temp32a);
             let mut cytabtt = [0.0f64; 8];
-            let cytabttlen = tri_scale_expansion_zeroelim(abttlen, &abtt, cdytail, &mut cytabtt);
+            let cytabttlen = scale_expansion_zeroelim(abttlen, &abtt, cdytail, &mut cytabtt);
             let temp16alen =
-                tri_scale_expansion_zeroelim(cytabttlen, &cytabtt, 2.0 * cdy, &mut temp16a);
-            let temp16blen =
-                tri_scale_expansion_zeroelim(cytabttlen, &cytabtt, cdytail, &mut temp16b);
-            let temp32blen = tri_fast_expansion_sum_zeroelim(
+                scale_expansion_zeroelim(cytabttlen, &cytabtt, 2.0 * cdy, &mut temp16a);
+            let temp16blen = scale_expansion_zeroelim(cytabttlen, &cytabtt, cdytail, &mut temp16b);
+            let temp32blen = fast_expansion_sum_zeroelim(
                 temp16alen,
                 &temp16a,
                 temp16blen,
                 &temp16b,
                 &mut temp32b,
             );
-            let temp64len = tri_fast_expansion_sum_zeroelim(
+            let temp64len = fast_expansion_sum_zeroelim(
                 temp32alen,
                 &temp32a,
                 temp32blen,
@@ -1320,7 +1236,7 @@ fn tri_incircleadapt(pa: Vertex, pb: Vertex, pc: Vertex, pd: Vertex, permanent: 
 
 /// C: tri_incircle (predicates.c:1117). Positive if pd lies inside the
 /// circle through pa, pb, pc (which must be in counterclockwise order).
-pub(crate) fn tri_incircle(
+pub(crate) fn incircle(
     m: &mut Mesh,
     b: &Behavior,
     pa: Vertex,
@@ -1363,7 +1279,7 @@ pub(crate) fn tri_incircle(
         return det;
     }
 
-    tri_incircleadapt(pa, pb, pc, pd, permanent)
+    incircle_adapt(pa, pb, pc, pd, permanent)
 }
 
 // ---------------------------------------------------------------------------
@@ -1375,7 +1291,7 @@ pub(crate) fn tri_incircle(
 /// finnow/finother pointer swap becomes the same bool/array pick used in
 /// tri_incircleadapt.
 #[allow(clippy::too_many_arguments)] // C-parity 9-arg signature (predicates.c:1188)
-fn tri_orient3dadapt(
+fn orient3d_adapt(
     pa: Vertex,
     pb: Vertex,
     pc: Vertex,
@@ -1410,7 +1326,7 @@ fn tri_orient3dadapt(
     bc[2] = bc2;
     bc[3] = bc3;
     let mut adet = [0.0f64; 8];
-    let alen = tri_scale_expansion_zeroelim(4, &bc, adheight, &mut adet);
+    let alen = scale_expansion_zeroelim(4, &bc, adheight, &mut adet);
 
     let (cdxady1, cdxady0) = two_product(cdx, ady);
     let (adxcdy1, adxcdy0) = two_product(adx, cdy);
@@ -1420,7 +1336,7 @@ fn tri_orient3dadapt(
     ca[2] = ca2;
     ca[3] = ca3;
     let mut bdet = [0.0f64; 8];
-    let blen = tri_scale_expansion_zeroelim(4, &ca, bdheight, &mut bdet);
+    let blen = scale_expansion_zeroelim(4, &ca, bdheight, &mut bdet);
 
     let (adxbdy1, adxbdy0) = two_product(adx, bdy);
     let (bdxady1, bdxady0) = two_product(bdx, ady);
@@ -1430,7 +1346,7 @@ fn tri_orient3dadapt(
     ab[2] = ab2;
     ab[3] = ab3;
     let mut cdet = [0.0f64; 8];
-    let clen = tri_scale_expansion_zeroelim(4, &ab, cdheight, &mut cdet);
+    let clen = scale_expansion_zeroelim(4, &ab, cdheight, &mut cdet);
 
     // C predicates.c:1204: REAL fin1[192], fin2[192]; the same finnow/
     // finother-in-a-flag scheme as tri_incircleadapt.
@@ -1438,22 +1354,22 @@ fn tri_orient3dadapt(
     let mut fin2 = [0.0f64; 192];
     let mut in_a = true;
     let mut abdet = [0.0f64; 16];
-    let ablen = tri_fast_expansion_sum_zeroelim(alen, &adet, blen, &bdet, &mut abdet);
-    let mut finlength = tri_fast_expansion_sum_zeroelim(ablen, &abdet, clen, &cdet, &mut fin1);
+    let ablen = fast_expansion_sum_zeroelim(alen, &adet, blen, &bdet, &mut abdet);
+    let mut finlength = fast_expansion_sum_zeroelim(ablen, &abdet, clen, &cdet, &mut fin1);
 
     macro_rules! finstep {
         ($fin1:ident, $fin2:ident, $in_a:ident, $flen:ident, $add:expr, $addlen:expr) => {
             if $in_a {
-                $flen = tri_fast_expansion_sum_zeroelim($flen, &$fin1, $addlen, $add, &mut $fin2);
+                $flen = fast_expansion_sum_zeroelim($flen, &$fin1, $addlen, $add, &mut $fin2);
                 $in_a = false;
             } else {
-                $flen = tri_fast_expansion_sum_zeroelim($flen, &$fin2, $addlen, $add, &mut $fin1);
+                $flen = fast_expansion_sum_zeroelim($flen, &$fin2, $addlen, $add, &mut $fin1);
                 $in_a = true;
             }
         };
     }
 
-    let mut det = tri_estimate(finlength, &fin1);
+    let mut det = estimate(finlength, &fin1);
     let mut errbound = cst.o3derrboundB * permanent;
     if (det >= errbound) || (-det >= errbound) {
         return det;
@@ -1645,32 +1561,32 @@ fn tri_orient3dadapt(
     }
 
     let mut bct = [0.0f64; 8];
-    let bctlen = tri_fast_expansion_sum_zeroelim(bt_clen, &bt_c, ct_blen, &ct_b, &mut bct);
+    let bctlen = fast_expansion_sum_zeroelim(bt_clen, &bt_c, ct_blen, &ct_b, &mut bct);
     let mut w = [0.0f64; 16];
-    let wlength = tri_scale_expansion_zeroelim(bctlen, &bct, adheight, &mut w);
+    let wlength = scale_expansion_zeroelim(bctlen, &bct, adheight, &mut w);
     finstep!(fin1, fin2, in_a, finlength, &w, wlength);
 
     let mut cat = [0.0f64; 8];
-    let catlen = tri_fast_expansion_sum_zeroelim(ct_alen, &ct_a, at_clen, &at_c, &mut cat);
-    let wlength = tri_scale_expansion_zeroelim(catlen, &cat, bdheight, &mut w);
+    let catlen = fast_expansion_sum_zeroelim(ct_alen, &ct_a, at_clen, &at_c, &mut cat);
+    let wlength = scale_expansion_zeroelim(catlen, &cat, bdheight, &mut w);
     finstep!(fin1, fin2, in_a, finlength, &w, wlength);
 
     let mut abt = [0.0f64; 8];
-    let abtlen = tri_fast_expansion_sum_zeroelim(at_blen, &at_b, bt_alen, &bt_a, &mut abt);
-    let wlength = tri_scale_expansion_zeroelim(abtlen, &abt, cdheight, &mut w);
+    let abtlen = fast_expansion_sum_zeroelim(at_blen, &at_b, bt_alen, &bt_a, &mut abt);
+    let wlength = scale_expansion_zeroelim(abtlen, &abt, cdheight, &mut w);
     finstep!(fin1, fin2, in_a, finlength, &w, wlength);
 
     let mut v = [0.0f64; 12];
     if adheighttail != 0.0 {
-        let vlength = tri_scale_expansion_zeroelim(4, &bc, adheighttail, &mut v);
+        let vlength = scale_expansion_zeroelim(4, &bc, adheighttail, &mut v);
         finstep!(fin1, fin2, in_a, finlength, &v, vlength);
     }
     if bdheighttail != 0.0 {
-        let vlength = tri_scale_expansion_zeroelim(4, &ca, bdheighttail, &mut v);
+        let vlength = scale_expansion_zeroelim(4, &ca, bdheighttail, &mut v);
         finstep!(fin1, fin2, in_a, finlength, &v, vlength);
     }
     if cdheighttail != 0.0 {
-        let vlength = tri_scale_expansion_zeroelim(4, &ab, cdheighttail, &mut v);
+        let vlength = scale_expansion_zeroelim(4, &ab, cdheighttail, &mut v);
         finstep!(fin1, fin2, in_a, finlength, &v, vlength);
     }
 
@@ -1788,15 +1704,15 @@ fn tri_orient3dadapt(
     }
 
     if adheighttail != 0.0 {
-        let wlength = tri_scale_expansion_zeroelim(bctlen, &bct, adheighttail, &mut w);
+        let wlength = scale_expansion_zeroelim(bctlen, &bct, adheighttail, &mut w);
         finstep!(fin1, fin2, in_a, finlength, &w, wlength);
     }
     if bdheighttail != 0.0 {
-        let wlength = tri_scale_expansion_zeroelim(catlen, &cat, bdheighttail, &mut w);
+        let wlength = scale_expansion_zeroelim(catlen, &cat, bdheighttail, &mut w);
         finstep!(fin1, fin2, in_a, finlength, &w, wlength);
     }
     if cdheighttail != 0.0 {
-        let wlength = tri_scale_expansion_zeroelim(abtlen, &abt, cdheighttail, &mut w);
+        let wlength = scale_expansion_zeroelim(abtlen, &abt, cdheighttail, &mut w);
         finstep!(fin1, fin2, in_a, finlength, &w, wlength);
     }
 
@@ -1812,7 +1728,7 @@ fn tri_orient3dadapt(
 /// coordinates. (C's 4-vertex + 4-height signature; clippy's argument
 /// limit is acknowledged and kept for signature parity.)
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn tri_orient3d(
+pub(crate) fn orient3d(
     m: &mut Mesh,
     b: &Behavior,
     pa: Vertex,
@@ -1860,7 +1776,7 @@ pub(crate) fn tri_orient3d(
         return det;
     }
 
-    tri_orient3dadapt(
+    orient3d_adapt(
         pa, pb, pc, pd, aheight, bheight, cheight, dheight, permanent,
     )
 }
@@ -1872,7 +1788,7 @@ pub(crate) fn tri_orient3d(
 /// C: tri_nonregular (predicates.c:1666). weighted == 0 applies the
 /// incircle test; == 1 lifts onto the parabolic lifting map minus the
 /// weight; == 2 uses the third coordinate as the height directly.
-pub(crate) fn tri_nonregular(
+pub(crate) fn nonregular(
     m: &mut Mesh,
     b: &Behavior,
     pa: Vertex,
@@ -1881,9 +1797,9 @@ pub(crate) fn tri_nonregular(
     pd: Vertex,
 ) -> f64 {
     if b.weighted == 0 {
-        tri_incircle(m, b, pa, pb, pc, pd)
+        incircle(m, b, pa, pb, pc, pd)
     } else if b.weighted == 1 {
-        tri_orient3d(
+        orient3d(
             m,
             b,
             pa,
@@ -1896,7 +1812,7 @@ pub(crate) fn tri_nonregular(
             pd[0] * pd[0] + pd[1] * pd[1] - pd[2],
         )
     } else {
-        tri_orient3d(m, b, pa, pb, pc, pd, pa[2], pb[2], pc[2], pd[2])
+        orient3d(m, b, pa, pb, pc, pd, pa[2], pb[2], pc[2], pd[2])
     }
 }
 
@@ -1908,7 +1824,7 @@ pub(crate) fn tri_nonregular(
 /// (circumcenter_x, circumcenter_y, xi, eta) instead of writing through
 /// the C out pointers (ownership deviation). The offcenter flag plus
 /// b.offconstant select Ungor's off-center, exactly like C.
-pub(crate) fn tri_findcircumcenter(
+pub(crate) fn find_circumcenter(
     m: &mut Mesh,
     b: &Behavior,
     torg: Vertex,
@@ -1934,7 +1850,7 @@ pub(crate) fn tri_findcircumcenter(
         // Use the counterclockwise routine to ensure a positive (and
         // reasonably accurate) result, avoiding any possibility of
         // division by zero.
-        denominator = 0.5 / tri_counterclockwise(m, b, tdest, tapex, torg);
+        denominator = 0.5 / counterclockwise(m, b, tdest, tapex, torg);
         // Don't count the above as an orientation test.
         m.counterclockcount -= 1;
     }
@@ -2011,9 +1927,9 @@ mod tests {
 
     #[test]
     fn exactinit_constants() {
-        tri_exactinit();
+        exact_init();
         // Idempotent (the OnceLock guard makes repeats no-ops).
-        tri_exactinit();
+        exact_init();
         let c = consts();
         // The exact 2^-53 bit pattern; powi(-53) is not a bit-exact
         // reference across float implementations and runs 1 ulp off under
@@ -2054,10 +1970,10 @@ mod tests {
 
     #[test]
     fn expansion_ops() {
-        assert_eq!(tri_estimate(3, &[1.0, 2.0, 4.0]), 7.0);
+        assert_eq!(estimate(3, &[1.0, 2.0, 4.0]), 7.0);
         // Zero elimination + fallback single component.
         let mut h = [0.0f64; 4];
-        let hlen = tri_fast_expansion_sum_zeroelim(2, &[1.0, 0.0], 1, &[2.0], &mut h);
+        let hlen = fast_expansion_sum_zeroelim(2, &[1.0, 0.0], 1, &[2.0], &mut h);
         assert_eq!(hlen, 1);
         assert_eq!(h[0], 3.0);
         // The sum of two 2-word exact products reconstructs a*b + c*d to
@@ -2069,15 +1985,15 @@ mod tests {
         let e = [e0, e1];
         let f = [f0, f1];
         let mut h = [0.0f64; 8];
-        let hlen = tri_fast_expansion_sum_zeroelim(2, &e, 2, &f, &mut h);
+        let hlen = fast_expansion_sum_zeroelim(2, &e, 2, &f, &mut h);
         assert!(approx(
-            tri_estimate(hlen, &h[..hlen]),
+            estimate(hlen, &h[..hlen]),
             0.1 * 0.2 + 0.3 * 0.4,
             1.0e-17
         ));
         // Scaling an inexact product splits it into [tail, product].
         let mut h = [0.0f64; 4];
-        let hlen = tri_scale_expansion_zeroelim(1, &[0.1], 0.1, &mut h);
+        let hlen = scale_expansion_zeroelim(1, &[0.1], 0.1, &mut h);
         assert_eq!(hlen, 2);
         assert_eq!(h[1], 0.1 * 0.1);
         assert!(h[0] != 0.0);
@@ -2087,11 +2003,11 @@ mod tests {
     fn counterclockwise_signs_and_counters() {
         let mut m = test_mesh();
         let b = behavior();
-        assert!(tri_counterclockwise(&mut m, &b, v(0.0, 0.0), v(1.0, 0.0), v(0.0, 1.0)) > 0.0);
-        assert!(tri_counterclockwise(&mut m, &b, v(0.0, 1.0), v(1.0, 0.0), v(0.0, 0.0)) < 0.0);
+        assert!(counterclockwise(&mut m, &b, v(0.0, 0.0), v(1.0, 0.0), v(0.0, 1.0)) > 0.0);
+        assert!(counterclockwise(&mut m, &b, v(0.0, 1.0), v(1.0, 0.0), v(0.0, 0.0)) < 0.0);
         // Exactly collinear, all-exact coordinates: exact 0.0.
         assert_eq!(
-            tri_counterclockwise(&mut m, &b, v(0.0, 0.0), v(1.0, 1.0), v(2.0, 2.0)),
+            counterclockwise(&mut m, &b, v(0.0, 0.0), v(1.0, 1.0), v(2.0, 2.0)),
             0.0
         );
         assert_eq!(m.counterclockcount, 3);
@@ -2104,7 +2020,7 @@ mod tests {
         // fp-diagonal triple with representable coordinates but tiny
         // magnitudes: forces the filter out (|det| below the errbound) and
         // the exact arithmetic answers exactly 0.0.
-        let r = tri_counterclockwise(
+        let r = counterclockwise(
             &mut m,
             &b,
             v(1.0e-16, 1.0e-16),
@@ -2127,7 +2043,7 @@ mod tests {
         let p40 = 2.0f64.powi(40);
         let q = p40 + 2.0f64.powi(32);
         let r = 2.0f64.powi(38) + 2.0f64.powi(-15);
-        let det = tri_counterclockwise(&mut m, &b, v(p40, p40), v(q, q), v(r, r));
+        let det = counterclockwise(&mut m, &b, v(p40, p40), v(q, q), v(r, r));
         assert_eq!(det, 0.0);
     }
 
@@ -2137,7 +2053,7 @@ mod tests {
         let b = behavior();
         // Unit circle through (1,0), (0,1), (-1,0) in CCW order.
         assert!(
-            tri_incircle(
+            incircle(
                 &mut m,
                 &b,
                 v(1.0, 0.0),
@@ -2147,7 +2063,7 @@ mod tests {
             ) > 0.0
         );
         assert!(
-            tri_incircle(
+            incircle(
                 &mut m,
                 &b,
                 v(1.0, 0.0),
@@ -2159,7 +2075,7 @@ mod tests {
         // All four points exactly on the unit circle, integer coordinates:
         // the exact determinant is zero (the adapt path runs on all-exact
         // products and returns 0.0).
-        let d = tri_incircle(
+        let d = incircle(
             &mut m,
             &b,
             v(1.0, 0.0),
@@ -2180,11 +2096,11 @@ mod tests {
         let pc = v(-1.0, 0.0);
         let pd = v(0.0, 0.0);
         // pd one unit above the z=0 plane: negative (below = positive).
-        assert!(tri_orient3d(&mut m, &b, pa, pb, pc, pd, 0.0, 0.0, 0.0, 1.0) < 0.0);
-        assert!(tri_orient3d(&mut m, &b, pa, pb, pc, pd, 0.0, 0.0, 0.0, -1.0) > 0.0);
+        assert!(orient3d(&mut m, &b, pa, pb, pc, pd, 0.0, 0.0, 0.0, 1.0) < 0.0);
+        assert!(orient3d(&mut m, &b, pa, pb, pc, pd, 0.0, 0.0, 0.0, -1.0) > 0.0);
         // Coplanar, integer coordinates: exact 0.0.
         assert_eq!(
-            tri_orient3d(&mut m, &b, pa, pb, pc, pd, 0.0, 0.0, 0.0, 0.0),
+            orient3d(&mut m, &b, pa, pb, pc, pd, 0.0, 0.0, 0.0, 0.0),
             0.0
         );
         assert_eq!(m.orient3dcount, 3);
@@ -2195,7 +2111,7 @@ mod tests {
         // weighted == 0 (default): incircle test.
         let mut m = test_mesh();
         let b = behavior();
-        let r = tri_nonregular(
+        let r = nonregular(
             &mut m,
             &b,
             v(1.0, 0.0),
@@ -2217,7 +2133,7 @@ mod tests {
         let pb = [0.0, 1.0, 1.0];
         let pc = [-1.0, 0.0, 1.0];
         let pd = [0.0, 0.0, 1.0];
-        let r = tri_nonregular(&mut m, &b, pa, pb, pc, pd);
+        let r = nonregular(&mut m, &b, pa, pb, pc, pd);
         assert!(r > 0.0);
         assert_eq!(m.incirclecount, 0);
         assert_eq!(m.orient3dcount, 1);
@@ -2226,7 +2142,7 @@ mod tests {
         let mut m = test_mesh();
         let mut b = behavior();
         b.weighted = 2;
-        let r = tri_nonregular(&mut m, &b, pa, pb, pc, pd);
+        let r = nonregular(&mut m, &b, pa, pb, pc, pd);
         assert_eq!(r, 0.0);
         assert_eq!(m.orient3dcount, 1);
     }
@@ -2236,7 +2152,7 @@ mod tests {
         let mut m = test_mesh();
         let b = behavior();
         let (x, y, xi, eta) =
-            tri_findcircumcenter(&mut m, &b, v(0.0, 0.0), v(1.0, 0.0), v(0.0, 1.0), false);
+            find_circumcenter(&mut m, &b, v(0.0, 0.0), v(1.0, 0.0), v(0.0, 1.0), false);
         assert_eq!(x, 0.5);
         assert_eq!(y, 0.5);
         assert_eq!(xi, 0.5);
@@ -2255,13 +2171,13 @@ mod tests {
         // Skinny triangle: the off-center (Ungor) point beats the far-away
         // circumcenter and takes its place.
         let (x, y, _, _) =
-            tri_findcircumcenter(&mut m, &b, v(0.0, 0.0), v(1.0, 0.0), v(0.4, 0.001), true);
+            find_circumcenter(&mut m, &b, v(0.0, 0.0), v(1.0, 0.0), v(0.4, 0.001), true);
         assert!(approx(x, 0.201, 1.0e-12));
         assert!(approx(y, -0.3995, 1.0e-12));
         // Without the off-center selection the circumcenter is far away.
         let mut m2 = test_mesh();
         let (x2, y2, _, _) =
-            tri_findcircumcenter(&mut m2, &b, v(0.0, 0.0), v(1.0, 0.0), v(0.4, 0.001), false);
+            find_circumcenter(&mut m2, &b, v(0.0, 0.0), v(1.0, 0.0), v(0.4, 0.001), false);
         assert!(approx(y2, -119.9995, 1.0e-9));
         assert!(approx(x2, 0.5, 1.0e-9));
     }
@@ -2277,9 +2193,9 @@ mod tests {
         let p40 = 2.0f64.powi(40);
         let q = p40 + 2.0f64.powi(32);
         let r = 2.0f64.powi(38) + 2.0f64.powi(-15);
-        let det = tri_counterclockwise(&mut m, &b, v(p40, p40), v(q, q), v(r, r));
+        let det = counterclockwise(&mut m, &b, v(p40, p40), v(q, q), v(r, r));
         assert_eq!(det, 0.0);
-        let _ = tri_incircle(
+        let _ = incircle(
             &mut m,
             &b,
             v(1.0, 0.0),
@@ -2287,7 +2203,7 @@ mod tests {
             v(-1.0, 0.0),
             v(0.0, 0.0),
         );
-        let _ = tri_orient3d(
+        let _ = orient3d(
             &mut m,
             &b,
             v(1.0, 0.0),

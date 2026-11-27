@@ -9,7 +9,7 @@
 //! degree < 3) are mirrored as debug-only asserts because C's compiled-out
 //! variants exit via internalerror() on the same impossible states.
 //!
-//! Restored call sites (the #28 restoration, landed with quality.rs): the
+//! Restored call sites (the #28 restoration, landed with algorithm/algorithm/quality.rs): the
 //! encroachment and quality checks the oracle build compiles are
 //!   - insertvertex's checkseg4encroach + inlens (triangle.c:3302-3307)
 //!     and its triflaws testtriangle (triangle.c:3468-3473),
@@ -23,22 +23,24 @@
 //! flow, bad-triangle queues included.
 //!
 //! C vertex pointers mirror to vertex row ids (D1); pool storage is touched
-//! only through slots.rs; OOM routes through the landed pool bridge.
+//! only through mesh/mesh/slots.rs; OOM routes through the landed pool bridge.
 //!
-//! Stage-1 note: consumers are delaunay.rs/construct.rs/refine.rs/quality.rs
-//! and the api.rs entry points; api.rs wiring and quality.rs have landed,
+//! Stage-1 note: consumers are algorithm/algorithm/delaunay.rs/algorithm/segments.rs/algorithm/algorithm/refine.rs/algorithm/algorithm/quality.rs
+//! and the api.rs entry points; api.rs wiring and algorithm/algorithm/quality.rs have landed,
 //! the remaining ioarrays/refine consumers carry their own notes; the
 //! blanket below silences ahead-of-use dead_code until they land.
 #![allow(dead_code)]
 
-use crate::handles::{decode, encode, sencode, Osub, Otri, DUMMY_SUB, DUMMY_TRI, NULL};
-use crate::locate::{locate, preciselocate, LocateResult};
+use crate::algorithm::locate::{locate, precise_locate, LocateResult};
+use crate::algorithm::quality::{check_seg_for_encroachment, in_lens, test_triangle};
+use crate::mesh::handles::{
+    decode, encode, encode_subseg, Osub, Otri, DUMMY_SUB, DUMMY_TRI, NULL_ROW,
+};
+use crate::mesh::pool::Oom;
+use crate::mesh::util::{interpolate, vertex_coords};
 use crate::mesh::Mesh;
 use crate::options::Behavior;
-use crate::pool::Oom;
-use crate::predicates::{tri_counterclockwise, tri_incircle};
-use crate::quality::{checkseg4encroach, inlens, testtriangle};
-use crate::util::{interpolate, vertex_coords};
+use crate::predicates::{counterclockwise, incircle};
 
 /// C: enum insertvertexresult (triangle.h:105-106): SUCCESSFULVERTEX,
 /// ENCROACHINGVERTEX, VIOLATINGVERTEX, DUPLICATEVERTEX - the exact C
@@ -51,7 +53,7 @@ use crate::util::{interpolate, vertex_coords};
 pub(crate) enum InsertVertexResult {
     /// C SUCCESSFULVERTEX.
     SuccessfulVertex = 0,
-    /// C ENCROACHINGVERTEX (unreachable until the quality.rs rows land;
+    /// C ENCROACHINGVERTEX (unreachable until the algorithm/algorithm/quality.rs rows land;
     /// see the module doc).
     EncroachingVertex = 1,
     /// C VIOLATINGVERTEX.
@@ -75,7 +77,7 @@ pub(crate) const INSERTVERTEX_MARKER: u32 = u32::MAX;
 /// initialized. The marker 'subsegmark' is applied to the subsegment and, if
 /// appropriate, its vertices. (C passes behavior* b; the body reads mesh
 /// storage only.)
-pub(crate) fn insertsubseg(
+pub(crate) fn insert_subseg(
     m: &mut Mesh,
     _b: &Behavior,
     tri: Otri,
@@ -91,22 +93,22 @@ pub(crate) fn insertsubseg(
         m.vx_set_mark(tridest, subsegmark);
     }
     // Check if there's already a subsegment here.
-    let mut newsubseg = m.tspivot(tri);
+    let mut newsubseg = m.tri_subseg(tri);
     if newsubseg.ss == DUMMY_SUB {
         // Make new subsegment and initialize its vertices.
-        newsubseg = m.makesubseg()?;
-        m.setsorg(newsubseg, tridest);
-        m.setsdest(newsubseg, triorg);
-        m.setsegorg(newsubseg, tridest);
-        m.setsegdest(newsubseg, triorg);
+        newsubseg = m.make_subseg()?;
+        m.set_subseg_org(newsubseg, tridest);
+        m.set_subseg_dest(newsubseg, triorg);
+        m.set_segment_org(newsubseg, tridest);
+        m.set_segment_dest(newsubseg, triorg);
         // Bond new subsegment to the two triangles it is sandwiched between.
         //   Note that the facing triangle 'oppotri' might be equal to
         //   'dummytri' (outer space), but the new subsegment is bonded to it
         //   all the same.
-        m.tsbond(tri, newsubseg);
+        m.bond_tri_subseg(tri, newsubseg);
         let oppotri = m.sym(tri);
-        newsubseg.ssymself();
-        m.tsbond(oppotri, newsubseg);
+        newsubseg.sym_self();
+        m.bond_tri_subseg(oppotri, newsubseg);
         m.set_sub_mark(newsubseg.ss, subsegmark);
     } else {
         if m.sub_mark(newsubseg.ss) == 0 {
@@ -152,39 +154,39 @@ pub(crate) fn flip(m: &mut Mesh, _b: &Behavior, flipedge: Otri) {
 
     if m.checksegments {
         // Check for subsegments and rebond them to the quadrilateral.
-        let toplsubseg = m.tspivot(topleft);
-        let botlsubseg = m.tspivot(botleft);
-        let botrsubseg = m.tspivot(botright);
-        let toprsubseg = m.tspivot(topright);
+        let toplsubseg = m.tri_subseg(topleft);
+        let botlsubseg = m.tri_subseg(botleft);
+        let botrsubseg = m.tri_subseg(botright);
+        let toprsubseg = m.tri_subseg(topright);
         if toplsubseg.ss == DUMMY_SUB {
-            m.tsdissolve(topright);
+            m.dissolve_tri_subseg(topright);
         } else {
-            m.tsbond(topright, toplsubseg);
+            m.bond_tri_subseg(topright, toplsubseg);
         }
         if botlsubseg.ss == DUMMY_SUB {
-            m.tsdissolve(topleft);
+            m.dissolve_tri_subseg(topleft);
         } else {
-            m.tsbond(topleft, botlsubseg);
+            m.bond_tri_subseg(topleft, botlsubseg);
         }
         if botrsubseg.ss == DUMMY_SUB {
-            m.tsdissolve(botleft);
+            m.dissolve_tri_subseg(botleft);
         } else {
-            m.tsbond(botleft, botrsubseg);
+            m.bond_tri_subseg(botleft, botrsubseg);
         }
         if toprsubseg.ss == DUMMY_SUB {
-            m.tsdissolve(botright);
+            m.dissolve_tri_subseg(botright);
         } else {
-            m.tsbond(botright, toprsubseg);
+            m.bond_tri_subseg(botright, toprsubseg);
         }
     }
 
     // New vertex assignments for the rotated quadrilateral.
-    m.setorg(flipedge, farvertex);
-    m.setdest(flipedge, botvertex);
-    m.setapex(flipedge, rightvertex);
-    m.setorg(top, botvertex);
-    m.setdest(top, farvertex);
-    m.setapex(top, leftvertex);
+    m.set_org(flipedge, farvertex);
+    m.set_dest(flipedge, botvertex);
+    m.set_apex(flipedge, rightvertex);
+    m.set_org(top, botvertex);
+    m.set_dest(top, farvertex);
+    m.set_apex(top, leftvertex);
 }
 
 /// C: unflip (triangle.c:2785-2862). Transform two triangles to two
@@ -219,39 +221,39 @@ pub(crate) fn unflip(m: &mut Mesh, _b: &Behavior, flipedge: Otri) {
 
     if m.checksegments {
         // Check for subsegments and rebond them to the quadrilateral.
-        let toplsubseg = m.tspivot(topleft);
-        let botlsubseg = m.tspivot(botleft);
-        let botrsubseg = m.tspivot(botright);
-        let toprsubseg = m.tspivot(topright);
+        let toplsubseg = m.tri_subseg(topleft);
+        let botlsubseg = m.tri_subseg(botleft);
+        let botrsubseg = m.tri_subseg(botright);
+        let toprsubseg = m.tri_subseg(topright);
         if toplsubseg.ss == DUMMY_SUB {
-            m.tsdissolve(botleft);
+            m.dissolve_tri_subseg(botleft);
         } else {
-            m.tsbond(botleft, toplsubseg);
+            m.bond_tri_subseg(botleft, toplsubseg);
         }
         if botlsubseg.ss == DUMMY_SUB {
-            m.tsdissolve(botright);
+            m.dissolve_tri_subseg(botright);
         } else {
-            m.tsbond(botright, botlsubseg);
+            m.bond_tri_subseg(botright, botlsubseg);
         }
         if botrsubseg.ss == DUMMY_SUB {
-            m.tsdissolve(topright);
+            m.dissolve_tri_subseg(topright);
         } else {
-            m.tsbond(topright, botrsubseg);
+            m.bond_tri_subseg(topright, botrsubseg);
         }
         if toprsubseg.ss == DUMMY_SUB {
-            m.tsdissolve(topleft);
+            m.dissolve_tri_subseg(topleft);
         } else {
-            m.tsbond(topleft, toprsubseg);
+            m.bond_tri_subseg(topleft, toprsubseg);
         }
     }
 
     // New vertex assignments for the rotated quadrilateral.
-    m.setorg(flipedge, botvertex);
-    m.setdest(flipedge, farvertex);
-    m.setapex(flipedge, leftvertex);
-    m.setorg(top, farvertex);
-    m.setdest(top, botvertex);
-    m.setapex(top, rightvertex);
+    m.set_org(flipedge, botvertex);
+    m.set_dest(flipedge, farvertex);
+    m.set_apex(flipedge, leftvertex);
+    m.set_org(top, farvertex);
+    m.set_dest(top, botvertex);
+    m.set_apex(top, rightvertex);
 }
 
 /// C: insertvertex (triangle.c:2920-3465). Insert a vertex into a Delaunay
@@ -270,14 +272,14 @@ pub(crate) fn unflip(m: &mut Mesh, _b: &Behavior, flipedge: Otri) {
 /// 'searchtri' to be the triangle reached by pivoting from it, and no point
 /// location is done. The return value is SUCCESSFULVERTEX, or
 /// ENCROACHINGVERTEX when a checked subsegment is encroached (unreachable
-/// until quality.rs lands; see the module doc). On return 'searchtri' has
+/// until algorithm/algorithm/quality.rs lands; see the module doc). On return 'searchtri' has
 /// the new (or existing) vertex as origin. insertvertex() does not use
 /// flip() for reasons of speed; some information can be reused from edge
 /// flip to edge flip (C comments preserved in the body). The C five-value
 /// 'attribs > 0' collapses to the bool 'attribs' for the nonzero value the
 /// callers pass today.
 #[allow(clippy::too_many_arguments)] // the C signature carries eight parameters
-pub(crate) fn insertvertex(
+pub(crate) fn insert_vertex(
     m: &mut Mesh,
     b: &Behavior,
     newvertex: u32,
@@ -303,14 +305,14 @@ pub(crate) fn insertvertex(
                 tri: DUMMY_TRI,
                 orient: 0,
             };
-            m.symself(&mut boundary);
+            m.sym_self(&mut boundary);
             // Search for a triangle containing 'newvertex'.
             horiz = boundary;
             intersect = locate(m, b, newvertex_pt, &mut horiz);
         } else {
             // Start searching from the triangle provided by the caller.
             horiz = *searchtri;
-            intersect = preciselocate(m, b, newvertex_pt, &mut horiz, true);
+            intersect = precise_locate(m, b, newvertex_pt, &mut horiz, true);
         }
     } else {
         // The calling routine provides the subsegment in which
@@ -330,7 +332,7 @@ pub(crate) fn insertvertex(
         // The vertex falls on an edge or boundary.
         if m.checksegments && splitseg.is_none() {
             // Check whether the vertex falls on a subsegment.
-            let brokensubseg = m.tspivot(horiz);
+            let brokensubseg = m.tri_subseg(horiz);
             if brokensubseg.ss != DUMMY_SUB {
                 // The vertex falls on a subsegment, and hence will not be inserted.
                 if segmentflaws {
@@ -344,9 +346,9 @@ pub(crate) fn insertvertex(
                     if enq {
                         // Add the subsegment to the list of encroached subsegments.
                         let encroached = m.bad_subseg_alloc()?;
-                        m.set_bad_sub_seg_enc(encroached, sencode(brokensubseg));
-                        m.set_bad_sub_seg_org(encroached, m.sorg(brokensubseg));
-                        m.set_bad_sub_seg_dest(encroached, m.sdest(brokensubseg));
+                        m.set_bad_sub_seg_enc(encroached, encode_subseg(brokensubseg));
+                        m.set_bad_sub_seg_org(encroached, m.subseg_org(brokensubseg));
+                        m.set_bad_sub_seg_dest(encroached, m.subseg_dest(brokensubseg));
                     }
                 }
                 // Return a handle whose primary edge contains the vertex,
@@ -367,9 +369,9 @@ pub(crate) fn insertvertex(
         let mut newtopright: Option<Otri> = None;
         let toprcasing;
         if mirrorflag {
-            topright.lnextself();
+            topright.lnext_self();
             toprcasing = m.sym(topright);
-            newtopright = Some(m.maketriangle(b.usesegments, b.vararea)?);
+            newtopright = Some(m.make_triangle(b.usesegments, b.vararea)?);
         } else {
             // Splitting a boundary edge increases the number of boundary edges.
             m.hullsize += 1;
@@ -381,16 +383,16 @@ pub(crate) fn insertvertex(
                 orient: 0,
             };
         }
-        let mut newbotright = m.maketriangle(b.usesegments, b.vararea)?;
+        let mut newbotright = m.make_triangle(b.usesegments, b.vararea)?;
 
         // Set the vertices of changed and new triangles.
         let rightvertex = m.org(horiz);
         let leftvertex = m.dest(horiz);
         let botvertex = m.apex(horiz);
-        m.setorg(newbotright, botvertex);
-        m.setdest(newbotright, rightvertex);
-        m.setapex(newbotright, newvertex);
-        m.setorg(horiz, newvertex);
+        m.set_org(newbotright, botvertex);
+        m.set_dest(newbotright, rightvertex);
+        m.set_apex(newbotright, newvertex);
+        m.set_org(horiz, newvertex);
 
         // Interpolate attributes of new vertex.
         if attribs && m.nextras > 0 {
@@ -410,15 +412,15 @@ pub(crate) fn insertvertex(
         }
         if b.vararea {
             // Set the area constraint of a new triangle.
-            m.set_tri_areabound(newbotright.tri, m.tri_areabound(botright.tri));
+            m.set_tri_area_bound(newbotright.tri, m.tri_area_bound(botright.tri));
         }
         if mirrorflag {
             let newtopright = newtopright.expect("mirror set newtopright");
             let topvertex = m.dest(topright);
-            m.setorg(newtopright, rightvertex);
-            m.setdest(newtopright, topvertex);
-            m.setapex(newtopright, newvertex);
-            m.setorg(topright, newvertex);
+            m.set_org(newtopright, rightvertex);
+            m.set_dest(newtopright, topvertex);
+            m.set_apex(newtopright, newvertex);
+            m.set_org(topright, newvertex);
             for i in 0..m.eextras {
                 // Set the element attributes of another new triangle.
                 m.set_tri_attribute(
@@ -429,57 +431,57 @@ pub(crate) fn insertvertex(
             }
             if b.vararea {
                 // Set the area constraint of another new triangle.
-                m.set_tri_areabound(newtopright.tri, m.tri_areabound(topright.tri));
+                m.set_tri_area_bound(newtopright.tri, m.tri_area_bound(topright.tri));
             }
         }
 
         // There may be subsegments that need to be bonded
         //   to the new triangle(s).
         if m.checksegments {
-            let botrsubseg = m.tspivot(botright);
+            let botrsubseg = m.tri_subseg(botright);
             if botrsubseg.ss != DUMMY_SUB {
-                m.tsdissolve(botright);
-                m.tsbond(newbotright, botrsubseg);
+                m.dissolve_tri_subseg(botright);
+                m.bond_tri_subseg(newbotright, botrsubseg);
             }
             if mirrorflag {
-                let toprsubseg = m.tspivot(topright);
+                let toprsubseg = m.tri_subseg(topright);
                 if toprsubseg.ss != DUMMY_SUB {
-                    m.tsdissolve(topright);
-                    m.tsbond(newtopright.expect("mirror set newtopright"), toprsubseg);
+                    m.dissolve_tri_subseg(topright);
+                    m.bond_tri_subseg(newtopright.expect("mirror set newtopright"), toprsubseg);
                 }
             }
         }
 
         // Bond the new triangle(s) to the surrounding triangles.
         m.bond(newbotright, botrcasing);
-        newbotright.lprevself();
+        newbotright.lprev_self();
         m.bond(newbotright, botright);
-        newbotright.lprevself();
+        newbotright.lprev_self();
         if mirrorflag {
             let mut newtopright = newtopright.expect("mirror set newtopright");
             m.bond(newtopright, toprcasing);
-            newtopright.lnextself();
+            newtopright.lnext_self();
             m.bond(newtopright, topright);
-            newtopright.lnextself();
+            newtopright.lnext_self();
             m.bond(newtopright, newbotright);
         }
 
         if let Some(splitseg) = splitseg {
             // Split the subsegment into two.
-            m.setsdest(*splitseg, newvertex);
-            let segmentorg = m.segorg(*splitseg);
-            let segmentdest = m.segdest(*splitseg);
-            splitseg.ssymself();
-            let rightsubseg = m.spivot(*splitseg);
+            m.set_subseg_dest(*splitseg, newvertex);
+            let segmentorg = m.segment_org(*splitseg);
+            let segmentdest = m.segment_dest(*splitseg);
+            splitseg.sym_self();
+            let rightsubseg = m.pivot_subseg(*splitseg);
             let bndmark = m.sub_mark(splitseg.ss);
-            insertsubseg(m, b, newbotright, bndmark)?;
-            let mut newsubseg = m.tspivot(newbotright);
-            m.setsegorg(newsubseg, segmentorg);
-            m.setsegdest(newsubseg, segmentdest);
-            m.sbond(*splitseg, newsubseg);
-            newsubseg.ssymself();
-            m.sbond(newsubseg, rightsubseg);
-            splitseg.ssymself();
+            insert_subseg(m, b, newbotright, bndmark)?;
+            let mut newsubseg = m.tri_subseg(newbotright);
+            m.set_segment_org(newsubseg, segmentorg);
+            m.set_segment_dest(newsubseg, segmentdest);
+            m.bond_subsegs(*splitseg, newsubseg);
+            newsubseg.sym_self();
+            m.bond_subsegs(newsubseg, rightsubseg);
+            splitseg.sym_self();
             // Transfer the subsegment's boundary marker to the vertex
             //   if required.
             if m.vx_mark(newvertex) == 0 {
@@ -490,22 +492,22 @@ pub(crate) fn insertvertex(
         if m.checkquality {
             m.flip_restart();
             let row = m.flip_alloc()?;
-            m.set_flip_flippedtri(row, encode(horiz));
-            m.set_flip_prevflip(row, INSERTVERTEX_MARKER);
+            m.set_flip_flipped_tri(row, encode(horiz));
+            m.set_flip_prev_flip(row, INSERTVERTEX_MARKER);
             m.lastflip = row;
         }
 
         // Position 'horiz' on the first edge to check for
         //   the Delaunay property.
-        horiz.lnextself();
+        horiz.lnext_self();
     } else {
         // Insert the vertex in a triangle, splitting it into three.
         let botleft = horiz.lnext();
         let botright = horiz.lprev();
         let botlcasing = m.sym(botleft);
         let botrcasing = m.sym(botright);
-        let mut newbotleft = m.maketriangle(b.usesegments, b.vararea)?;
-        let mut newbotright = m.maketriangle(b.usesegments, b.vararea)?;
+        let mut newbotleft = m.make_triangle(b.usesegments, b.vararea)?;
+        let mut newbotright = m.make_triangle(b.usesegments, b.vararea)?;
 
         // Set the vertices of changed and new triangles.
         let rightvertex = m.org(horiz);
@@ -517,13 +519,13 @@ pub(crate) fn insertvertex(
             interpolate(m, newvertex, rightvertex, leftvertex, botvertex, m.nextras);
         }
 
-        m.setorg(newbotleft, leftvertex);
-        m.setdest(newbotleft, botvertex);
-        m.setapex(newbotleft, newvertex);
-        m.setorg(newbotright, botvertex);
-        m.setdest(newbotright, rightvertex);
-        m.setapex(newbotright, newvertex);
-        m.setapex(horiz, newvertex);
+        m.set_org(newbotleft, leftvertex);
+        m.set_dest(newbotleft, botvertex);
+        m.set_apex(newbotleft, newvertex);
+        m.set_org(newbotright, botvertex);
+        m.set_dest(newbotright, rightvertex);
+        m.set_apex(newbotright, newvertex);
+        m.set_apex(horiz, newvertex);
         for i in 0..m.eextras {
             // Set the element attributes of the new triangles.
             let attrib = m.tri_attribute(horiz.tri, i as usize);
@@ -532,42 +534,42 @@ pub(crate) fn insertvertex(
         }
         if b.vararea {
             // Set the area constraint of the new triangles.
-            let area = m.tri_areabound(horiz.tri);
-            m.set_tri_areabound(newbotleft.tri, area);
-            m.set_tri_areabound(newbotright.tri, area);
+            let area = m.tri_area_bound(horiz.tri);
+            m.set_tri_area_bound(newbotleft.tri, area);
+            m.set_tri_area_bound(newbotright.tri, area);
         }
 
         // There may be subsegments that need to be bonded
         //   to the new triangles.
         if m.checksegments {
-            let botlsubseg = m.tspivot(botleft);
+            let botlsubseg = m.tri_subseg(botleft);
             if botlsubseg.ss != DUMMY_SUB {
-                m.tsdissolve(botleft);
-                m.tsbond(newbotleft, botlsubseg);
+                m.dissolve_tri_subseg(botleft);
+                m.bond_tri_subseg(newbotleft, botlsubseg);
             }
-            let botrsubseg = m.tspivot(botright);
+            let botrsubseg = m.tri_subseg(botright);
             if botrsubseg.ss != DUMMY_SUB {
-                m.tsdissolve(botright);
-                m.tsbond(newbotright, botrsubseg);
+                m.dissolve_tri_subseg(botright);
+                m.bond_tri_subseg(newbotright, botrsubseg);
             }
         }
 
         // Bond the new triangles to the surrounding triangles.
         m.bond(newbotleft, botlcasing);
         m.bond(newbotright, botrcasing);
-        newbotleft.lnextself();
-        newbotright.lprevself();
+        newbotleft.lnext_self();
+        newbotright.lprev_self();
         m.bond(newbotleft, newbotright);
-        newbotleft.lnextself();
+        newbotleft.lnext_self();
         m.bond(botleft, newbotleft);
-        newbotright.lprevself();
+        newbotright.lprev_self();
         m.bond(botright, newbotright);
 
         if m.checkquality {
             m.flip_restart();
             let row = m.flip_alloc()?;
-            m.set_flip_flippedtri(row, encode(horiz));
-            m.set_flip_prevflip(row, NULL);
+            m.set_flip_flipped_tri(row, encode(horiz));
+            m.set_flip_prev_flip(row, NULL_ROW);
             m.lastflip = row;
         }
     }
@@ -600,7 +602,7 @@ pub(crate) fn insertvertex(
 
         if m.checksegments {
             // Check for a subsegment, which cannot be flipped.
-            let checksubseg = m.tspivot(horiz);
+            let checksubseg = m.tri_subseg(horiz);
             if checksubseg.ss != DUMMY_SUB {
                 // The edge is a subsegment and cannot be flipped.
                 doflip = false;
@@ -609,10 +611,10 @@ pub(crate) fn insertvertex(
                     //   A vertex on the far side may encroach upon it
                     //   too; that one was there before, and is left for
                     //   the subsegment queue.
-                    let subsegorg = m.sorg(checksubseg);
-                    let subsegdest = m.sdest(checksubseg);
-                    if checkseg4encroach(m, b, checksubseg)? != 0
-                        && inlens(
+                    let subsegorg = m.subseg_org(checksubseg);
+                    let subsegdest = m.subseg_dest(checksubseg);
+                    if check_seg_for_encroachment(m, b, checksubseg)? != 0
+                        && in_lens(
                             b,
                             vertex_coords(m, subsegorg),
                             vertex_coords(m, subsegdest),
@@ -647,7 +649,7 @@ pub(crate) fn insertvertex(
                     //   the boundary of the triangulation.  'farvertex' might be
                     //   infinite as well, but trust me, this same condition should
                     //   be applied.
-                    doflip = tri_counterclockwise(
+                    doflip = counterclockwise(
                         m,
                         b,
                         newvertex_v,
@@ -662,7 +664,7 @@ pub(crate) fn insertvertex(
                     //   the boundary of the triangulation.  'farvertex' might be
                     //   infinite as well, but trust me, this same condition should
                     //   be applied.
-                    doflip = tri_counterclockwise(
+                    doflip = counterclockwise(
                         m,
                         b,
                         vertex_coords(m, farvertex),
@@ -678,7 +680,7 @@ pub(crate) fn insertvertex(
                     doflip = false;
                 } else {
                     // Test whether the edge is locally Delaunay.
-                    doflip = tri_incircle(
+                    doflip = incircle(
                         m,
                         b,
                         vertex_coords(m, leftvertex),
@@ -706,38 +708,38 @@ pub(crate) fn insertvertex(
                     m.bond(topright, toplcasing);
                     if m.checksegments {
                         // Check for subsegments and rebond them to the quadrilateral.
-                        let toplsubseg = m.tspivot(topleft);
-                        let botlsubseg = m.tspivot(botleft);
-                        let botrsubseg = m.tspivot(botright);
-                        let toprsubseg = m.tspivot(topright);
+                        let toplsubseg = m.tri_subseg(topleft);
+                        let botlsubseg = m.tri_subseg(botleft);
+                        let botrsubseg = m.tri_subseg(botright);
+                        let toprsubseg = m.tri_subseg(topright);
                         if toplsubseg.ss == DUMMY_SUB {
-                            m.tsdissolve(topright);
+                            m.dissolve_tri_subseg(topright);
                         } else {
-                            m.tsbond(topright, toplsubseg);
+                            m.bond_tri_subseg(topright, toplsubseg);
                         }
                         if botlsubseg.ss == DUMMY_SUB {
-                            m.tsdissolve(topleft);
+                            m.dissolve_tri_subseg(topleft);
                         } else {
-                            m.tsbond(topleft, botlsubseg);
+                            m.bond_tri_subseg(topleft, botlsubseg);
                         }
                         if botrsubseg.ss == DUMMY_SUB {
-                            m.tsdissolve(botleft);
+                            m.dissolve_tri_subseg(botleft);
                         } else {
-                            m.tsbond(botleft, botrsubseg);
+                            m.bond_tri_subseg(botleft, botrsubseg);
                         }
                         if toprsubseg.ss == DUMMY_SUB {
-                            m.tsdissolve(botright);
+                            m.dissolve_tri_subseg(botright);
                         } else {
-                            m.tsbond(botright, toprsubseg);
+                            m.bond_tri_subseg(botright, toprsubseg);
                         }
                     }
                     // New vertex assignments for the rotated quadrilateral.
-                    m.setorg(horiz, farvertex);
-                    m.setdest(horiz, newvertex);
-                    m.setapex(horiz, rightvertex);
-                    m.setorg(top, newvertex);
-                    m.setdest(top, farvertex);
-                    m.setapex(top, leftvertex);
+                    m.set_org(horiz, farvertex);
+                    m.set_dest(horiz, newvertex);
+                    m.set_apex(horiz, rightvertex);
+                    m.set_org(top, newvertex);
+                    m.set_dest(top, farvertex);
+                    m.set_apex(top, leftvertex);
                     for i in 0..m.eextras {
                         // Take the average of the two triangles' attributes.
                         let attrib = 0.5
@@ -750,28 +752,28 @@ pub(crate) fn insertvertex(
                         // Take the average of the two triangles' area constraints.
                         //   This prevents small area constraints from migrating a
                         //   long, long way from their original location due to flips.
-                        let area = if m.tri_areabound(top.tri) <= 0.0
-                            || m.tri_areabound(horiz.tri) <= 0.0
+                        let area = if m.tri_area_bound(top.tri) <= 0.0
+                            || m.tri_area_bound(horiz.tri) <= 0.0
                         {
                             -1.0
                         } else {
-                            0.5 * (m.tri_areabound(top.tri) + m.tri_areabound(horiz.tri))
+                            0.5 * (m.tri_area_bound(top.tri) + m.tri_area_bound(horiz.tri))
                         };
-                        m.set_tri_areabound(top.tri, area);
-                        m.set_tri_areabound(horiz.tri, area);
+                        m.set_tri_area_bound(top.tri, area);
+                        m.set_tri_area_bound(horiz.tri, area);
                     }
 
                     if m.checkquality {
                         let newflip = m.flip_alloc()?;
-                        m.set_flip_flippedtri(newflip, encode(horiz));
-                        m.set_flip_prevflip(newflip, m.lastflip);
+                        m.set_flip_flipped_tri(newflip, encode(horiz));
+                        m.set_flip_prev_flip(newflip, m.lastflip);
                         m.lastflip = newflip;
                     }
 
                     // On the next iterations, consider the two edges that were
                     //   exposed (this is, are now visible to the newly inserted
                     //   vertex) by the edge flip.
-                    horiz.lprevself();
+                    horiz.lprev_self();
                     leftvertex = farvertex;
                 }
             }
@@ -780,10 +782,10 @@ pub(crate) fn insertvertex(
             // The handle 'horiz' is accepted as locally Delaunay.
             if triflaws {
                 // Check the triangle 'horiz' for quality.
-                testtriangle(m, b, horiz)?;
+                test_triangle(m, b, horiz)?;
             }
             // Look for the next edge around the newly inserted vertex.
-            horiz.lnextself();
+            horiz.lnext_self();
             let testtri = m.sym(horiz);
             // Check for finishing a complete revolution about the new vertex, or
             //   falling outside  of the triangulation.  The latter will happen
@@ -816,7 +818,7 @@ pub(crate) fn insertvertex(
 ///
 /// Returns Oom exactly when a triflaws quality test reaches the
 /// bad-triangle pool bridge (C cannot fail there).
-pub(crate) fn triangulatepolygon(
+pub(crate) fn triangulate_polygon(
     m: &mut Mesh,
     b: &Behavior,
     firstedge: &Otri,
@@ -835,10 +837,10 @@ pub(crate) fn triangulatepolygon(
     let mut testtri = besttri;
     let mut bestnumber: i32 = 1;
     for i in 2..=edgecount - 2 {
-        m.onextself(&mut testtri);
+        m.onext_self(&mut testtri);
         let testvertex = m.dest(testtri);
         // Is this a better vertex?
-        if tri_incircle(
+        if incircle(
             m,
             b,
             vertex_coords(m, leftbasevertex),
@@ -855,7 +857,7 @@ pub(crate) fn triangulatepolygon(
     if bestnumber > 1 {
         // Recursively triangulate the smaller polygon on the right.
         let mut tempedge = m.oprev(besttri);
-        triangulatepolygon(
+        triangulate_polygon(
             m,
             b,
             firstedge,
@@ -868,7 +870,7 @@ pub(crate) fn triangulatepolygon(
     if bestnumber < edgecount - 2 {
         // Recursively triangulate the smaller polygon on the left.
         let tempedge = m.sym(besttri);
-        triangulatepolygon(
+        triangulate_polygon(
             m,
             b,
             &besttri,
@@ -886,7 +888,7 @@ pub(crate) fn triangulatepolygon(
         if triflaws {
             // Check the quality of the newly committed triangle.
             let testtri = m.sym(besttri);
-            testtriangle(m, b, testtri)?;
+            test_triangle(m, b, testtri)?;
         }
     }
     // Return the base triangle.
@@ -906,7 +908,7 @@ pub(crate) fn triangulatepolygon(
 ///
 /// The quality flank (the triflaws triangulatepolygon argument, the
 /// post-relocation testtriangle) is the #28 restoration.
-pub(crate) fn deletevertex(m: &mut Mesh, b: &Behavior, deltri: &mut Otri) -> Result<(), Oom> {
+pub(crate) fn delete_vertex(m: &mut Mesh, b: &Behavior, deltri: &mut Otri) -> Result<(), Oom> {
     let delvertex = m.org(*deltri);
     // C: vertexdealloc (triangle.c:1262-1271).
     m.vx_dealloc(delvertex);
@@ -922,7 +924,7 @@ pub(crate) fn deletevertex(m: &mut Mesh, b: &Behavior, deltri: &mut Otri) -> Res
             "attempt to delete a boundary vertex"
         );
         edgecount += 1;
-        m.onextself(&mut countingtri);
+        m.onext_self(&mut countingtri);
     }
     // C SELF_CHECK (compiled out of the oracle): the degree guard mirrors
     //   internalerror()'s impossible state only.
@@ -934,7 +936,7 @@ pub(crate) fn deletevertex(m: &mut Mesh, b: &Behavior, deltri: &mut Otri) -> Res
         //   the resulting triangles.
         let firstedge = m.onext(*deltri);
         let mut lastedge = m.oprev(*deltri);
-        triangulatepolygon(
+        triangulate_polygon(
             m,
             b,
             &firstedge,
@@ -952,20 +954,20 @@ pub(crate) fn deletevertex(m: &mut Mesh, b: &Behavior, deltri: &mut Otri) -> Res
     let rightcasing = m.sym(righttri);
     m.bond(*deltri, leftcasing);
     m.bond(deltriright, rightcasing);
-    let leftsubseg = m.tspivot(lefttri);
+    let leftsubseg = m.tri_subseg(lefttri);
     if leftsubseg.ss != DUMMY_SUB {
-        m.tsbond(*deltri, leftsubseg);
+        m.bond_tri_subseg(*deltri, leftsubseg);
     }
-    let rightsubseg = m.tspivot(righttri);
+    let rightsubseg = m.tri_subseg(righttri);
     if rightsubseg.ss != DUMMY_SUB {
-        m.tsbond(deltriright, rightsubseg);
+        m.bond_tri_subseg(deltriright, rightsubseg);
     }
 
     // Set the new origin of 'deltri' and check its quality.
     let neworg = m.org(lefttri);
-    m.setorg(*deltri, neworg);
+    m.set_org(*deltri, neworg);
     if b.nobisect == 0 {
-        testtriangle(m, b, *deltri)?;
+        test_triangle(m, b, *deltri)?;
     }
 
     // Delete the two spliced-out triangles.
@@ -982,56 +984,56 @@ pub(crate) fn deletevertex(m: &mut Mesh, b: &Behavior, deltri: &mut Otri) -> Res
 /// two triangles (possibly just one) are also deallocated. (The inserted
 /// vertex's row itself stays allocated, exactly like the C body, which
 /// leaves the vertex dealloc to its callers; C comments preserved.)
-pub(crate) fn undovertex(m: &mut Mesh, b: &Behavior) {
+pub(crate) fn undo_vertex(m: &mut Mesh, b: &Behavior) {
     // Walk through the list of transformations (flips and a vertex insertion)
     //   in the reverse of the order in which they were done, and undo them.
-    while m.lastflip != NULL {
+    while m.lastflip != NULL_ROW {
         // Find a triangle involved in the last unreversed transformation.
         let cur = m.lastflip;
-        let mut fliptri = decode(m.flip_flippedtri(cur));
+        let mut fliptri = decode(m.flip_flipped_tri(cur));
 
         // We are reversing one of three transformations:  a trisection of one
         //   triangle into three (by inserting a vertex in the triangle), a
         //   bisection of two triangles into four (by inserting a vertex in an
         //   edge), or an edge flip.
-        if m.flip_prevflip(cur) == NULL {
+        if m.flip_prev_flip(cur) == NULL_ROW {
             // Restore a triangle that was split into three triangles,
             //   so it is again one triangle.
             let mut botleft = m.dprev(fliptri);
-            botleft.lnextself();
+            botleft.lnext_self();
             let mut botright = m.onext(fliptri);
-            botright.lprevself();
+            botright.lprev_self();
             let botlcasing = m.sym(botleft);
             let botrcasing = m.sym(botright);
             let botvertex = m.dest(botleft);
 
-            m.setapex(fliptri, botvertex);
-            fliptri.lnextself();
+            m.set_apex(fliptri, botvertex);
+            fliptri.lnext_self();
             m.bond(fliptri, botlcasing);
-            let botlsubseg = m.tspivot(botleft);
-            m.tsbond(fliptri, botlsubseg);
-            fliptri.lnextself();
+            let botlsubseg = m.tri_subseg(botleft);
+            m.bond_tri_subseg(fliptri, botlsubseg);
+            fliptri.lnext_self();
             m.bond(fliptri, botrcasing);
-            let botrsubseg = m.tspivot(botright);
-            m.tsbond(fliptri, botrsubseg);
+            let botrsubseg = m.tri_subseg(botright);
+            m.bond_tri_subseg(fliptri, botrsubseg);
 
             // Delete the two spliced-out triangles.
             // C: triangledealloc (triangle.c:1196-1202).
             m.tri_dealloc(botleft.tri);
             m.tri_dealloc(botright.tri);
-        } else if m.flip_prevflip(cur) == INSERTVERTEX_MARKER {
+        } else if m.flip_prev_flip(cur) == INSERTVERTEX_MARKER {
             // Restore two triangles that were split into four triangles,
             //   so they are again two triangles.
             let gluetri = fliptri.lprev();
             let mut botright = m.sym(gluetri);
-            botright.lnextself();
+            botright.lnext_self();
             let botrcasing = m.sym(botright);
             let rightvertex = m.dest(botright);
 
-            m.setorg(fliptri, rightvertex);
+            m.set_org(fliptri, rightvertex);
             m.bond(gluetri, botrcasing);
-            let botrsubseg = m.tspivot(botright);
-            m.tsbond(gluetri, botrsubseg);
+            let botrsubseg = m.tri_subseg(botright);
+            m.bond_tri_subseg(gluetri, botrsubseg);
 
             // Delete the spliced-out triangle.
             // C: triangledealloc (triangle.c:1196-1202).
@@ -1039,14 +1041,14 @@ pub(crate) fn undovertex(m: &mut Mesh, b: &Behavior) {
 
             let mut gluetri = m.sym(fliptri);
             if gluetri.tri != DUMMY_TRI {
-                gluetri.lnextself();
+                gluetri.lnext_self();
                 let topright = m.dnext(gluetri);
                 let toprcasing = m.sym(topright);
 
-                m.setorg(gluetri, rightvertex);
+                m.set_org(gluetri, rightvertex);
                 m.bond(gluetri, toprcasing);
-                let toprsubseg = m.tspivot(topright);
-                m.tsbond(gluetri, toprsubseg);
+                let toprsubseg = m.tri_subseg(topright);
+                m.bond_tri_subseg(gluetri, toprsubseg);
 
                 // Delete the spliced-out triangle.
                 // C: triangledealloc (triangle.c:1196-1202).
@@ -1054,24 +1056,24 @@ pub(crate) fn undovertex(m: &mut Mesh, b: &Behavior) {
             }
 
             // This is the end of the list, sneakily encoded.
-            m.set_flip_prevflip(cur, NULL);
+            m.set_flip_prev_flip(cur, NULL_ROW);
         } else {
             // Undo an edge flip.
             unflip(m, b, fliptri);
         }
 
         // Go on and process the next transformation.
-        m.lastflip = m.flip_prevflip(cur);
+        m.lastflip = m.flip_prev_flip(cur);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::slots::DEADVERTEX;
+    use crate::mesh::slots::DEAD_VERTEX;
 
     /// The Behavior for the test at hand, composed exactly like the
-    /// locate.rs/util.rs test helpers (Behavior::default_form() plus the
+    /// algorithm/algorithm/locate.rs/mesh/mesh/util.rs test helpers (Behavior::default_form() plus the
     /// fields the case needs, mirroring the C tests' hand-filled structs).
     fn behavior(poly: bool) -> Behavior {
         Behavior {
@@ -1087,7 +1089,7 @@ mod tests {
     }
 
     /// A vertex row with real coordinates (the fan-builder pattern of
-    /// locate.rs; vx ids start at 1, D1).
+    /// algorithm/algorithm/locate.rs; vx ids start at 1, D1).
     fn vxy(m: &mut Mesh, x: f64, y: f64) -> u32 {
         let v = m.vx_alloc().expect("vertex alloc");
         m.set_vx_x(v, x);
@@ -1145,16 +1147,16 @@ mod tests {
     }
 
     /// A pair of triangles sharing the edge (a, b): t1 = (a, b, c) and
-    /// t2 = (b, a, d), bonded at orient 0 like the fan builder of locate.rs.
+    /// t2 = (b, a, d), bonded at orient 0 like the fan builder of algorithm/algorithm/locate.rs.
     fn pair(m: &mut Mesh, usesegments: bool, a: u32, b: u32, c: u32, d: u32) -> (Otri, Otri) {
-        let t1 = m.maketriangle(usesegments, false).expect("tri");
-        m.setorg(t1, a);
-        m.setdest(t1, b);
-        m.setapex(t1, c);
-        let t2 = m.maketriangle(usesegments, false).expect("tri");
-        m.setorg(t2, b);
-        m.setdest(t2, a);
-        m.setapex(t2, d);
+        let t1 = m.make_triangle(usesegments, false).expect("tri");
+        m.set_org(t1, a);
+        m.set_dest(t1, b);
+        m.set_apex(t1, c);
+        let t2 = m.make_triangle(usesegments, false).expect("tri");
+        m.set_org(t2, b);
+        m.set_dest(t2, a);
+        m.set_apex(t2, d);
         m.bond(
             Otri {
                 tri: t1.tri,
@@ -1169,7 +1171,7 @@ mod tests {
     }
 
     #[test]
-    fn insertvertexresult_discriminants_are_the_c_values() {
+    fn insert_vertex_result_discriminants_are_the_c_values() {
         assert_eq!(InsertVertexResult::SuccessfulVertex as i32, 0);
         assert_eq!(InsertVertexResult::EncroachingVertex as i32, 1);
         assert_eq!(InsertVertexResult::ViolatingVertex as i32, 2);
@@ -1193,7 +1195,7 @@ mod tests {
             tri: t1.tri,
             orient: 1,
         };
-        insertsubseg(&mut m, &b, casing, 7).expect("insertsubseg");
+        insert_subseg(&mut m, &b, casing, 7).expect("insertsubseg");
         assert_eq!(m.subsegs.live_count(), 1);
 
         let before = snap(&m);
@@ -1211,7 +1213,7 @@ mod tests {
     }
 
     #[test]
-    fn insertvertex_in_a_triangle_splits_it_into_three() {
+    fn insert_vertex_in_a_triangle_splits_it_into_three() {
         // nextras 1 / eextras 1 / vararea: the attribute interpolation and
         // the element-attribute and areabound copies all run.
         let mut m = Mesh::new(
@@ -1232,10 +1234,10 @@ mod tests {
         m.vx_set_real(a, 2, 1.0);
         m.vx_set_real(b, 2, 3.0);
         m.vx_set_real(c, 2, 2.0);
-        let t = m.maketriangle(false, true).expect("tri");
-        m.setorg(t, a);
-        m.setdest(t, b);
-        m.setapex(t, c);
+        let t = m.make_triangle(false, true).expect("tri");
+        m.set_org(t, a);
+        m.set_dest(t, b);
+        m.set_apex(t, c);
         let tri_live = m.triangles.live_count();
 
         let x = vxy(&mut m, 0.2, 0.2);
@@ -1243,7 +1245,7 @@ mod tests {
             tri: t.tri,
             orient: 0,
         };
-        let res = insertvertex(
+        let res = insert_vertex(
             &mut m,
             &behavior(false),
             x,
@@ -1274,15 +1276,15 @@ mod tests {
     }
 
     #[test]
-    fn insertvertex_on_an_existing_vertex_reports_duplicate() {
+    fn insert_vertex_on_an_existing_vertex_reports_duplicate() {
         let mut m = mesh(false, 0, 0);
         let a = vxy(&mut m, 0.0, 0.0);
         let b = vxy(&mut m, 1.0, 0.0);
         let c = vxy(&mut m, 0.0, 1.0);
-        let t = m.maketriangle(false, false).expect("tri");
-        m.setorg(t, a);
-        m.setdest(t, b);
-        m.setapex(t, c);
+        let t = m.make_triangle(false, false).expect("tri");
+        m.set_org(t, a);
+        m.set_dest(t, b);
+        m.set_apex(t, c);
         let tri_live = m.triangles.live_count();
 
         // a fresh vertex row carrying the coordinates of the existing a;
@@ -1293,7 +1295,7 @@ mod tests {
             tri: t.tri,
             orient: 1,
         };
-        let res = insertvertex(
+        let res = insert_vertex(
             &mut m,
             &behavior(false),
             x,
@@ -1311,7 +1313,7 @@ mod tests {
     }
 
     #[test]
-    fn insertvertex_on_a_subsegment_reports_violating_and_enqueues() {
+    fn insert_vertex_on_a_subsegment_reports_violating_and_enqueues() {
         let mut m = mesh(true, 0, 0);
         m.checksegments = true;
         let b = behavior(true);
@@ -1325,7 +1327,7 @@ mod tests {
             tri: t1.tri,
             orient: 0,
         };
-        insertsubseg(&mut m, &b, shared, 0).expect("insertsubseg");
+        insert_subseg(&mut m, &b, shared, 0).expect("insertsubseg");
         let tri_live = m.triangles.live_count();
 
         // a vertex at the midpoint of the subsegmented shared edge. The
@@ -1337,7 +1339,7 @@ mod tests {
             tri: t1.tri,
             orient: 1,
         };
-        let res = insertvertex(&mut m, &b, x, &mut searchtri, None, true, false, false)
+        let res = insert_vertex(&mut m, &b, x, &mut searchtri, None, true, false, false)
             .expect("insertvertex");
         assert_eq!(res, InsertVertexResult::ViolatingVertex);
         assert_eq!(m.triangles.live_count(), tri_live);
@@ -1346,14 +1348,14 @@ mod tests {
         // it (sencode + sorg + sdest of the very handle 'searchtri' holds);
         // the badsubsegs pool takes its first row at id 1 (no sentinel)
         let row = 1;
-        let broken = m.tspivot(searchtri);
-        assert_eq!(m.bad_sub_seg_enc(row), sencode(broken));
-        assert_eq!(m.bad_sub_seg_org(row), m.sorg(broken));
-        assert_eq!(m.bad_sub_seg_dest(row), m.sdest(broken));
+        let broken = m.tri_subseg(searchtri);
+        assert_eq!(m.bad_subseg_enc(row), encode_subseg(broken));
+        assert_eq!(m.bad_subseg_org(row), m.subseg_org(broken));
+        assert_eq!(m.bad_subseg_dest(row), m.subseg_dest(broken));
     }
 
     #[test]
-    fn insertvertex_with_splitseg_splits_the_subsegment() {
+    fn insert_vertex_with_splitseg_splits_the_subsegment() {
         let mut m = mesh(true, 0, 0);
         m.checksegments = true;
         let b = behavior(true);
@@ -1366,15 +1368,15 @@ mod tests {
             tri: t1.tri,
             orient: 0,
         };
-        insertsubseg(&mut m, &b, shared, 7).expect("insertsubseg");
+        insert_subseg(&mut m, &b, shared, 7).expect("insertsubseg");
         assert_eq!(m.subsegs.live_count(), 1);
 
         // the caller's searchtri must be the triangle flipped from the
         // subsegment (C inserts no point location when splitseg is set)
         let x = vxy(&mut m, 1.0, 0.0);
-        let mut splitseg = m.tspivot(shared);
-        let mut searchtri = m.stpivot(splitseg);
-        let res = insertvertex(
+        let mut splitseg = m.tri_subseg(shared);
+        let mut searchtri = m.subseg_tri(splitseg);
+        let res = insert_vertex(
             &mut m,
             &b,
             x,
@@ -1390,13 +1392,13 @@ mod tests {
         // the subsegment became two subsegments
         assert_eq!(m.subsegs.live_count(), 2);
         // the split half ends at the inserted vertex
-        assert_eq!(m.sdest(splitseg), x);
+        assert_eq!(m.subseg_dest(splitseg), x);
         // and the boundary marker transferred to the inserted vertex
         assert_eq!(m.vx_mark(x), 7);
     }
 
     #[test]
-    fn insertvertex_on_a_boundary_edge_grows_the_hull_and_undo_reverses() {
+    fn insert_vertex_on_a_boundary_edge_grows_the_hull_and_undo_reverses() {
         let mut m = mesh(true, 0, 0);
         // poly rows carry the subseg overlay that undovertex touches
         // unconditionally (tspivot/tsbond in the unflip chain walk)
@@ -1404,10 +1406,10 @@ mod tests {
         let a = vxy(&mut m, 0.0, 0.0);
         let b = vxy(&mut m, 1.0, 0.0);
         let c = vxy(&mut m, 0.0, 1.0);
-        let t = m.maketriangle(true, false).expect("tri");
-        m.setorg(t, a);
-        m.setdest(t, b);
-        m.setapex(t, c);
+        let t = m.make_triangle(true, false).expect("tri");
+        m.set_org(t, a);
+        m.set_dest(t, b);
+        m.set_apex(t, c);
         let tri_live = m.triangles.live_count();
         assert_eq!(m.hullsize, 0);
 
@@ -1419,7 +1421,7 @@ mod tests {
             tri: t.tri,
             orient: 1,
         };
-        let res = insertvertex(
+        let res = insert_vertex(
             &mut m,
             &behavior(true),
             x,
@@ -1436,18 +1438,18 @@ mod tests {
         assert_eq!(m.triangles.live_count(), tri_live + 1);
         assert_eq!(m.hullsize, 1);
         // the bisection record is on the flip stack (the marker chain end)
-        assert_eq!(m.flip_prevflip(m.lastflip), INSERTVERTEX_MARKER);
+        assert_eq!(m.flip_prev_flip(m.lastflip), INSERTVERTEX_MARKER);
 
         // and the boundary bisection undoes bit-for-bit (the gluetri branch
         // skips its second half on the boundary side)
-        undovertex(&mut m, &behavior(false));
+        undo_vertex(&mut m, &behavior(false));
         assert_eq!(m.lastflip, 0);
         assert_rows_reverted(&before, &m);
         assert_eq!(m.triangles.live_count(), tri_live);
     }
 
     #[test]
-    fn deletevertex_removes_an_interior_vertex_and_retriangulates() {
+    fn delete_vertex_removes_an_interior_vertex_and_retriangulates() {
         // A square fan around the center, four triangles: deleting the
         // center leaves two triangles, exactly like C's degree-4 path
         // (triangulatepolygon into a fan of two, then splice).
@@ -1464,13 +1466,13 @@ mod tests {
         let n = 4;
         let mut tris = vec![];
         for k in 0..n {
-            let t = m.maketriangle(true, false).expect("tri");
-            m.setorg(t, center);
-            m.setdest(t, outer[k]);
-            m.setapex(t, outer[(k + 1) % n]);
+            let t = m.make_triangle(true, false).expect("tri");
+            m.set_org(t, center);
+            m.set_dest(t, outer[k]);
+            m.set_apex(t, outer[(k + 1) % n]);
             tris.push(t);
         }
-        // bond the spokes exactly like the fan builder of locate.rs
+        // bond the spokes exactly like the fan builder of algorithm/algorithm/locate.rs
         for k in 0..n {
             let a = tris[k].lprev();
             let hb = Otri {
@@ -1485,15 +1487,15 @@ mod tests {
             tri: tris[0].tri,
             orient: 0,
         };
-        deletevertex(&mut m, &b, &mut deltri).expect("deletevertex");
+        delete_vertex(&mut m, &b, &mut deltri).expect("deletevertex");
         // two triangles were spliced out
         assert_eq!(m.triangles.live_count(), 2);
         // the deleted vertex is dead
-        assert_eq!(m.vx_type(center), DEADVERTEX);
+        assert_eq!(m.vx_type(center), DEAD_VERTEX);
         // the deleted vertex is gone from every surviving triangle
         let mut tr = m.triangles.traversal();
         while let Some(id) = m.triangles.traverse_next(&mut tr) {
-            if m.deadtri(id) {
+            if m.is_dead_tri(id) {
                 continue;
             }
             for orient in 0..3u8 {
@@ -1512,7 +1514,7 @@ mod tests {
         let mut b = behavior(poly);
         b.quality = true;
         b.minangle = minangle;
-        b.behavior_update();
+        b.update_derived_fields();
         b
     }
 
@@ -1526,7 +1528,7 @@ mod tests {
     /// dot^2 = 0.9801 above it; the far-side apex (1, -1) sits on the
     /// lens boundary circle - dot = 0.0 - and does not encroach).
     #[test]
-    fn insertvertex_encroaching_vertex_reports_and_enqueues() {
+    fn insert_vertex_encroaching_vertex_reports_and_enqueues() {
         let mut m = mesh(true, 0, 0);
         m.checksegments = true;
         let b = behavior_q(true, 20.0);
@@ -1539,7 +1541,7 @@ mod tests {
             tri: t1.tri,
             orient: 0,
         };
-        insertsubseg(&mut m, &b, shared, 0).expect("insertsubseg");
+        insert_subseg(&mut m, &b, shared, 0).expect("insertsubseg");
         assert_eq!(m.badsubsegs.live_count(), 0);
 
         let x = vxy(&mut m, 1.0, 0.1);
@@ -1547,7 +1549,7 @@ mod tests {
             tri: t1.tri,
             orient: 0,
         };
-        let res = insertvertex(&mut m, &b, x, &mut searchtri, None, true, false, false)
+        let res = insert_vertex(&mut m, &b, x, &mut searchtri, None, true, false, false)
             .expect("insertvertex");
         assert_eq!(res, InsertVertexResult::EncroachingVertex);
         // the encroached subsegment row (encroached == 1: the near side
@@ -1555,14 +1557,14 @@ mod tests {
         assert_eq!(m.badsubsegs.live_count(), 1);
         // the (a, e) edge's triangle kept its subsegment bond through
         // the insertion; the enqueued row is that subsegment.
-        let sub = m.tspivot(Otri {
+        let sub = m.tri_subseg(Otri {
             tri: t1.tri,
             orient: 0,
         });
         assert_ne!(sub.ss, DUMMY_SUB);
-        assert_eq!(m.bad_sub_seg_enc(1), sencode(sub));
-        assert_eq!(m.bad_sub_seg_org(1), m.sorg(sub));
-        assert_eq!(m.bad_sub_seg_dest(1), m.sdest(sub));
+        assert_eq!(m.bad_subseg_enc(1), encode_subseg(sub));
+        assert_eq!(m.bad_subseg_org(1), m.subseg_org(sub));
+        assert_eq!(m.bad_subseg_dest(1), m.subseg_dest(sub));
     }
 
     /// The #28 restoration, triangle.c:3468-3473 (and the encroachment
@@ -1575,7 +1577,7 @@ mod tests {
     /// bad-triangle rows land, each keyed by the squared shortest edge
     /// 1.01.
     #[test]
-    fn insertvertex_with_triflaws_tests_the_committed_triangles() {
+    fn insert_vertex_with_triflaws_tests_the_committed_triangles() {
         let mut m = mesh(true, 0, 0);
         m.checksegments = true;
         let b = behavior_q(true, 20.0);
@@ -1588,14 +1590,14 @@ mod tests {
             tri: t1.tri,
             orient: 0,
         };
-        insertsubseg(&mut m, &b, shared, 0).expect("insertsubseg");
+        insert_subseg(&mut m, &b, shared, 0).expect("insertsubseg");
 
         let x = vxy(&mut m, 1.0, 0.1);
         let mut searchtri = Otri {
             tri: t1.tri,
             orient: 0,
         };
-        let res = insertvertex(&mut m, &b, x, &mut searchtri, None, false, true, false)
+        let res = insert_vertex(&mut m, &b, x, &mut searchtri, None, false, true, false)
             .expect("insertvertex");
         // no segmentflaws: the insertion reports success; only the
         // quality tests ran.
@@ -1604,9 +1606,9 @@ mod tests {
         assert_eq!(m.badtriangles.live_count(), 3);
         for row in 1..=3u32 {
             assert_eq!(m.bad_tri_key(row), 1.01, "row {}", row);
-            let poor = decode(m.bad_tri_poortri(row));
+            let poor = decode(m.bad_tri_poor_tri(row));
             assert!(
-                !m.deadtri(poor.tri),
+                !m.is_dead_tri(poor.tri),
                 "row {} decodes to a live triangle",
                 row
             );
@@ -1631,7 +1633,7 @@ mod tests {
     /// cossquare 0.5 above it, so exactly two rows land: the
     /// flip-site triangle first, then the relocated deltri itself.
     #[test]
-    fn deletevertex_with_nobisect_zero_tests_the_relocated_triangle() {
+    fn delete_vertex_with_nobisect_zero_tests_the_relocated_triangle() {
         // The same square fan the retriangulation test uses.
         let mut m = mesh(true, 0, 0);
         let b = behavior_q(true, 50.0);
@@ -1646,10 +1648,10 @@ mod tests {
         let n = 4;
         let mut tris = vec![];
         for k in 0..n {
-            let t = m.maketriangle(true, false).expect("tri");
-            m.setorg(t, center);
-            m.setdest(t, outer[k]);
-            m.setapex(t, outer[(k + 1) % n]);
+            let t = m.make_triangle(true, false).expect("tri");
+            m.set_org(t, center);
+            m.set_dest(t, outer[k]);
+            m.set_apex(t, outer[(k + 1) % n]);
             tris.push(t);
         }
         for k in 0..n {
@@ -1666,7 +1668,7 @@ mod tests {
             orient: 0,
         };
         assert_eq!(m.badtriangles.live_count(), 0);
-        deletevertex(&mut m, &b, &mut deltri).expect("deletevertex");
+        delete_vertex(&mut m, &b, &mut deltri).expect("deletevertex");
         assert_eq!(m.badtriangles.live_count(), 2);
         // both tested triangles are diamond halves, keyed by the
         // squared shortest edge (edges sqrt(2), sqrt(2), 2 squared
@@ -1675,11 +1677,11 @@ mod tests {
         assert_eq!(m.bad_tri_key(2), 2.0);
         // the second row is the relocated triangle itself (the
         // 3705-3707 site; the first is the recursive flip site).
-        assert_eq!(m.bad_tri_poortri(2), encode(deltri));
+        assert_eq!(m.bad_tri_poor_tri(2), encode(deltri));
     }
 
     #[test]
-    fn undovertex_restores_a_trisection_bit_for_bit() {
+    fn undo_vertex_restores_a_trisection_bit_for_bit() {
         let mut m = mesh(true, 0, 0);
         // poly rows carry the subseg overlay that undovertex touches
         // unconditionally (tspivot/tsbond in the unflip chain walk)
@@ -1687,10 +1689,10 @@ mod tests {
         let a = vxy(&mut m, 0.0, 0.0);
         let b = vxy(&mut m, 1.0, 0.0);
         let c = vxy(&mut m, 0.0, 1.0);
-        let t = m.maketriangle(true, false).expect("tri");
-        m.setorg(t, a);
-        m.setdest(t, b);
-        m.setapex(t, c);
+        let t = m.make_triangle(true, false).expect("tri");
+        m.set_org(t, a);
+        m.set_dest(t, b);
+        m.set_apex(t, c);
         let tri_live = m.triangles.live_count();
 
         let before = snap(&m);
@@ -1699,7 +1701,7 @@ mod tests {
             tri: t.tri,
             orient: 0,
         };
-        let res = insertvertex(
+        let res = insert_vertex(
             &mut m,
             &behavior(true),
             x,
@@ -1716,7 +1718,7 @@ mod tests {
         assert_eq!(m.flipstackers.live_count(), 1);
         assert_ne!(m.lastflip, 0);
 
-        undovertex(&mut m, &behavior(false));
+        undo_vertex(&mut m, &behavior(false));
         assert_eq!(m.lastflip, 0);
         assert_rows_reverted(&before, &m);
         assert_eq!(m.triangles.live_count(), tri_live);
@@ -1725,7 +1727,7 @@ mod tests {
     }
 
     #[test]
-    fn undovertex_restores_a_bisection_bit_for_bit() {
+    fn undo_vertex_restores_a_bisection_bit_for_bit() {
         let mut m = mesh(true, 0, 0);
         // poly rows carry the subseg overlay that undovertex touches
         // unconditionally (tspivot/tsbond in the unflip chain walk)
@@ -1746,7 +1748,7 @@ mod tests {
             tri: t1.tri,
             orient: 1,
         };
-        let res = insertvertex(
+        let res = insert_vertex(
             &mut m,
             &behavior(true),
             x,
@@ -1763,16 +1765,16 @@ mod tests {
         assert_eq!(m.hullsize, 0); // no boundary edge was split
                                    // the bisection record (the &insertvertex marker) is on the stack
         assert_eq!(m.flipstackers.live_count(), 1);
-        assert_eq!(m.flip_prevflip(m.lastflip), INSERTVERTEX_MARKER);
+        assert_eq!(m.flip_prev_flip(m.lastflip), INSERTVERTEX_MARKER);
 
-        undovertex(&mut m, &behavior(false));
+        undo_vertex(&mut m, &behavior(false));
         assert_eq!(m.lastflip, 0);
         assert_rows_reverted(&before, &m);
         assert_eq!(m.triangles.live_count(), tri_live);
     }
 
     #[test]
-    fn undovertex_restores_a_flip_chain_bit_for_bit() {
+    fn undo_vertex_restores_a_flip_chain_bit_for_bit() {
         // Two triangles whose shared edge stops being Delaunay once the
         // new vertex lands inside the left one: the insertion records a
         // trisection plus at least one flip, so undovertex walks the unflip
@@ -1787,14 +1789,14 @@ mod tests {
         let b = vxy(&mut m, 2.0, 0.0);
         let c = vxy(&mut m, 1.0, 1.0);
         let d = vxy(&mut m, 0.2, 0.5);
-        let t1 = m.maketriangle(true, false).expect("tri");
-        m.setorg(t1, a);
-        m.setdest(t1, b);
-        m.setapex(t1, c);
-        let t2 = m.maketriangle(true, false).expect("tri");
-        m.setorg(t2, a);
-        m.setdest(t2, c);
-        m.setapex(t2, d);
+        let t1 = m.make_triangle(true, false).expect("tri");
+        m.set_org(t1, a);
+        m.set_dest(t1, b);
+        m.set_apex(t1, c);
+        let t2 = m.make_triangle(true, false).expect("tri");
+        m.set_org(t2, a);
+        m.set_dest(t2, c);
+        m.set_apex(t2, d);
         m.bond(
             Otri {
                 tri: t1.tri,
@@ -1816,7 +1818,7 @@ mod tests {
             tri: t1.tri,
             orient: 0,
         };
-        let res = insertvertex(
+        let res = insert_vertex(
             &mut m,
             &behavior(true),
             x,
@@ -1834,7 +1836,7 @@ mod tests {
             "the insertion must have recorded at least one flip"
         );
 
-        undovertex(&mut m, &behavior(false));
+        undo_vertex(&mut m, &behavior(false));
         assert_eq!(m.lastflip, 0);
         assert_rows_reverted(&before, &m);
         assert_eq!(m.triangles.live_count(), tri_live);

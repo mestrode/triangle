@@ -4,7 +4,7 @@
 //! poolrestart, poolinit, pooldeinit, poolalloc, pooldealloc,
 //! traversalinit, traverse) and `struct memorypool` (triangle.h:352-366).
 //! Assignment: the pool rows of docs/function-mapping.md; the chokepoint
-//! (slots.rs) is its only client. Method names are the resolved pool
+//! (mesh/mesh/slots.rs) is its only client. Method names are the resolved pool
 //! contract of ADR 0003 section 3 ("signatures are the contract"); every
 //! method documents its C analog so the mapping stays greppable:
 //! poolzero/pooldeinit dissolve into construction/Drop (D11), poolinit is
@@ -24,7 +24,7 @@
 //! stride-fixed rows and amortized-doubling growth through `try_reserve`
 //! (the initial reservation mirrors C's first-block hints; capacity only,
 //! rows materialize as ids are handed out). Payload meaning is the
-//! data-model's business, all of it behind slots.rs.
+//! data-model's business, all of it behind mesh/mesh/slots.rs.
 //!
 //! R1 accessor-invariant rung (ADR 0002 section 3): the five core-data
 //! invariants are enforced at this seam in debug builds only - range (a)
@@ -46,7 +46,7 @@
 
 use std::cmp::Ordering;
 
-use crate::handles::NULL;
+use crate::mesh::handles::NULL_ROW;
 
 /// The pool layer's only failure: allocation failure (C prints
 /// "Error:  Out of memory." and exits 1 at the trimalloc site,
@@ -55,7 +55,7 @@ use crate::handles::NULL;
 /// Current flow (the stage-1 `InternalStatus` bridge of ADR 0004 section 6
 /// is dissolved per D8's rung-2 resolution): the traversing core propagates
 /// `Oom` directly, the hot segment chain carries it as
-/// `SegmentChainError::Oom` (construct.rs), and the `From<Oom> for Error`
+/// `SegmentChainError::Oom` (algorithm/segments.rs), and the `From<Oom> for Error`
 /// bridge (error.rs, D26) maps it to the public `Error::OutOfMemory` at
 /// the api boundary - exactly the process end C's fatal site performed.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -145,7 +145,7 @@ impl WordPool {
             stride: stride as u32,
             first_block_items: first_block,
             items_per_block,
-            dead_head: NULL,
+            dead_head: NULL_ROW,
             cleared_dead: 0,
             items: 0,
             maxitems: 0,
@@ -182,13 +182,13 @@ impl WordPool {
     /// as C never dereferences a NULL slot), and strictly below the
     /// materialized row frontier (the pool counters are the whole state
     /// this needs; the reserved sentinel row, D3, is inside the space).
-    /// The chokepoint decode sites (slots.rs) and getvertex (mesh.rs)
+    /// The chokepoint decode sites (mesh/mesh/slots.rs) and getvertex (mesh/mod.rs)
     /// run this on every decoded or computed row id; release builds
     /// compile it away entirely.
     #[inline]
     pub(crate) fn debug_assert_row_in_space(&self, id: u32) {
         debug_assert!(
-            id != NULL,
+            id != NULL_ROW,
             "the null id is never a live-or-sentinel row (C never dereferences NULL)"
         );
         debug_assert!(
@@ -217,7 +217,7 @@ impl WordPool {
     /// out (debug-pinned below).
     pub(crate) fn alloc(&mut self) -> Result<u32, Oom> {
         debug_assert!(self.stride > 0, "alloc from a dormant (never-inited) pool");
-        let id = if self.dead_head != NULL {
+        let id = if self.dead_head != NULL_ROW {
             // Take the first item in the dead list (C poolalloc's first branch);
             // slot 0 of the dead row holds the next dead id (D4).
             let id = self.dead_head;
@@ -241,7 +241,7 @@ impl WordPool {
         // the D3 discipline): neither id is ever a legal allocation; a
         // dead-chain pop is the only path that could surface one, and the
         // debug_assert fires before the id escapes.
-        debug_assert!(id != NULL, "alloc must never hand out the null id");
+        debug_assert!(id != NULL_ROW, "alloc must never hand out the null id");
         debug_assert!(
             Some(id) != self.sentinel_id(),
             "alloc must never hand out the reserved sentinel row (D3)"
@@ -258,7 +258,7 @@ impl WordPool {
     /// row pool-private until its realloc (d); the push order keeps the
     /// reuse exact-LIFO (e).
     pub(crate) fn dealloc(&mut self, id: u32) {
-        debug_assert!(id != NULL, "the null id is never allocated");
+        debug_assert!(id != NULL_ROW, "the null id is never allocated");
         debug_assert!(
             Some(id) != self.sentinel_id(),
             "the sentinel row is never deallocated"
@@ -274,8 +274,8 @@ impl WordPool {
     /// accessors. Bounds-checked indexing. Invariants (ADR 0002 section
     /// 3, debug builds only): slot-role (c) `slot < stride` here; range
     /// (a) - the row id names a materialized row - below. The null
-    /// discipline (b) is decode-side per ADR 0002 section 3 (handles.rs
-    /// plus the slots.rs decode sites): the reserved null row is inside
+    /// discipline (b) is decode-side per ADR 0002 section 3 (mesh/mesh/handles.rs
+    /// plus the mesh/mesh/slots.rs decode sites): the reserved null row is inside
     /// the materialized frontier and reads as its never-written zeros,
     /// the port's defined substitute for the NULL-vertex deref the
     /// legal C flow never performs (rightofhyperbola on an outer-space
@@ -323,7 +323,7 @@ impl WordPool {
     pub(crate) fn restart(&mut self) {
         self.items = 0;
         self.maxitems = 0;
-        self.dead_head = NULL;
+        self.dead_head = NULL_ROW;
         self.cleared_dead = 0;
         self.next_fresh = self.first_fresh_id();
         self.debug_assert_dead_stack();
@@ -337,7 +337,7 @@ impl WordPool {
     /// ones, and the primary nodes keep the lower indices (the comment
     /// 7634-7638 rationale). The dropped rows are dead forever; C's
     /// chain is simply unreachable, and the counter mirrors that for
-    /// the debug invariant. highorder (refine.rs) is the only caller.
+    /// the debug invariant. highorder (algorithm/algorithm/refine.rs) is the only caller.
     ///
     /// Invariant (ADR 0002 section 3 d): the dropped rows stay dead
     /// forever (never re-handed); `cleared_dead` keeps the recorded dead
@@ -345,12 +345,12 @@ impl WordPool {
     pub(crate) fn clear_dead_stack(&mut self) {
         let mut current = self.dead_head;
         let mut steps = 0u64;
-        while current != NULL {
+        while current != NULL_ROW {
             steps += 1;
             current = self.word(current, 0) as u32;
         }
         self.cleared_dead += steps;
-        self.dead_head = NULL;
+        self.dead_head = NULL_ROW;
         self.debug_assert_dead_stack();
     }
 
@@ -469,7 +469,7 @@ impl WordPool {
             // D3 discipline (ADR 0002 section 3): the walk starts above the
             // reserved rows by construction; the debug pins catch any
             // cursor arithmetic that could ever yield one.
-            debug_assert!(id != NULL, "traversal must never yield the null row");
+            debug_assert!(id != NULL_ROW, "traversal must never yield the null row");
             debug_assert!(
                 Some(id) != self.sentinel_id(),
                 "traversal must never yield the sentinel row (D3)"
@@ -538,7 +538,7 @@ impl WordPool {
         let expected = self.maxitems - self.items - self.cleared_dead;
         let mut current = self.dead_head;
         let mut steps = 0u64;
-        while current != NULL {
+        while current != NULL_ROW {
             steps += 1;
             assert!(
                 steps <= expected,
@@ -794,7 +794,7 @@ mod tests {
         let mut live = vec![];
         for k in 0..20u32 {
             let id = p.alloc().unwrap();
-            assert_ne!(id, NULL);
+            assert_ne!(id, NULL_ROW);
             assert_ne!(Some(id), p.sentinel_id());
             live.push(id);
             if k % 3 == 2 {
@@ -805,7 +805,7 @@ mod tests {
         // and the traversal never yields either reserved row
         let mut t = p.traversal();
         while let Some(id) = p.traverse_next(&mut t) {
-            assert_ne!(id, NULL);
+            assert_ne!(id, NULL_ROW);
             assert_ne!(Some(id), p.sentinel_id());
         }
     }
@@ -856,7 +856,7 @@ mod tests {
         let b = p.alloc().unwrap();
         p.dealloc(a);
         p.dealloc(b);
-        p.set_word(b, 0, NULL as u64); // truncate: b -> NULL, recorded 2
+        p.set_word(b, 0, NULL_ROW as u64); // truncate: b -> NULL, recorded 2
         let _ = p.alloc();
     }
 
@@ -877,13 +877,13 @@ mod tests {
         // surface the null id. The reserved null row itself stays inside
         // the materialized frontier and reads as its never-written zero
         // words - the port's defined substitute for the NULL-vertex
-        // deref (delaunay.rs rightofhyperbola on an outer-space handle;
+        // deref (algorithm/algorithm/delaunay.rs rightofhyperbola on an outer-space handle;
         // C's dummytri carries NULL vertices there, triangle.c:1049,
         // and the legal C flow never performs that read).
         let p = pool(8, 8, 0, false);
         assert!(p.handed_rows >= 1);
         for slot in 0..p.stride() {
-            assert_eq!(p.word(NULL, slot as usize), 0);
+            assert_eq!(p.word(NULL_ROW, slot as usize), 0);
         }
     }
 }

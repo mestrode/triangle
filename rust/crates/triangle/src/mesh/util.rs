@@ -6,8 +6,8 @@
 //! triangleinit, triangle.c:1502), so a run's determinism is owned by its
 //! mesh and two independent meshes never share a sequence.
 //!
-//! Stage-1 note: consumers of these functions are locate.rs and
-//! transform.rs (this PR) and later delaunay.rs/construct.rs/refine.rs; the
+//! Stage-1 note: consumers of these functions are algorithm/algorithm/locate.rs and
+//! algorithm/algorithm/transform.rs (this PR) and later algorithm/algorithm/delaunay.rs/algorithm/segments.rs/algorithm/algorithm/refine.rs; the
 //! whole current call graph sits below not-yet-landed modules, so the
 //! blanket below silences the ahead-of-use dead_code and is removed as the
 //! remaining consumers land.
@@ -75,7 +75,7 @@ pub(crate) fn interpolate(
 /// field Mesh::randomseed (C: the thread-local static randomseed, seeded 1
 /// per triangulation run by triangleinit, triangle.c:1502), never
 /// thread-local: two runs own their own sequences.
-pub(crate) fn randomnation(m: &mut Mesh, choices: u32) -> u64 {
+pub(crate) fn random_below(m: &mut Mesh, choices: u32) -> u64 {
     m.randomseed = (m.randomseed * 1366 + 150889) % 714025;
     m.randomseed / (714025 / (choices as u64) + 1)
 }
@@ -108,12 +108,12 @@ mod tests {
     }
 
     #[test]
-    fn randomnation_is_the_c_lcg_seeded_one() {
+    fn random_below_is_the_c_lcg_seeded_one() {
         // triangleinit seeds 1 and the LCG runs the exact C constants.
         let mut m = mesh(false);
         assert_eq!(m.randomseed, 1);
         // first draw: seed = (1 * 1366 + 150889) % 714025 = 152255
-        let r = randomnation(&mut m, 714025);
+        let r = random_below(&mut m, 714025);
         assert_eq!(m.randomseed, 152255);
         // return is seed / (714025 / choices + 1); choices == 714025 gives
         // the raw seed halved (152255 is odd, so 76127)
@@ -121,12 +121,12 @@ mod tests {
         // the classic caller shape: choices = triangle population; the LCG
         // advances first: seed = (152255 * 1366 + 150889) % 714025 = 349944,
         // return = 349944 / (714025 / 6 + 1) = 2
-        assert_eq!(randomnation(&mut m, 6), 349944 / (714025 / 6 + 1));
+        assert_eq!(random_below(&mut m, 6), 349944 / (714025 / 6 + 1));
         assert_eq!(m.randomseed, 349944);
     }
 
     #[test]
-    fn randomnation_same_seed_same_sequence_distinct_per_run() {
+    fn random_below_same_seed_same_sequence_distinct_per_run() {
         // D10: determinism is owned by the run, and two runs are
         // independent.
         let mut a = mesh(false);
@@ -135,20 +135,20 @@ mod tests {
         let mut seq_b = vec![];
         for _ in 0..8 {
             // interleaved draws must not influence each other
-            seq_a.push(randomnation(&mut a, 4092));
-            seq_b.push(randomnation(&mut b, 4092));
+            seq_a.push(random_below(&mut a, 4092));
+            seq_b.push(random_below(&mut b, 4092));
         }
         // the same seed produces the same sequence on both clients...
         assert_eq!(seq_a, seq_b);
         // ...and a fresh client replays the same sequence after a has
         // already exhausted its own
         let mut c = mesh(false);
-        let seq_c: Vec<u64> = (0..8).map(|_| randomnation(&mut c, 4092)).collect();
+        let seq_c: Vec<u64> = (0..8).map(|_| random_below(&mut c, 4092)).collect();
         assert_eq!(seq_a, seq_c);
         // advancing one run leaves the other's next draw exactly where the
         // shared sequence left it (no cross-talk anywhere in between)
-        let next_a = randomnation(&mut a, 4092);
-        let next_b = randomnation(&mut b, 4092);
+        let next_a = random_below(&mut a, 4092);
+        let next_b = random_below(&mut b, 4092);
         assert_eq!(next_a, next_b);
     }
 

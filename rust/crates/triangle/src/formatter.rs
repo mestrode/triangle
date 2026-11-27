@@ -40,7 +40,7 @@ pub fn g(v: f64, precision: usize) -> String {
 }
 
 /// The write-into form of [`g`] for the file writers' reusable line
-/// buffers (io.rs): the same bytes appended into `out`, no returned
+/// buffers (io/mod.rs): the same bytes appended into `out`, no returned
 /// String per number.
 pub(crate) fn write_g(out: &mut String, v: f64, precision: usize) {
     if v.is_nan() {
@@ -161,7 +161,7 @@ pub(crate) fn d(v: i32) -> String {
 }
 
 /// The write-into form of [`d`] for the file writers' reusable line
-/// buffers (io.rs): the same bytes appended into `out`, no
+/// buffers (io/mod.rs): the same bytes appended into `out`, no
 /// intermediate to_string String.
 pub(crate) fn write_d(out: &mut String, v: i32) {
     let _ = write!(out, "{v}");
