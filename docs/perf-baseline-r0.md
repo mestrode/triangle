@@ -193,3 +193,9 @@ sha256
 The serial byte-identity gate is green at R0 and stays binding
 (now also wired as the permanent CI gate,
 .github/workflows/oracle-harness.yml).
+
+Superseded as the no-regression reference by the R1 post-campaign
+(docs/perf-r1-remeasure.md, measured on a fresh CPX42-class instance
+at master 104172dc): from the merge of that PR on, that table is
+the no-regression reference for every idiomatization rung
+boundary; this document stays unchanged as the R0 record.
