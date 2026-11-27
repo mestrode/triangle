@@ -17,7 +17,8 @@
 //! (each site carries a SCAFFOLDING comment naming the C step it
 //! awaits): load_mesh awaits its api-level load orchestration.
 //! output runs the ioarray writers through the triangle_mesh_copy
-//! lift (the ioarrays part-2 PR).
+//! lift (the ioarrays part-2 PR); the triangle_write_* and triangle_read_*
+//! file surface (triangle_api.c:437-555) landed with the I/O phase.
 
 // The Mesh struct lands ahead of the core methods that read its
 // behavior (every stage-1 core module takes a &Behavior); the blanket
@@ -26,8 +27,7 @@
 
 use crate::error::{Error, InternalStatus};
 use crate::handles::NULL;
-use crate::input::MeshInput;
-use crate::input::Point2;
+use crate::input::{Hole, MeshInput, Point2, Region};
 use crate::options::{Behavior, Options};
 use crate::pool::WordPool;
 
@@ -445,6 +445,64 @@ impl Mesh {
         Ok(out)
     }
 
+    // ------------------------------------------------------------------
+    // The file surface of triangle_api.c (437-555): the write wrappers
+    // here, the read wrappers at module scope below. The context NULL
+    // checks dissolve over the owned mesh (D8); the FILE* parameter
+    // becomes the writer; the writers' unchecked fprintf return values
+    // surface as io::Result at the io.rs seam and funnel into
+    // Error::Io exactly where triangle_api.c returns the TRI_* code.
+    // ------------------------------------------------------------------
+
+    /// triangle_write_nodes (triangle_api.c:437-445).
+    pub fn write_nodes(&self, w: &mut dyn std::io::Write) -> Result<(), Error> {
+        let behavior = self.behavior.borrow();
+        let mut core = self.core.borrow_mut();
+        crate::io::file_writenodes(&mut core, &behavior, w).map_err(Error::Io)
+    }
+
+    /// triangle_write_elements (triangle_api.c:446-454).
+    pub fn write_elements(&self, w: &mut dyn std::io::Write) -> Result<(), Error> {
+        let behavior = self.behavior.borrow();
+        let mut core = self.core.borrow_mut();
+        crate::io::file_writeelements(&mut core, &behavior, w).map_err(Error::Io)
+    }
+
+    /// triangle_write_poly (triangle_api.c:455-465): C's holelist /
+    /// regionlist pointer pairs with their counts become the owned
+    /// slices.
+    pub fn write_poly(
+        &self,
+        w: &mut dyn std::io::Write,
+        holelist: &[Hole],
+        regionlist: &[Region],
+    ) -> Result<(), Error> {
+        let behavior = self.behavior.borrow();
+        let mut core = self.core.borrow_mut();
+        crate::io::file_writepoly(&mut core, &behavior, w, holelist, regionlist).map_err(Error::Io)
+    }
+
+    /// triangle_write_edges (triangle_api.c:466-474).
+    pub fn write_edges(&self, w: &mut dyn std::io::Write) -> Result<(), Error> {
+        let behavior = self.behavior.borrow();
+        let mut core = self.core.borrow_mut();
+        crate::io::file_writeedges(&mut core, &behavior, w).map_err(Error::Io)
+    }
+
+    /// triangle_write_neighbors (triangle_api.c:475-483).
+    pub fn write_neighbors(&self, w: &mut dyn std::io::Write) -> Result<(), Error> {
+        let behavior = self.behavior.borrow();
+        let mut core = self.core.borrow_mut();
+        crate::io::file_writeneighbors(&mut core, &behavior, w).map_err(Error::Io)
+    }
+
+    /// triangle_write_eps (triangle_api.c:484-492).
+    pub fn write_eps(&self, w: &mut dyn std::io::Write) -> Result<(), Error> {
+        let behavior = self.behavior.borrow();
+        let mut core = self.core.borrow_mut();
+        crate::io::file_write_eps(&mut core, &behavior, w).map_err(Error::Io)
+    }
+
     /// triangle_mesh_statistics (triangle_api.c:111). The mirror of
     /// the C field copy: C reads m->vertices.items, undeads,
     /// triangles.items, hullsize, edges, subsegs (b->poly || b->refine)
@@ -528,6 +586,45 @@ impl Mesh {
             + pool_bytes(&m.flipstackers)
             + pool_bytes(&m.splaynodes)
     }
+}
+
+// The read wrappers of triangle_api.c (493-555): C opens the file
+// ("r"), runs the reader, closes it, and answers TRI_FILE_OPEN when
+// fopen returned NULL. The port funnels File::open's error into
+// Error::Io (it carries the real io::Error, richer than C's bare
+// code; the D8 funnel's Io arm) and maps the reader's InternalStatus
+// through the single translation point, exactly where triangle_api.c
+// inspects the returned status: TRI_FILE_READ (a fgets NULL) is
+// Error::Io and the raw -1 TODO failures are Error::Input (they are
+// malformed-input failures - C's own TODO texts say so; the funnel
+// item 5 mapping, justified in the I/O-phase PR body).
+
+/// triangle_read_nodes (triangle_api.c:493-508).
+pub fn read_nodes(
+    nodefilename: &str,
+    io: &mut MeshInput,
+    firstnode: &mut i32,
+) -> Result<(), Error> {
+    let mut file = crate::io::LineFile::new(std::fs::File::open(nodefilename).map_err(Error::Io)?);
+    crate::io::file_readnodes(&mut file, io, firstnode).map_err(Error::from)
+}
+
+/// triangle_read_poly (triangle_api.c:509-523).
+pub fn read_poly(polyfilename: &str, io: &mut MeshInput, firstnode: &mut i32) -> Result<(), Error> {
+    let mut file = crate::io::LineFile::new(std::fs::File::open(polyfilename).map_err(Error::Io)?);
+    crate::io::file_readpoly(&mut file, io, firstnode).map_err(Error::from)
+}
+
+/// triangle_read_elements (triangle_api.c:525-539).
+pub fn read_elements(elefilename: &str, io: &mut MeshInput) -> Result<(), Error> {
+    let mut file = crate::io::LineFile::new(std::fs::File::open(elefilename).map_err(Error::Io)?);
+    crate::io::file_readelements(&mut file, io).map_err(Error::from)
+}
+
+/// triangle_read_area (triangle_api.c:541-555).
+pub fn read_area(areafilename: &str, io: &mut MeshInput) -> Result<(), Error> {
+    let mut file = crate::io::LineFile::new(std::fs::File::open(areafilename).map_err(Error::Io)?);
+    crate::io::file_readelementsarea(&mut file, io).map_err(Error::from)
 }
 
 #[cfg(test)]
