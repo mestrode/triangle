@@ -49,9 +49,13 @@
 //! overlay the row shape carries (the numberindex of
 //! initializetrisubpools), saving and restoring exactly like C's
 //! scratch array.
-//! numbernodes (triangle.c:7840) has no array-I/O caller in C - only
-//! the IO-phase file writers call it, when no .node file is written
-//! (triangle_io.c) - so it lands with its consumer noted at the site.
+//! numbernodes (triangle.c:7840) has no live C caller anywhere - both
+//! real numbering sites inline the loop (writenodes, triangle.c:7823;
+//! file_writenodes' setvertexmark inside its own traversal,
+//! triangle_io.c:64-65) - the only other trace is the commented-out
+//! call at src/examples/triangle-cli/main.c:65 - and C's own banner
+//! (triangle.c:7830-7838) describes a use no live call site realizes,
+//! so it lands dead_code-allowed with that noted at the site.
 
 use crate::error::InternalStatus;
 use crate::handles::{Osub, Otri, DUMMY_SUB, DUMMY_TRI};
@@ -241,13 +245,22 @@ pub(crate) fn writenodes(
 /// C: numbernodes (triangle.c:7840-7855, banner 7830-7838). Number the
 /// vertices: each vertex is assigned a marker equal to its number
 /// (the banner, triangle.c:7834). Used when writenodes() is not called
-/// because no .node file is written; in C only the IO-phase file
-/// writers call it (triangle_io.c), so the consumer lands with the
-/// I/O phase.
+/// because no .node file is written (triangle.c:7836) - but no live
+/// call site in this fork realizes that use: numbernodes has no live
+/// C caller anywhere, both real numbering sites inline the loop
+/// (writenodes, triangle.c:7823; file_writenodes' setvertexmark inside
+/// its own traversal, triangle_io.c:64-65), and the only other trace
+/// is the commented-out call at src/examples/triangle-cli/main.c:65.
 // C-parity: the marker store (triangle.c:7849) runs for every vertex,
 // the undead included, while the number advances only past
 // non-undead vertices under jettison (triangle.c:7850-7852).
-#[allow(dead_code)] // consumer: the IO-phase file writers (triangle_io.c)
+#[allow(dead_code)] // no live C caller exists; parity landing
+                    // of C's own uncalled function (C's banner,
+                    // triangle.c:7836: used when writenodes is not
+                    // called; the only trace is main.c:65, commented
+                    // out); the io.rs file writer will inline the
+                    // numbering exactly like C's file_writenodes
+                    // (triangle_io.c:64-65).
 pub(crate) fn numbernodes(m: &mut Mesh, b: &Behavior) {
     let mut vertexnumber = b.firstnumber;
     let mut t = m.vertices.traversal();
