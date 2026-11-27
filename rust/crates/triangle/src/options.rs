@@ -636,7 +636,7 @@ impl Behavior {
     }
 
     /// C behavior_update (triangle.c:275-303), the identical tail C's
-    /// parsecommandline runs (triangle.c:538-552). PI is the C literal
+    /// parsecommandline runs (triangle.c:527-552). PI is the C literal
     /// of triangle_config.h:159 (the double truncation of both
     /// literals is identical); cos/sqrt call the same system libm on
     /// both sides of the differential run (ADR 0004 section 3).
