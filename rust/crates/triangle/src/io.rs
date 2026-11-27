@@ -34,7 +34,7 @@
 use std::io::{BufReader, Read, Write};
 
 use crate::error::InternalStatus;
-use crate::formatter::{d, d4, g, ld, ld4};
+use crate::formatter::{d, ld, write_d, write_d4, write_g, write_ld4};
 use crate::handles::{Osub, Otri, DUMMY_SUB, DUMMY_TRI};
 use crate::input::{Hole, MeshInput, Point2, Region};
 use crate::mesh::Mesh;
@@ -75,6 +75,10 @@ pub(crate) fn file_writenodes(
     )?;
 
     // C: traversalinit + vertexnumber = b->firstnumber (45-46).
+    // The reusable line buffer (cleared per line, capacity reused):
+    // every data line is formatted into it whole, then written with
+    // a single write_all.
+    let mut line = String::new();
     let mut vertexnumber = b.firstnumber;
     let mut t = m.vertices.traversal();
     while let Some(vertexloop) = m.vertextraverse(&mut t) {
@@ -82,16 +86,16 @@ pub(crate) fn file_writenodes(
         if !b.jettison || m.vx_type(vertexloop) != UNDEADVERTEX {
             // Vertex number, x and y coordinates (51-52:
             // "%4d    %.17g  %.17g").
-            let mut line = format!(
-                "{}    {}  {}",
-                d4(vertexnumber),
-                g(m.vx_real(vertexloop, 0), 17),
-                g(m.vx_real(vertexloop, 1), 17)
-            );
+            line.clear();
+            write_d4(&mut line, vertexnumber);
+            line.push_str("    ");
+            write_g(&mut line, m.vx_real(vertexloop, 0), 17);
+            line.push_str("  ");
+            write_g(&mut line, m.vx_real(vertexloop, 1), 17);
             for i in 0..m.nextras as usize {
                 // Write an attribute (54-55: "  %.17g").
                 line.push_str("  ");
-                line.push_str(&g(m.vx_real(vertexloop, 2 + i), 17));
+                write_g(&mut line, m.vx_real(vertexloop, 2 + i), 17);
             }
             if b.nobound {
                 line.push('\n');
@@ -100,7 +104,7 @@ pub(crate) fn file_writenodes(
                 // ORIGINAL marker: the number store below happens
                 // after the fprintf, exactly like C.
                 line.push_str("    ");
-                line.push_str(&d(m.vx_mark(vertexloop)));
+                write_d(&mut line, m.vx_mark(vertexloop));
                 line.push('\n');
             }
             nodefile.write_all(line.as_bytes())?;
@@ -131,6 +135,10 @@ pub(crate) fn file_writeelements(
         d(m.eextras)
     )?;
 
+    // The reusable line buffer (cleared per line, capacity reused):
+    // every data line is formatted into it whole, then written with
+    // a single write_all.
+    let mut line = String::new();
     let mut elementnumber: i64 = b.firstnumber as i64;
     let mut t = m.triangles.traversal();
     while let Some(tri) = m.triangletraverse(&mut t) {
@@ -138,17 +146,17 @@ pub(crate) fn file_writeelements(
         let p1 = m.org(triangleloop);
         let p2 = m.dest(triangleloop);
         let p3 = m.apex(triangleloop);
-        let mut line = if b.order == 1 {
-            // Triangle number, indices for three vertices (104-105:
-            // "%4ld    %4d  %4d  %4d").
-            format!(
-                "{}    {}  {}  {}",
-                ld4(elementnumber),
-                d4(m.vx_mark(p1)),
-                d4(m.vx_mark(p2)),
-                d4(m.vx_mark(p3))
-            )
-        } else {
+        // Triangle number, indices for three vertices (104-105:
+        // "%4ld    %4d  %4d  %4d").
+        line.clear();
+        write_ld4(&mut line, elementnumber);
+        line.push_str("    ");
+        write_d4(&mut line, m.vx_mark(p1));
+        line.push_str("  ");
+        write_d4(&mut line, m.vx_mark(p2));
+        line.push_str("  ");
+        write_d4(&mut line, m.vx_mark(p3));
+        if b.order != 1 {
             // C: the mid-edge nodes (107-109: highorderindex + 1,
             // + 2 and highorderindex, exactly where highorder stored
             // them).
@@ -156,21 +164,17 @@ pub(crate) fn file_writeelements(
             let mid2 = m.tri_slot(tri, m.tri_shape.highorderindex + 2) as u32;
             let mid3 = m.tri_slot(tri, m.tri_shape.highorderindex) as u32;
             // Triangle number, indices for six vertices (111-113).
-            format!(
-                "{}    {}  {}  {}  {}  {}  {}",
-                ld4(elementnumber),
-                d4(m.vx_mark(p1)),
-                d4(m.vx_mark(p2)),
-                d4(m.vx_mark(p3)),
-                d4(m.vx_mark(mid1)),
-                d4(m.vx_mark(mid2)),
-                d4(m.vx_mark(mid3))
-            )
-        };
+            line.push_str("  ");
+            write_d4(&mut line, m.vx_mark(mid1));
+            line.push_str("  ");
+            write_d4(&mut line, m.vx_mark(mid2));
+            line.push_str("  ");
+            write_d4(&mut line, m.vx_mark(mid3));
+        }
         for i in 0..m.eextras as usize {
             // Write an attribute (116-117: "  %.17g").
             line.push_str("  ");
-            line.push_str(&g(m.tri_attribute(tri, i), 17));
+            write_g(&mut line, m.tri_attribute(tri, i), 17);
         }
         line.push('\n');
         elefile.write_all(line.as_bytes())?;
@@ -211,6 +215,10 @@ pub(crate) fn file_writepoly(
         d(1 - i32::from(b.nobound))
     )?;
 
+    // The reusable line buffer (cleared per line, capacity reused):
+    // every data line is formatted into it whole, then written with
+    // a single write_all.
+    let mut line = String::new();
     let mut subsegnumber: i64 = b.firstnumber as i64;
     let mut t = m.subsegs.traversal();
     while let Some(ss) = m.subsegtraverse(&mut t) {
@@ -219,22 +227,17 @@ pub(crate) fn file_writepoly(
         let endpoint2 = m.sdest(subsegloop);
         // Segment number, indices of its two endpoints, and possibly
         // a marker (161-167).
-        let line = if b.nobound {
-            format!(
-                "{}    {}  {}\n",
-                ld4(subsegnumber),
-                d4(m.vx_mark(endpoint1)),
-                d4(m.vx_mark(endpoint2))
-            )
-        } else {
-            format!(
-                "{}    {}  {}    {}\n",
-                ld4(subsegnumber),
-                d4(m.vx_mark(endpoint1)),
-                d4(m.vx_mark(endpoint2)),
-                d4(m.sub_mark(subsegloop.ss))
-            )
-        };
+        line.clear();
+        write_ld4(&mut line, subsegnumber);
+        line.push_str("    ");
+        write_d4(&mut line, m.vx_mark(endpoint1));
+        line.push_str("  ");
+        write_d4(&mut line, m.vx_mark(endpoint2));
+        if !b.nobound {
+            line.push_str("    ");
+            write_d4(&mut line, m.sub_mark(subsegloop.ss));
+        }
+        line.push('\n');
         polyfile.write_all(line.as_bytes())?;
 
         subsegnumber += 1;
@@ -248,28 +251,32 @@ pub(crate) fn file_writepoly(
     for (holenumber, hole) in holelist.iter().enumerate() {
         // Hole number, x and y coordinates (178-179:
         // "%4ld   %.17g  %.17g\n").
-        write!(
-            polyfile,
-            "{}   {}  {}\n",
-            ld4(b.firstnumber as i64 + holenumber as i64),
-            g(hole.x, 17),
-            g(hole.y, 17)
-        )?;
+        line.clear();
+        write_ld4(&mut line, b.firstnumber as i64 + holenumber as i64);
+        line.push_str("   ");
+        write_g(&mut line, hole.x, 17);
+        line.push_str("  ");
+        write_g(&mut line, hole.y, 17);
+        line.push('\n');
+        polyfile.write_all(line.as_bytes())?;
     }
     if !regionlist.is_empty() {
         write!(polyfile, "{}\n", d(regionlist.len() as i32))?;
         for (regionnumber, region) in regionlist.iter().enumerate() {
             // Region number, x and y coordinates, attribute, maximum
             // area (186-190: "%4ld   %.17g  %.17g  %.17g  %.17g\n").
-            write!(
-                polyfile,
-                "{}   {}  {}  {}  {}\n",
-                ld4(b.firstnumber as i64 + regionnumber as i64),
-                g(region.x, 17),
-                g(region.y, 17),
-                g(region.attribute, 17),
-                g(region.max_area, 17)
-            )?;
+            line.clear();
+            write_ld4(&mut line, b.firstnumber as i64 + regionnumber as i64);
+            line.push_str("   ");
+            write_g(&mut line, region.x, 17);
+            line.push_str("  ");
+            write_g(&mut line, region.y, 17);
+            line.push_str("  ");
+            write_g(&mut line, region.attribute, 17);
+            line.push_str("  ");
+            write_g(&mut line, region.max_area, 17);
+            line.push('\n');
+            polyfile.write_all(line.as_bytes())?;
         }
     }
     Ok(())
@@ -290,6 +297,10 @@ pub(crate) fn file_writeedges(
         d(1 - i32::from(b.nobound))
     )?;
 
+    // The reusable line buffer (cleared per line, capacity reused):
+    // every data line is formatted into it whole, then written with
+    // a single write_all.
+    let mut line = String::new();
     let mut edgenumber: i64 = b.firstnumber as i64;
     let mut t = m.triangles.traversal();
     while let Some(tri) = m.triangletraverse(&mut t) {
@@ -312,16 +323,15 @@ pub(crate) fn file_writeedges(
             {
                 let p1 = m.org(triangleloop);
                 let p2 = m.dest(triangleloop);
-                let line = if b.nobound {
-                    // Edge number, indices of two endpoints (237:
-                    // "%4ld   %d  %d\n").
-                    format!(
-                        "{}   {}  {}\n",
-                        ld4(edgenumber),
-                        d(m.vx_mark(p1)),
-                        d(m.vx_mark(p2))
-                    )
-                } else {
+                // Edge number, indices of two endpoints (237:
+                // "%4ld   %d  %d\n").
+                line.clear();
+                write_ld4(&mut line, edgenumber);
+                line.push_str("   ");
+                write_d(&mut line, m.vx_mark(p1));
+                line.push_str("  ");
+                write_d(&mut line, m.vx_mark(p2));
+                if !b.nobound {
                     // Edge number, indices of two endpoints, and a
                     // boundary marker. If there's no subsegment, the
                     // boundary marker is zero (240-254).
@@ -337,14 +347,10 @@ pub(crate) fn file_writeedges(
                         // hull flag itself.
                         i32::from(trisym.tri == DUMMY_TRI)
                     };
-                    format!(
-                        "{}   {}  {}  {}\n",
-                        ld4(edgenumber),
-                        d(m.vx_mark(p1)),
-                        d(m.vx_mark(p2)),
-                        d(marker)
-                    )
-                };
+                    line.push_str("  ");
+                    write_d(&mut line, marker);
+                }
+                line.push('\n');
                 edgefile.write_all(line.as_bytes())?;
                 edgenumber += 1;
             }
@@ -395,7 +401,11 @@ pub(crate) fn file_writeneighbors(
     m.set_tri_int(DUMMY_TRI, numberindex, -1);
 
     // The second walk (289-308): neighbor1 from orient 1, neighbor2
-    // from orient 2, neighbor3 from orient 0.
+    // from orient 2, neighbor3 from orient 0. The reusable line
+    // buffer (cleared per line, capacity reused): one write_all per
+    // data line instead of one write! per line - the R1 cause-2
+    // site.
+    let mut line = String::new();
     let mut elementnumber: i64 = b.firstnumber as i64;
     let mut t = m.triangles.traversal();
     while let Some(tri) = m.triangletraverse(&mut t) {
@@ -404,14 +414,16 @@ pub(crate) fn file_writeneighbors(
         let neighbor3 = m.tri_int(m.sym(Otri { tri, orient: 0 }).tri, numberindex);
         // Triangle number, neighboring triangle numbers (303-304:
         // "%4ld    %d  %d  %d\n").
-        write!(
-            neighborfile,
-            "{}    {}  {}  {}\n",
-            ld4(elementnumber),
-            d(neighbor1),
-            d(neighbor2),
-            d(neighbor3)
-        )?;
+        line.clear();
+        write_ld4(&mut line, elementnumber);
+        line.push_str("    ");
+        write_d(&mut line, neighbor1);
+        line.push_str("  ");
+        write_d(&mut line, neighbor2);
+        line.push_str("  ");
+        write_d(&mut line, neighbor3);
+        line.push('\n');
+        neighborfile.write_all(line.as_bytes())?;
         elementnumber += 1;
     }
     Ok(())
