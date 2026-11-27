@@ -256,7 +256,7 @@ side changes; the function names are the stable key).
 | `triangle_check_mesh` | triangle_api.c:163 | `api.rs` | Mesh::check_mesh, Mesh::check_delaunay | S1 shell | failure counts (usize), non-error semantics |
 | `triangle_check_delaunay` | triangle_api.c:172 | `api.rs` | Mesh::check_mesh, Mesh::check_delaunay | S1 shell | failure counts (usize), non-error semantics |
 | `triangle_mesh_create` | triangle_api.c:181 | `api.rs` | triangulate | S1 shell | entry point |
-| `triangle_mesh_load` | triangle_api.c:262 | `api.rs` | Mesh::load_mesh | S1 shell | |
+| `triangle_mesh_load` | triangle_api.c:262 | `api.rs` | Mesh::load_mesh | S1 shell | landed in the load-orchestration PR (#53): the api-level sequence around the landed reconstruct (transfernodes and its status funnel, triangle_api.c:285-291; reconstruct with the negative-value TRI_INPUT funnel, 293-303; the infvertex NULLs, 305-309; the usesegments/checksegments store with no formskeleton call, 311-313; the poly holes/regions gate, 315-324; the edges writer, 326-327); the context NULL check (269-271) and the mesh-already-created TRI_FAILURE (276-279) dissolve over the owned fresh-constructed mesh (D8, Mesh::create's twin-check precedent at 195-197); the -r CLI flow runs end to end (load then refine, main.c:44-52) |
 | `triangle_mesh_refine` | triangle_api.c:332 | `api.rs` | Mesh::refine | S1 shell | wired in the refine PR (#39): the quality gate (triangle_api.c:347), the status funnel, and the m->edges writer inside the gate (triangle_api.c:354-355) |
 | `triangle_mesh_copy` | triangle_api.c:362 | `api.rs` | Mesh::output | S1 shell | |
 | `triangle_free` | triangle_api.c:430 | `-` | same name (snake_case) | - | dissolves: Drop/RAII (D11) |

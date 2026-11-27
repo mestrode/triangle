@@ -835,10 +835,10 @@ fn main() {
         if bf.vararea {
             check(read_area(&lb.areafilename, &mut input), "read_area");
         }
-        // Reconstruct the mesh (main.c:50-52). The load orchestration
-        // is the remaining stage-1 scaffold; its NotImplemented
-        // failure prints C's check line and exits exactly like a C
-        // TRI_FAILURE would.
+        // Reconstruct the mesh (main.c:50-52): load_mesh runs the
+        // triangle_mesh_load sequence (reconstruct plus the load-era
+        // gates) and refine the quality pass, in C's order; no stage-1
+        // scaffolding remains anywhere in the port.
         let mut loaded = check(Mesh::load_mesh(options, &input), "mesh_load");
         check(loaded.refine(), "mesh_refine");
         loaded

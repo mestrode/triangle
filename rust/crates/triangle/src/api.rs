@@ -8,22 +8,18 @@
 //! (error.rs, ADR 0004 section 6) runs exactly here, where
 //! triangle_api.c inspects returned statuses.
 //!
-//! Stage-1 scaffolding: the entry points own their options
-//! validation, input validation and pool-geometry construction, and
-//! triangulate runs the full triangle_mesh_create sequence through
-//! the landed core (transfernodes, delaunay, formskeleton,
-//! carveholes, enforcequality, highorder). The remaining scaffolding
-//! sites return the funnel-marked InternalStatus::NotImplemented
-//! (each site carries a SCAFFOLDING comment naming the C step it
-//! awaits): load_mesh awaits its api-level load orchestration.
-//! output runs the ioarray writers through the triangle_mesh_copy
-//! lift (the ioarrays part-2 PR); the triangle_write_* and triangle_read_*
-//! file surface (triangle_api.c:437-555) landed with the I/O phase.
-
-// The Mesh struct lands ahead of the core methods that read its
-// behavior (every stage-1 core module takes a &Behavior); the blanket
-// silences that ahead-of-use dead_code and is removed with them.
-#![allow(dead_code)]
+//! The entry points own their options validation, input validation
+//! and pool-geometry construction; triangulate runs the full
+//! triangle_mesh_create sequence through the landed core
+//! (transfernodes, delaunay, formskeleton, carveholes,
+//! enforcequality, highorder) and load_mesh runs the full
+//! triangle_mesh_load sequence (transfernodes, reconstruct, the
+//! load-era gates). No scaffolding sites remain: the stage-1 surface
+//! is wired end to end, and InternalStatus::NotImplemented has no
+//! constructor left outside the funnel's own tests. output runs the
+//! ioarray writers through the triangle_mesh_copy lift (the ioarrays
+//! part-2 PR); the triangle_write_* and triangle_read_* file surface
+//! (triangle_api.c:437-555) landed with the I/O phase.
 
 use crate::error::{Error, InternalStatus};
 use crate::handles::NULL;
@@ -135,11 +131,9 @@ impl Default for Quality {
 /// transliterated core - the parts C splits between context, mesh and
 /// behavior (D8: TRI_NULL and the null-context checks dissolve).
 ///
-/// Stage-1 note: triangulate succeeds since the ioarrays input half
-/// (the full create sequence); load_mesh still returns the scaffold
-/// (its api-level load orchestration is unwired); output runs the
-/// ioarray writers; the surface is frozen now so the stage-1
-/// core tickets fill it without churn.
+/// The surface is frozen so the stage-1 core tickets fill it without
+/// churn; every entry point is wired: triangulate and load_mesh run
+/// their full C sequences, output runs the ioarray writers.
 ///
 /// Interior note (serial-era bridge): the frozen `&self` check and
 /// statistics surface needs to run the 1:1 transliterations of
@@ -266,6 +260,94 @@ impl Mesh {
         }
         Ok(())
     }
+
+    /// triangle_mesh_load's core sequence (triangle_api.c:285-330):
+    /// everything after the shell's validation and pool construction.
+    /// C opens with a TRI_FAILURE when the mesh already has triangles
+    /// (triangle_api.c:276-279); load_mesh reaches this sequence only
+    /// on a freshly constructed owned mesh, where the triangle count
+    /// is necessarily zero, so the check is unobservable and dissolves
+    /// over the owned context (D8) - the same dissolution Mesh::create
+    /// records for its twin check (triangle_api.c:195-197).
+    fn load(&self, input: &MeshInput) -> Result<(), Error> {
+        let mut behavior = self.behavior.borrow_mut();
+        let mut core = self.core.borrow_mut();
+        // C: transfernodes (triangle_api.c:285-287) and the status
+        // check (289-291): the owned MeshInput fields arrive exactly
+        // where C hands its triangleio pointers to transfernodes, and
+        // TRI_INPUT funnels through the Result channel (D8, the
+        // Mesh::create pattern).
+        crate::ioarrays::transfernodes(
+            &mut core,
+            &mut behavior,
+            &input.points,
+            &input.point_attributes,
+            point_marker_list(input),
+            input.points.len() as i32,
+            input.attributes_per_point as i32,
+        )?;
+        // C: m->hullsize = reconstruct(...) (triangle_api.c:293-299).
+        // The owned [i32; 2] pairs flatten into C's flat segmentlist
+        // at the call site (the Mesh::create pattern);
+        // in->numberoftriangles derives from the flat corner list
+        // exactly where the C caller passes its reader count.
+        core.hullsize = crate::construct::reconstruct(
+            &mut core,
+            &behavior,
+            &input.elements,
+            &input.element_attributes,
+            &input.triangle_areas,
+            input
+                .elements
+                .len()
+                .checked_div(input.corners_per_element)
+                .unwrap_or(0) as i32,
+            input.corners_per_element as i32,
+            input.attributes_per_element as i32,
+            &flat_segmentlist(input)?,
+            segment_marker_list(input),
+            input.segments.len() as i32,
+        )? as i64;
+        // C: the hullsize < 0 check (triangle_api.c:301-303) returns
+        // the raw code; reconstruct's only negative rider is TRI_INPUT
+        // (triangle.c:5522, 5573, 5664; construct.rs mirrors the three
+        // sites), funneled here exactly where C returns it (D8).
+        if core.hullsize < 0 {
+            return Err(Error::from(InternalStatus::Input));
+        }
+        // C: the three infvertex NULL stores (triangle_api.c:305-309),
+        // the same construction-shape stores Mesh::create makes.
+        core.infvertex1 = NULL;
+        core.infvertex2 = NULL;
+        core.infvertex3 = NULL;
+        if behavior.usesegments {
+            // C: m->checksegments = 1 (triangle_api.c:311-313). Load
+            // does NOT call formskeleton: the segments arrive through
+            // reconstruct itself, only the flag flips here.
+            core.checksegments = true;
+        }
+        if behavior.poly && core.triangles.live_count() > 0 {
+            // C: the m->holes / m->regions stores (triangle_api.c:
+            // 315-317): the counts of the input lists, kept for the
+            // writers exactly like C keeps them.
+            core.holes = input.holes.len() as i32;
+            core.regions = input.regions.len() as i32;
+        } else {
+            // C: without a PSLG there can be no holes or regional
+            // attributes; zeroed to avoid an accidental free() later
+            // (triangle_api.c:318-324; the owned input makes the free
+            // impossible, the zero stores stay verbatim).
+            core.holes = 0;
+            core.regions = 0;
+        }
+        // C: the m->edges writer (triangle_api.c:326-327).
+        core.edges = (3 * core.triangles.live_count() as i64 + core.hullsize) / 2;
+        // C: return status (triangle_api.c:329). No delaunay, no
+        // carveholes, no enforcequality here: the load stops after the
+        // edges writer; Mesh::refine owns the quality pass, and the
+        // CLI calls both in C's order (main.c:44-52).
+        Ok(())
+    }
 }
 
 /// C in->pointmarkerlist as transfernodes reads it: the empty list is
@@ -322,21 +404,24 @@ pub fn triangulate(options: Options, input: &MeshInput) -> Result<Mesh, Error> {
 }
 
 impl Mesh {
-    /// triangle_mesh_load (triangle_api.c:262). Calling it implies the
-    /// refine path in C's API; the same opening validation and pool
-    /// geometry. The reconstruct transliteration is landed
-    /// (construct.rs); the api-level load orchestration around it is
-    /// the remaining scaffold.
-    ///
-    /// SCAFFOLDING: awaits the load orchestration (triangle_api.c:
-    /// 262-330, reconstruct plus the load-era gates); returns the
-    /// funnel-marked InternalStatus::NotImplemented today.
+    /// triangle_mesh_load (triangle_api.c:262-330). Calling it
+    /// implies the refine path in C's API (the -r flow: the CLI
+    /// reconstructs the mesh here, then runs Mesh::refine, main.c:
+    /// 44-52); the opening validation and pool geometry are the
+    /// triangulate shell's. C's context NULL check (triangle_api.c:
+    /// 269-271) dissolves over the owned API (D8), and so does the
+    /// "Mesh already created" TRI_FAILURE (276-279): the port
+    /// constructs a fresh owned Mesh for the load, whose triangle
+    /// count is necessarily zero at the entry - the same ownership
+    /// dissolution Mesh::create records for its twin check
+    /// (triangle_api.c:195-197).
     pub fn load_mesh(options: Options, input: &MeshInput) -> Result<Mesh, Error> {
-        let behavior = { options }.validate()?;
+        let behavior = options.validate()?;
         input.check(behavior.firstnumber)?;
         let region_extra = usize::from(behavior.regionattrib);
-        let _mesh = Mesh::construct(behavior, input, region_extra)?;
-        Err(Error::from(InternalStatus::NotImplemented))
+        let mesh = Mesh::construct(behavior, input, region_extra)?;
+        mesh.load(input)?;
+        Ok(mesh)
     }
 
     /// triangle_mesh_refine (triangle_api.c:332-359): enforcequality
@@ -519,10 +604,9 @@ impl Mesh {
             // C's writer of m->edges is (3 * triangles.items +
             // hullsize) / 2, computed in the
             // triangle_mesh_create/load_mesh/refine entry points
-            // (triangle_api.c:252-253, 326-327, 354-355). The refine
-            // writer landed (refine.rs); the create writer landed with
-            // the ioarrays input half (Mesh::create); load awaits its
-            // orchestration, so the field stays 0 on its meshes.
+            // (triangle_api.c:252-253, 326-327, 354-355). All three
+            // writers are landed (Mesh::create, Mesh::load,
+            // Mesh::refine).
             edges: m.edges as usize,
             subsegs: if b.poly || b.refine {
                 m.subsegs.live_count() as usize
@@ -748,17 +832,225 @@ mod tests {
 
     #[test]
     fn load_mesh_validates_input() {
+        // The shell's input validation (the triangle_check_triangleio
+        // mirror) funnels Error::Input exactly like triangulate's.
         let mut input = triangle_input();
         input.segments = vec![[0, 3]];
         let err = Mesh::load_mesh(Options::new(), &input)
             .err()
             .expect("load_mesh must fail on bad input");
         assert!(matches!(err, Error::Input(_)));
-        // And on a valid input: the scaffolding error.
-        let err = Mesh::load_mesh(Options::new(), &triangle_input())
+    }
+
+    #[test]
+    fn load_mesh_funnels_the_reconstruct_input_error() {
+        // C's reconstruct returns TRI_INPUT riding the value channel
+        // below three corners (triangle.c:5520-5522);
+        // triangle_mesh_load stores the result in m->hullsize and
+        // returns the raw code on the negative (triangle_api.c:
+        // 301-303); the port funnels the same status exactly there
+        // (D8). A malformed element list (corners below 3) is the
+        // failure shape.
+        let mut input = triangle_input();
+        input.corners_per_element = 2;
+        input.elements = vec![1, 2];
+        let err = Mesh::load_mesh(Options::new(), &input)
             .err()
-            .expect("load_mesh must fail in stage 1");
-        assert!(matches!(err, Error::Internal(_)));
+            .expect("a malformed element list must fail");
+        assert!(matches!(err, Error::Input(_)));
+    }
+
+    /// The -r lift helper: a MeshOutput marshalled by Mesh::output
+    /// (the triangle_mesh_copy lift) re-read as the MeshInput the
+    /// reconstruct path consumes (the C -r flow: read .node, .ele and
+    /// .poly back in).
+    fn lift_input(out: &MeshOutput) -> MeshInput {
+        MeshInput {
+            points: out.points.clone(),
+            point_markers: out.point_markers.clone(),
+            elements: out.elements.clone(),
+            corners_per_element: out.corners,
+            segments: out.segments.clone(),
+            segment_markers: out.segment_markers.clone(),
+            ..MeshInput::default()
+        }
+    }
+
+    fn square_pslg_input() -> MeshInput {
+        MeshInput {
+            points: vec![
+                Point2 { x: 0.0, y: 0.0 },
+                Point2 { x: 1.0, y: 0.0 },
+                Point2 { x: 1.0, y: 1.0 },
+                Point2 { x: 0.0, y: 1.0 },
+            ],
+            segments: vec![[1, 2], [2, 3], [3, 4], [4, 1]],
+            ..MeshInput::default()
+        }
+    }
+
+    #[test]
+    fn load_mesh_reconstructs_a_lifted_pslg_mesh() {
+        // triangle_api.c:285-330 over a lifted square PSLG: the base
+        // mesh triangulates through the surface, Mesh::output
+        // marshals it, and load_mesh reconstructs the same mesh from
+        // the marshalled lists. Pinned by construction: the vertex,
+        // element and segment counts (4 / 2 / 4 subsegs), hullsize
+        // (the square's four boundary edges), the edges writer
+        // ((3 * 2 + 4) / 2 = 5), checksegments under -r (usesegments
+        // derives refine; no formskeleton call - reconstruct carries
+        // the segments), the same triangle set as the base, and the
+        // neighbor connectivity through traversal.
+        let mut opts = Options::new();
+        opts.pslg().neighbors();
+        let base = triangulate(opts, &square_pslg_input()).expect("pslg create");
+        let out = base.output(true, true).expect("output");
+        assert_eq!(out.corners, 3);
+        assert_eq!(out.elements.len(), 6);
+        assert_eq!(out.segments.len(), 4);
+        let mut load_opts = Options::new();
+        load_opts.refine().neighbors();
+        let loaded = Mesh::load_mesh(load_opts, &lift_input(&out)).expect("load");
+        let s = loaded.statistics();
+        assert_eq!(s.vertices, 4);
+        assert_eq!(s.triangles, 2);
+        assert_eq!(s.subsegs, 4);
+        assert_eq!(s.hullsize, 4);
+        assert_eq!(s.edges, 5);
+        {
+            let core = loaded.core.borrow();
+            assert!(core.checksegments);
+            assert_eq!(core.holes, 0);
+            assert_eq!(core.regions, 0);
+        }
+        // The reconstructed triangle set is the base's: reconstruct
+        // reads the .ele list, so the relifted corner triples match
+        // the marshalled ones exactly.
+        let relifted = loaded.output(false, false).expect("output");
+        let mut triples: Vec<[i32; 3]> = relifted
+            .elements
+            .chunks(3)
+            .map(|c| [c[0], c[1], c[2]])
+            .collect();
+        triples.sort();
+        let mut base_triples: Vec<[i32; 3]> =
+            out.elements.chunks(3).map(|c| [c[0], c[1], c[2]]).collect();
+        base_triples.sort();
+        assert_eq!(triples, base_triples);
+        // Neighbor connectivity through traversal (writeneighbors):
+        // -1 faces outer space on exactly the hullsize sides, and the
+        // two triangles name each other across the diagonal.
+        let out2 = loaded.output(false, true).expect("neighbors output");
+        assert_eq!(out2.neighbors.len(), 6);
+        let mut hull_sides = 0;
+        let mut interior: Vec<(i32, i32)> = Vec::new();
+        for (i, chunk) in out2.neighbors.chunks(3).enumerate() {
+            for &n in chunk {
+                if n < 0 {
+                    hull_sides += 1;
+                } else {
+                    interior.push((i as i32 + 1, n));
+                }
+            }
+        }
+        assert_eq!(hull_sides, 4);
+        interior.sort();
+        assert_eq!(interior, vec![(1, 2), (2, 1)]);
+        // The loaded mesh is topologically consistent and (constraint)
+        // Delaunay exactly like the base.
+        assert_eq!(loaded.check_mesh(), 0);
+        assert_eq!(loaded.check_delaunay(), 0);
+    }
+
+    #[test]
+    fn load_mesh_stores_the_input_hole_and_region_counters() {
+        // The poly gate's stores (triangle_api.c:315-317) with
+        // triangles in the reconstructed mesh: the counts of the
+        // input lists survive for the writers (load does not consume
+        // the lists - no carveholes here - it only counts them).
+        let mut opts = Options::new();
+        opts.pslg().refine();
+        let base = triangulate(Options::new(), &square_pslg_input()).expect("create");
+        let out = base.output(false, false).expect("output");
+        let mut input = lift_input(&out);
+        input.holes = vec![Hole { x: 0.5, y: 0.5 }];
+        input.regions = vec![Region {
+            x: 0.25,
+            y: 0.25,
+            attribute: 5.0,
+            max_area: 0.0,
+        }];
+        let loaded = Mesh::load_mesh(opts, &input).expect("pr load");
+        {
+            let core = loaded.core.borrow();
+            assert_eq!(core.holes, 1);
+            assert_eq!(core.regions, 1);
+        }
+    }
+
+    #[test]
+    fn load_mesh_zeroes_holes_and_regions_without_poly() {
+        // The else arm (triangle_api.c:318-324): without -p the
+        // non-empty input lists still zero the counters (no PSLG, no
+        // holes or regional attributes; the owned input makes C's
+        // accidental-free() concern moot, the zero stores stay
+        // verbatim).
+        let mut opts = Options::new();
+        opts.refine();
+        let base = triangulate(Options::new(), &square_pslg_input()).expect("create");
+        let out = base.output(false, false).expect("output");
+        let mut input = lift_input(&out);
+        assert!(input.segments.is_empty());
+        input.holes = vec![Hole { x: 0.5, y: 0.5 }];
+        input.regions = vec![Region {
+            x: 0.25,
+            y: 0.25,
+            attribute: 5.0,
+            max_area: 0.0,
+        }];
+        let loaded = Mesh::load_mesh(opts, &input).expect("r load");
+        {
+            let core = loaded.core.borrow();
+            assert_eq!(core.holes, 0);
+            assert_eq!(core.regions, 0);
+        }
+    }
+
+    #[test]
+    fn load_then_refine_enlarges_a_quality_mesh() {
+        // The -r flow end to end (main.c:44-52): a skinny base mesh
+        // loaded through the surface, then Mesh::refine under -q20
+        // with a Steiner budget; the refined mesh is enlarged, valid
+        // (check_mesh passes) and count-consistent with the edges
+        // writer formula (3 * triangles + hullsize) / 2
+        // (triangle_api.c:326-327 at load, 354-355 refreshed at
+        // refine).
+        let skinny = MeshInput {
+            points: vec![
+                Point2 { x: 0.0, y: 0.0 },
+                Point2 { x: 2.0, y: 0.0 },
+                Point2 { x: 1.0, y: 0.1 },
+            ],
+            ..MeshInput::default()
+        };
+        let base = triangulate(Options::new(), &skinny).expect("plain create");
+        let out = base.output(false, false).expect("output");
+        let mut load_opts = Options::new();
+        load_opts
+            .refine()
+            .quality()
+            .min_angle(20.0)
+            .steiner_limit(50);
+        let mut loaded = Mesh::load_mesh(load_opts, &lift_input(&out)).expect("load");
+        let before = loaded.statistics();
+        assert_eq!(before.triangles, 1);
+        assert_eq!(before.hullsize, 3);
+        assert_eq!(before.edges, (3 * before.triangles + before.hullsize) / 2);
+        loaded.refine().expect("refine");
+        let after = loaded.statistics();
+        assert!(after.triangles > before.triangles);
+        assert_eq!(after.edges, (3 * after.triangles + after.hullsize) / 2);
+        assert_eq!(loaded.check_mesh(), 0);
     }
 
     /// Hand-insert one triangle into a scaffolded mesh (the landed core
