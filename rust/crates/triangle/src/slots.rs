@@ -13,6 +13,37 @@
 //! (handle macro family -> slots.rs; org/dest/apex; vertexmark family;
 //! struct mesh storage share).
 //!
+//! R1 accessor-invariant audit map (ADR 0002 section 3, debug builds
+//! only; every enforcement rides the existing names and signatures,
+//! which survive until rung 4):
+//! (a) range - the orientation half is debug_asserted at every
+//! encode/decode (handles.rs); the row-id half is debug_asserted at
+//! every chokepoint decode site below (sym/symself, spivot/spivotself,
+//! snext/snextself, stpivot, tspivot, splay_keyedge) via
+//! WordPool::debug_assert_row_in_space, and on every raw word access
+//! (pool.rs runs the materialized-frontier half). A decoded id is
+//! inside the pool id space by construction; deadness stays a
+//! data-model concern (C can leave neighbor slots pointing at dead
+//! rows).
+//! (b) null discipline - the all-zero word is never decoded
+//! (handles.rs); no decoded handle ever names the null row (the
+//! decode-site range checks below); alloc and traversal never surface
+//! the null id (pool.rs); the reserved null row itself reads as
+//! never-written zeros when a NULL vertex's coordinates are read
+//! (rightofhyperbola on an outer-space handle - the port's defined
+//! substitute for the NULL-vertex deref the legal C flow never
+//! performs); org/dest/apex and the typed small-pool links return ids
+//! as data, exactly like C, with no decode to guard.
+//! (c) slot-role - slot < stride at every access below and in pool.rs;
+//! the role tables are built only by the mesh.rs init formulas, whose
+//! computed indices are debug_asserted inside the rows they size.
+//! (d) dead-stack discipline - slot 0 of a dead row is pool-private
+//! between dealloc and realloc (killtri/killsubseg never write it);
+//! the cfg-gated dead-chain integrity walk runs at every pool
+//! push/pop/restart (pool.rs).
+//! (e) exact-LIFO reuse - the pool's dead pop, pinned by the pool and
+//! chokepoint tests; output-observable and untouched.
+//!
 //! The Mesh struct itself lives in mesh.rs (C: struct mesh, triangle.h:476;
 //! lifecycle rows per the mapping); its pool fields are pub(crate) for the
 //! constructors there, with the chokepoint contract - only this module calls
@@ -159,25 +190,40 @@ fn infvertex_index(v: u32) -> Option<usize> {
 impl Mesh {
     /// A triangle row slot word (C: `tri[slot]`). The caller guarantees the
     /// row is real (live or sentinel); slot roles are fixed at init.
+    ///
+    /// Invariants (ADR 0002 section 3): slot-role (c) `slot < stride`
+    /// debug_asserted here; range (a) on the row id is debug_asserted at
+    /// the pool seam (WordPool::word), which every accessor of this
+    /// module inherits. The null discipline (b) is decode-side: the
+    /// reserved null row reads as its never-written zeros (see the
+    /// module audit map).
     #[inline]
     pub(crate) fn tri_slot(&self, t: u32, slot: usize) -> u64 {
         debug_assert!(slot < self.tri_shape.stride, "tri slot {} out of row", slot);
         self.triangles.word(t, slot)
     }
 
+    /// The write mirror of [`Mesh::tri_slot`]; the same invariants (ADR
+    /// 0002 section 3) are debug_asserted - slot-role (c) here, range (a)
+    /// at the pool seam (the null discipline (b) is decode-side).
     #[inline]
     pub(crate) fn set_tri_slot(&mut self, t: u32, slot: usize, w: u64) {
         debug_assert!(slot < self.tri_shape.stride, "tri slot {} out of row", slot);
         self.triangles.set_word(t, slot, w);
     }
 
-    /// A subsegment row slot word (C: `ss[slot]`).
+    /// A subsegment row slot word (C: `ss[slot]`). Invariants (ADR 0002
+    /// section 3): slot-role (c) here (C rows are 9 words), range (a) on
+    /// the row id at the pool seam (the null discipline (b) is
+    /// decode-side).
     #[inline]
     pub(crate) fn sub_slot(&self, s: u32, slot: usize) -> u64 {
         debug_assert!(slot < 9, "subseg slot out of row (C rows are 9 words)");
         self.subsegs.word(s, slot)
     }
 
+    /// The write mirror of [`Mesh::sub_slot`]; the same invariants (ADR
+    /// 0002 section 3).
     #[inline]
     pub(crate) fn set_sub_slot(&mut self, s: u32, slot: usize, w: u64) {
         debug_assert!(slot < 9, "subseg slot out of row (C rows are 9 words)");
@@ -187,11 +233,17 @@ impl Mesh {
     /// A whole-word f64 view of a triangle row slot (attributes and area
     /// bounds; C elemattribute/areabound access REALs). Bit-exact via
     /// from_bits/to_bits; no arithmetic evaluates an overlaid word.
+    ///
+    /// Invariants (ADR 0002 section 3 c): the slot stays below the stride
+    /// through tri_slot; the payload roles (attribute and area words)
+    /// come from the init formulas only.
     #[inline]
     pub(crate) fn tri_real(&self, t: u32, slot: usize) -> f64 {
         f64::from_bits(self.tri_slot(t, slot))
     }
 
+    /// The write mirror of [`Mesh::tri_real`]; the same invariants (ADR
+    /// 0002 section 3 c) ride tri_slot/set_tri_slot.
     #[inline]
     pub(crate) fn set_tri_real(&mut self, t: u32, slot: usize, x: f64) {
         self.set_tri_slot(t, slot, x.to_bits());
@@ -199,11 +251,17 @@ impl Mesh {
 
     /// An int overlay on a triangle row (C: the -n numbering int in
     /// *(int *)(tri + 6); the port addresses the half via the shape).
+    ///
+    /// Invariants (ADR 0002 section 3): the overlay half is inside the
+    /// row by the init formulas (c); range (a) at the pool seam (the
+    /// null discipline (b) is decode-side).
     #[inline]
     pub(crate) fn tri_int(&self, t: u32, half: HalfWord) -> i32 {
         HalfWord::overlay_i32(self.tri_slot(t, half.word), half)
     }
 
+    /// The write mirror of [`Mesh::tri_int`] (read-modify-write on the
+    /// containing word, D2); the same invariants (ADR 0002 section 3).
     #[inline]
     pub(crate) fn set_tri_int(&mut self, t: u32, half: HalfWord, val: i32) {
         let w = HalfWord::merge_i32(self.tri_slot(t, half.word), half, val);
@@ -212,6 +270,9 @@ impl Mesh {
 
     /// An element attribute (C elemattribute(otri, attnum),
     /// triangle.h:890-894: the REAL at elemattribindex + attnum).
+    /// Invariants (ADR 0002 section 3 c): attnum < eextras debug_asserted
+    /// here, and the attribute words sit inside the row by the init
+    /// formulas.
     pub(crate) fn tri_attribute(&self, t: u32, attnum: usize) -> f64 {
         debug_assert!(
             attnum < self.eextras as usize,
@@ -221,6 +282,8 @@ impl Mesh {
         self.tri_real(t, self.tri_shape.elemattribindex + attnum)
     }
 
+    /// The write mirror of [`Mesh::tri_attribute`]; the same invariant
+    /// (ADR 0002 section 3 c) is debug_asserted.
     pub(crate) fn set_tri_attribute(&mut self, t: u32, attnum: usize, x: f64) {
         debug_assert!(
             attnum < self.eextras as usize,
@@ -231,11 +294,16 @@ impl Mesh {
     }
 
     /// The maximum-area bound (C areabound / setareabound, triangle.h:898-901).
+    /// Invariant (ADR 0002 section 3 c): the area-bound word is inside
+    /// the row (the init formulas raise the stride under vararea; pinned
+    /// by the mesh.rs init debug_asserts).
     #[inline]
     pub(crate) fn tri_areabound(&self, t: u32) -> f64 {
         self.tri_real(t, self.tri_shape.areaboundindex)
     }
 
+    /// The write mirror of [`Mesh::tri_areabound`]; the same invariant
+    /// (ADR 0002 section 3 c).
     #[inline]
     pub(crate) fn set_tri_areabound(&mut self, t: u32, x: f64) {
         self.set_tri_real(t, self.tri_shape.areaboundindex, x)
@@ -243,11 +311,15 @@ impl Mesh {
 
     /// The subsegment boundary marker (C bnd_mark / setmark,
     /// triangle.h:1001-1004: the int at ss + 8).
+    /// Invariant (ADR 0002 section 3 c): the marker overlay is word 8,
+    /// low half, inside C's 9-word row by the fixed init formula.
     #[inline]
     pub(crate) fn sub_mark(&self, s: u32) -> i32 {
         HalfWord::overlay_i32(self.sub_slot(s, SUBSEG_MARK.word), SUBSEG_MARK)
     }
 
+    /// The write mirror of [`Mesh::sub_mark`] (D2 read-modify-write);
+    /// the same invariant (ADR 0002 section 3 c).
     #[inline]
     pub(crate) fn set_sub_mark(&mut self, s: u32, m: i32) {
         let w = HalfWord::merge_i32(self.sub_slot(s, SUBSEG_MARK.word), SUBSEG_MARK, m);
@@ -255,6 +327,15 @@ impl Mesh {
     }
 
     /// A vertex coordinate / attribute word (C: `vx[comp]`, a REAL).
+    ///
+    /// Invariants (ADR 0002 section 3): comp < stride (c) debug_asserted
+    /// here (the D12 infvertex store carries two coordinates); range (a)
+    /// on the row id at the pool seam (the INFVERTEX ids never reach it;
+    /// they live in the owned store). The NULL vertex id is data: its
+    /// read answers the null row's never-written zeros - the port's
+    /// defined substitute for the NULL-vertex deref (rightofhyperbola
+    /// on an outer-space handle; C's dummytri carries NULL vertices,
+    /// triangle.c:1049, and the legal C flow never performs the read).
     #[inline]
     pub(crate) fn vx_real(&self, v: u32, comp: usize) -> f64 {
         // D12 out-of-pool infvertices carry their two coordinates in the
@@ -276,6 +357,8 @@ impl Mesh {
         // D12 out-of-pool infvertices carry their two coordinates in the
         // owned store, never in vertex pool rows;
         // removebox zeroes it like C's trifree.
+        // Invariants (ADR 0002 section 3): as vx_real (c here, a at the
+        // pool seam; b decode-side).
         if let Some(i) = infvertex_index(v) {
             debug_assert!(comp < 2, "the infinite vertices carry two coordinates");
             self.infvertex_store[i][comp] = x.to_bits();
@@ -290,12 +373,17 @@ impl Mesh {
     }
 
     /// The vertex boundary marker (C vertexmark, triangle.h:1074-1077).
+    /// Invariant (ADR 0002 section 3 c): the overlay half comes from
+    /// the init formulas (VertexShape); range (a) at the pool seam (the
+    /// null discipline (b) is decode-side).
     #[inline]
     pub(crate) fn vx_mark(&self, v: u32) -> i32 {
         let half = self.vertex_shape.mark;
         HalfWord::overlay_i32(self.vertices.word(v, half.word), half)
     }
 
+    /// The write mirror of [`Mesh::vx_mark`] (D2); the same invariants
+    /// (ADR 0002 section 3).
     #[inline]
     pub(crate) fn vx_set_mark(&mut self, v: u32, m: i32) {
         let half = self.vertex_shape.mark;
@@ -305,12 +393,19 @@ impl Mesh {
 
     /// The vertex type (C vertextype, triangle.h:1079-1082: the int right
     /// after the boundary marker).
+    /// Invariant (ADR 0002 section 3 c): the overlay half comes from
+    /// the init formulas; range (a) at the pool seam (the null
+    /// discipline (b) is decode-side). The DEADVERTEX value this overlay
+    /// carries is the dead-row detection of the vertex pool (the
+    /// data-model side of invariant d).
     #[inline]
     pub(crate) fn vx_type(&self, v: u32) -> i32 {
         let half = self.vertex_shape.vtype;
         HalfWord::overlay_i32(self.vertices.word(v, half.word), half)
     }
 
+    /// The write mirror of [`Mesh::vx_type`]; the same invariants (ADR
+    /// 0002 section 3).
     #[inline]
     pub(crate) fn vx_set_type(&mut self, v: u32, ty: i32) {
         let half = self.vertex_shape.vtype;
@@ -321,6 +416,11 @@ impl Mesh {
     /// The vertex2tri word (C vertex2tri, triangle.h:1084-1087): the raw
     /// encode()d triangle handle word; decode happens at the caller through
     /// handles.rs, never behind the chokepoint.
+    ///
+    /// Invariants (ADR 0002 section 3): the word exists only with -p (the
+    /// expect mirrors C's undefined read); decode-side null (b) and
+    /// orientation (a) ride handles.rs decode; the row id is checked at
+    /// the caller's next storage access.
     #[inline]
     pub(crate) fn vx_2tri(&self, v: u32) -> u64 {
         let slot = self
@@ -330,6 +430,8 @@ impl Mesh {
         self.vertices.word(v, slot)
     }
 
+    /// The write mirror of [`Mesh::vx_2tri`]; the same invariants (ADR
+    /// 0002 section 3).
     #[inline]
     pub(crate) fn vx_set_2tri(&mut self, v: u32, w: u64) {
         let slot = self
@@ -346,65 +448,87 @@ impl Mesh {
 
     /// C sym (triangle.h:743): decode the neighbor handle at the oriented
     /// edge slot; a NULL slot is never decoded, exactly as in C.
+    /// Invariants (ADR 0002 section 3): null discipline (b) at the
+    /// decode; range (a) - the decoded row id must be live-or-sentinel
+    /// inside the triangle pool's id space - debug_asserted here at the
+    /// chokepoint.
     #[inline]
     pub(crate) fn sym(&self, o: Otri) -> Otri {
-        decode(self.tri_slot(o.tri, o.orient as usize))
+        let n = decode(self.tri_slot(o.tri, o.orient as usize));
+        self.triangles.debug_assert_row_in_space(n.tri);
+        n
     }
 
+    /// The in-place mirror of sym; the same invariants (ADR 0002 section
+    /// 3 a/b) fire here on the decoded handle.
     #[inline]
     pub(crate) fn symself(&self, o: &mut Otri) {
         *o = decode(self.tri_slot(o.tri, o.orient as usize));
+        self.triangles.debug_assert_row_in_space(o.tri);
     }
 
     /// C onext (triangle.h:792): lprev then symself.
+    /// Invariants (ADR 0002 section 3 a/b): ride the symself decode.
     pub(crate) fn onext(&self, o: Otri) -> Otri {
         let mut t = o.lprev();
         self.symself(&mut t);
         t
     }
 
+    /// The in-place mirror of onext; the decode invariants (ADR 0002
+    /// section 3 a/b) ride symself.
     pub(crate) fn onextself(&self, o: &mut Otri) {
         o.lprevself();
         self.symself(o);
     }
 
     /// C oprev (triangle.h:800): sym then lnextself.
+    /// Invariants (ADR 0002 section 3 a/b): ride the sym decode.
     pub(crate) fn oprev(&self, o: Otri) -> Otri {
         let mut t = self.sym(o);
         t.lnextself();
         t
     }
 
+    /// The in-place mirror of oprev; the decode invariants (ADR 0002
+    /// section 3 a/b) ride symself.
     pub(crate) fn oprevself(&self, o: &mut Otri) {
         self.symself(o);
         o.lnextself();
     }
 
     /// C dnext (triangle.h:808): sym then lprevself.
+    /// Invariants (ADR 0002 section 3 a/b): ride the sym decode.
     pub(crate) fn dnext(&self, o: Otri) -> Otri {
         let mut t = self.sym(o);
         t.lprevself();
         t
     }
 
+    /// The in-place mirror of dnext; the decode invariants (ADR 0002
+    /// section 3 a/b) ride symself.
     pub(crate) fn dnextself(&self, o: &mut Otri) {
         self.symself(o);
         o.lprevself();
     }
 
     /// C dprev (triangle.h:816): lnext then symself.
+    /// Invariants (ADR 0002 section 3 a/b): ride the symself decode.
     pub(crate) fn dprev(&self, o: Otri) -> Otri {
         let mut t = o.lnext();
         self.symself(&mut t);
         t
     }
 
+    /// The in-place mirror of dprev; the decode invariants (ADR 0002
+    /// section 3 a/b) ride symself.
     pub(crate) fn dprevself(&self, o: &mut Otri) {
         o.lnextself();
         self.symself(o);
     }
 
     /// C rnext (triangle.h:824): sym, lnextself, symself.
+    /// Invariants (ADR 0002 section 3 a/b): ride the sym decodes.
     pub(crate) fn rnext(&self, o: Otri) -> Otri {
         let mut t = self.sym(o);
         t.lnextself();
@@ -412,6 +536,8 @@ impl Mesh {
         t
     }
 
+    /// The in-place mirror of rnext; the decode invariants (ADR 0002
+    /// section 3 a/b) ride symself.
     pub(crate) fn rnextself(&self, o: &mut Otri) {
         self.symself(o);
         o.lnextself();
@@ -419,6 +545,7 @@ impl Mesh {
     }
 
     /// C rprev (triangle.h:832): sym, lprevself, symself.
+    /// Invariants (ADR 0002 section 3 a/b): ride the sym decodes.
     pub(crate) fn rprev(&self, o: Otri) -> Otri {
         let mut t = self.sym(o);
         t.lprevself();
@@ -426,6 +553,8 @@ impl Mesh {
         t
     }
 
+    /// The in-place mirror of rprev; the decode invariants (ADR 0002
+    /// section 3 a/b) ride symself.
     pub(crate) fn rprevself(&self, o: &mut Otri) {
         self.symself(o);
         o.lprevself();
@@ -435,6 +564,13 @@ impl Mesh {
     /// The three vertex ids of a triangle row (C org/dest/apex,
     /// triangle.h:850-861): slot 3 + plus1mod3[orient], 3 +
     /// minus1mod3[orient], and 3 + orient respectively.
+    ///
+    /// Invariants (ADR 0002 section 3): the vertex-role slots 3..5 are
+    /// fixed by the row shape (c) and debug_asserted below stride; the
+    /// source row is range/null checked (a/b) at the pool seam. The
+    /// returned id is data (the NULL vertex of fresh rows and the D12
+    /// sweepline event pun both ride this slot full-width, exactly like
+    /// C), so no debug check runs on the returned value.
     #[inline]
     pub(crate) fn org(&self, o: Otri) -> u32 {
         self.tri_slot(o.tri, PLUS1MOD3[o.orient as usize] as usize + 3) as u32
@@ -450,16 +586,23 @@ impl Mesh {
         self.tri_slot(o.tri, o.orient as usize + 3) as u32
     }
 
+    /// C setorg: the write mirror of the org slot arithmetic of the
+    /// org/dest/apex family above; invariants (ADR 0002 section 3 b/c)
+    /// ride set_tri_slot (the stored id is data).
     #[inline]
     pub(crate) fn setorg(&mut self, o: Otri, v: u32) {
         self.set_tri_slot(o.tri, PLUS1MOD3[o.orient as usize] as usize + 3, v as u64);
     }
 
+    /// C setdest: the write mirror of the dest slot arithmetic;
+    /// invariants (ADR 0002 section 3 b/c) ride set_tri_slot.
     #[inline]
     pub(crate) fn setdest(&mut self, o: Otri, v: u32) {
         self.set_tri_slot(o.tri, MINUS1MOD3[o.orient as usize] as usize + 3, v as u64);
     }
 
+    /// C setapex: the write mirror of the apex slot arithmetic;
+    /// invariants (ADR 0002 section 3 b/c) ride set_tri_slot.
     #[inline]
     pub(crate) fn setapex(&mut self, o: Otri, v: u32) {
         self.set_tri_slot(o.tri, o.orient as usize + 3, v as u64);
@@ -472,6 +615,8 @@ impl Mesh {
     /// place: check4deadevent (triangle.c:5008). D1 replaces the pointer
     /// with a tagged full-width word (bit 32 above the 32-bit id space);
     /// this reader returns the slot raw, the single sanctioned pun site.
+    /// The pun is data, never decoded: the null discipline (ADR 0002
+    /// section 3 b) does not apply to the raw word, only to decode.
     #[inline]
     pub(crate) fn orgword(&self, o: Otri) -> u64 {
         self.tri_slot(o.tri, PLUS1MOD3[o.orient as usize] as usize + 3)
@@ -480,6 +625,8 @@ impl Mesh {
     /// C: setorg(checktri, (VOID *) newevent) of the event pun, and the
     /// NULL clear of check4deadevent (triangle.c:5388, 5403, 5016): the
     /// full-width store through the same slot as org/setorg.
+    /// Invariants (ADR 0002 section 3 b/c) ride set_tri_slot; the stored
+    /// word is raw data like orgword's.
     #[inline]
     pub(crate) fn setorgword(&mut self, o: Otri, w: u64) {
         self.set_tri_slot(o.tri, PLUS1MOD3[o.orient as usize] as usize + 3, w);
@@ -487,6 +634,10 @@ impl Mesh {
 
     /// C bond (triangle.h:871): bond two triangles together at the
     /// respective oriented handles.
+    ///
+    /// Invariants (ADR 0002 section 3): the orientation range (a) is
+    /// debug_asserted at both encodes; slot-role (c) and row range (a/b)
+    /// ride set_tri_slot.
     pub(crate) fn bond(&mut self, a: Otri, b: Otri) {
         let (ab, ba) = (encode(b), encode(a));
         self.set_tri_slot(a.tri, a.orient as usize, ab);
@@ -496,6 +647,8 @@ impl Mesh {
     /// C dissolve (triangle.h:880): point the oriented edge at outer space
     /// (the stored dummy handle; encode of the sentinel row, orientation 0,
     /// is exactly the C raw m->dummytri slot value).
+    /// The stored word keeps the D3 sentinel row id legal on every
+    /// later decode (ADR 0002 section 3 a).
     pub(crate) fn dissolve(&mut self, o: Otri) {
         let dummy = encode(Otri {
             tri: DUMMY_TRI,
@@ -510,24 +663,33 @@ impl Mesh {
     /// bit 1 is spare in every stored handle exactly like C's pointer-
     /// alignment bit, so this is the literal C mirror on -p rows and
     /// plain rows alike.
+    ///
+    /// Invariant (ADR 0002 section 3 a): bit 1 never reaches a decoded
+    /// row id or orientation (the sdecode mask drops it).
     pub(crate) fn infect(&mut self, o: Otri) {
         let w = self.tri_slot(o.tri, 6);
         self.set_tri_slot(o.tri, 6, w | 2);
     }
 
-    /// C uninfect (triangle.h:879).
+    /// C uninfect (triangle.h:879). Invariant (ADR 0002 section 3 a):
+    /// bit 1 stays out of every decoded handle (see infect).
     pub(crate) fn uninfect(&mut self, o: Otri) {
         let w = self.tri_slot(o.tri, 6);
         self.set_tri_slot(o.tri, 6, w & !2);
     }
 
-    /// C infected (triangle.h:885).
+    /// C infected (triangle.h:885). The bit-1 test is the literal C
+    /// mirror; it never interprets the word as a handle (ADR 0002
+    /// section 3 a).
     #[inline]
     pub(crate) fn infected(&self, o: Otri) -> bool {
         self.tri_slot(o.tri, 6) & 2 != 0
     }
 
     /// C deadtri (triangle.h:908): a dead triangle's slot 1 is NULL.
+    ///
+    /// Invariant (ADR 0002 section 3 d): this is the dead-row detection;
+    /// a dead row's slot 0 stays pool-private (killtri never touches it).
     #[inline]
     pub(crate) fn deadtri(&self, t: u32) -> bool {
         self.tri_slot(t, 1) == 0
@@ -536,6 +698,10 @@ impl Mesh {
     /// C killtri (triangle.h:910): slot 1 to NULL (dead marker; slot 0 stays
     /// the pool-private dead-stack link, never touched here) and slot 3 to
     /// NULL in case a badtriang row points at the triangle.
+    ///
+    /// Invariants (ADR 0002 section 3): dead-stack discipline (d) - slot
+    /// 0 is never written here, so the pool's dead-chain link survives;
+    /// the slots written stay below the stride (c).
     pub(crate) fn killtri(&mut self, t: u32) {
         self.set_tri_slot(t, 1, 0);
         self.set_tri_slot(t, 3, 0);
@@ -546,29 +712,49 @@ impl Mesh {
     // -----------------------------------------------------------------------
 
     /// C spivot (triangle.h:947): the adjoining subsegment at the oriented
-    /// end.
+    /// end. Invariants (ADR 0002 section 3): null (b) at the sdecode; the
+    /// decoded row id inside the subseg pool id space (a), DUMMY_SUB
+    /// included - debug_asserted here at the chokepoint.
     #[inline]
     pub(crate) fn spivot(&self, o: Osub) -> Osub {
-        sdecode(self.sub_slot(o.ss, o.ssorient as usize))
+        let n = sdecode(self.sub_slot(o.ss, o.ssorient as usize));
+        self.subsegs.debug_assert_row_in_space(n.ss);
+        n
     }
 
+    /// The in-place mirror of spivot; the same invariants (ADR 0002
+    /// section 3 a/b) fire here on the decoded handle.
     #[inline]
     pub(crate) fn spivotself(&self, o: &mut Osub) {
         *o = sdecode(self.sub_slot(o.ss, o.ssorient as usize));
+        self.subsegs.debug_assert_row_in_space(o.ss);
     }
 
     /// C snext (triangle.h:958): the next subsegment in sequence.
+    /// Invariants (ADR 0002 section 3): null (b) at the sdecode; the
+    /// decoded row id inside the subseg pool id space (a) - debug_asserted
+    /// here at the chokepoint.
     #[inline]
     pub(crate) fn snext(&self, o: Osub) -> Osub {
-        sdecode(self.sub_slot(o.ss, 1 - o.ssorient as usize))
+        let n = sdecode(self.sub_slot(o.ss, 1 - o.ssorient as usize));
+        self.subsegs.debug_assert_row_in_space(n.ss);
+        n
     }
 
+    /// The in-place mirror of snext; the same invariants (ADR 0002
+    /// section 3 a/b) fire here on the decoded handle.
     #[inline]
     pub(crate) fn snextself(&self, o: &mut Osub) {
         *o = sdecode(self.sub_slot(o.ss, 1 - o.ssorient as usize));
+        self.subsegs.debug_assert_row_in_space(o.ss);
     }
 
     /// The subsegment's own endpoints (C sorg/sdest, triangle.h:969-978).
+    ///
+    /// Invariants (ADR 0002 section 3 c): the vertex-role slots 2..3 are
+    /// fixed by the row shape; range (a) and null (b) on the source row
+    /// at the pool seam. The returned id is data (no check); the NULL id
+    /// marks the badsubsegdealloc dead-row idiom.
     #[inline]
     pub(crate) fn sorg(&self, o: Osub) -> u32 {
         self.sub_slot(o.ss, 2 + o.ssorient as usize) as u32
@@ -579,11 +765,16 @@ impl Mesh {
         self.sub_slot(o.ss, 3 - o.ssorient as usize) as u32
     }
 
+    /// C setsorg: the write mirror of the sorg slot arithmetic; the
+    /// slot-role and row invariants (ADR 0002 section 3 b/c) ride
+    /// set_sub_slot.
     #[inline]
     pub(crate) fn setsorg(&mut self, o: Osub, v: u32) {
         self.set_sub_slot(o.ss, 2 + o.ssorient as usize, v as u64);
     }
 
+    /// C setsdest: the write mirror of the sdest slot arithmetic; the
+    /// invariants (ADR 0002 section 3 b/c) ride set_sub_slot.
     #[inline]
     pub(crate) fn setsdest(&mut self, o: Osub, v: u32) {
         self.set_sub_slot(o.ss, 3 - o.ssorient as usize, v as u64);
@@ -591,6 +782,9 @@ impl Mesh {
 
     /// The enclosing segment's endpoints (C segorg/segdest,
     /// triangle.h:981-990).
+    ///
+    /// Invariants (ADR 0002 section 3 c): the segment-role slots 4..5 are
+    /// fixed by the row shape; range (a) and null (b) at the pool seam.
     #[inline]
     pub(crate) fn segorg(&self, o: Osub) -> u32 {
         self.sub_slot(o.ss, 4 + o.ssorient as usize) as u32
@@ -601,17 +795,24 @@ impl Mesh {
         self.sub_slot(o.ss, 5 - o.ssorient as usize) as u32
     }
 
+    /// C setsegorg: the write mirror of the segorg slot arithmetic; the
+    /// invariants (ADR 0002 section 3 b/c) ride set_sub_slot.
     #[inline]
     pub(crate) fn setsegorg(&mut self, o: Osub, v: u32) {
         self.set_sub_slot(o.ss, 4 + o.ssorient as usize, v as u64);
     }
 
+    /// C setsegdest: the write mirror of the segdest slot arithmetic;
+    /// the invariants (ADR 0002 section 3 b/c) ride set_sub_slot.
     #[inline]
     pub(crate) fn setsegdest(&mut self, o: Osub, v: u32) {
         self.set_sub_slot(o.ss, 5 - o.ssorient as usize, v as u64);
     }
 
     /// C sbond (triangle.h:1004): bond two subsegments at their origins.
+    ///
+    /// Invariants (ADR 0002 section 3): ssorient in range (a) at both
+    /// sencodes; slot-role (c) and row range (a/b) ride set_sub_slot.
     pub(crate) fn sbond(&mut self, a: Osub, b: Osub) {
         let (ab, ba) = (sencode(b), sencode(a));
         self.set_sub_slot(a.ss, a.ssorient as usize, ab);
@@ -620,6 +821,8 @@ impl Mesh {
 
     /// C sdissolve (triangle.h:1011): point at the omnipresent subsegment
     /// (sencode of the sentinel row is exactly the C raw m->dummysub value).
+    /// The stored word keeps the D3 sentinel row id legal on every
+    /// later decode (ADR 0002 section 3 a).
     pub(crate) fn sdissolve(&mut self, o: Osub) {
         let dummy = sencode(Osub {
             ss: DUMMY_SUB,
@@ -629,12 +832,19 @@ impl Mesh {
     }
 
     /// C deadsubseg (triangle.h:1031): a dead subsegment's slot 1 is NULL.
+    ///
+    /// Invariant (ADR 0002 section 3 d): the dead-row detection; a dead
+    /// row's slot 0 stays pool-private (killsubseg never touches it).
     #[inline]
     pub(crate) fn deadsubseg(&self, s: u32) -> bool {
         self.sub_slot(s, 1) == 0
     }
 
     /// C killsubseg (triangle.h:1033): slots 1 and 2 to NULL.
+    ///
+    /// Invariants (ADR 0002 section 3): dead-stack discipline (d) - slot
+    /// 0 is never written here; the slots written stay below the stride
+    /// (c).
     pub(crate) fn killsubseg(&mut self, s: u32) {
         self.set_sub_slot(s, 1, 0);
         self.set_sub_slot(s, 2, 0);
@@ -648,19 +858,31 @@ impl Mesh {
     /// edge. Reading a NULL (unused) subseg slot is a port-side
     /// debug_assert, mirroring that the C flow never pivots an unbonded
     /// side without checking.
+    /// Invariants (ADR 0002 section 3): null discipline (b) at sdecode;
+    /// the decoded row's id inside the subseg pool id space (a), the
+    /// DUMMY_SUB sentinel included - debug_asserted here.
     #[inline]
     pub(crate) fn tspivot(&self, o: Otri) -> Osub {
-        sdecode(self.tri_slot(o.tri, o.orient as usize + 6))
+        let n = sdecode(self.tri_slot(o.tri, o.orient as usize + 6));
+        self.subsegs.debug_assert_row_in_space(n.ss);
+        n
     }
 
     /// C stpivot (triangle.h:1050): the triangle abutting the subsegment's
-    /// side.
+    /// side. Invariants (ADR 0002 section 3): null discipline (b) at the
+    /// decode; the decoded row's id inside the triangle pool id space
+    /// (a), the dummy row included - debug_asserted here.
     #[inline]
     pub(crate) fn stpivot(&self, o: Osub) -> Otri {
-        decode(self.sub_slot(o.ss, o.ssorient as usize + 6))
+        let n = decode(self.sub_slot(o.ss, o.ssorient as usize + 6));
+        self.triangles.debug_assert_row_in_space(n.tri);
+        n
     }
 
     /// C tsbond (triangle.h:1056): bond a triangle edge to a subsegment side.
+    ///
+    /// Invariants (ADR 0002 section 3): orientation ranges (a) at the
+    /// encodes; slot-role (c) and row range (a/b) ride both set slots.
     pub(crate) fn tsbond(&mut self, o: Otri, s: Osub) {
         self.set_tri_slot(o.tri, o.orient as usize + 6, sencode(s));
         self.set_sub_slot(s.ss, s.ssorient as usize + 6, encode(o));
@@ -668,6 +890,8 @@ impl Mesh {
 
     /// C tsdissolve (triangle.h:1062): dissolve the bond from the triangle
     /// side (tri slot back to the omnipresent subsegment).
+    /// The stored word keeps the D3 sentinel row id legal on every
+    /// later decode (ADR 0002 section 3 a).
     pub(crate) fn tsdissolve(&mut self, o: Otri) {
         let dummy = sencode(Osub {
             ss: DUMMY_SUB,
@@ -678,6 +902,8 @@ impl Mesh {
 
     /// C stdissolve (triangle.h:1067): dissolve the bond from the subsegment
     /// side (ss slot back to outer space).
+    /// The stored word keeps the D3 sentinel row id legal on every
+    /// later decode (ADR 0002 section 3 a).
     pub(crate) fn stdissolve(&mut self, o: Osub) {
         let dummy = encode(Otri {
             tri: DUMMY_TRI,
@@ -695,12 +921,20 @@ impl Mesh {
     /// Allocate a triangle row: C poolalloc(&m->triangles) at every triangle
     /// allocation site; the exact-LIFO pop and the fresh frontier live in
     /// the pool (ADR 0003 section 3). Only this chokepoint calls it.
+    ///
+    /// Invariants (ADR 0002 section 3): the null and sentinel ids are
+    /// never handed out (b, D3; debug-pinned in the pool); the dead pop
+    /// keeps reuse exact-LIFO (e).
     pub(crate) fn tri_alloc(&mut self) -> Result<u32, Oom> {
         self.triangles.alloc()
     }
 
     /// Deallocate a triangle row: the C triangledealloc body
     /// (triangle.c:1196-1205) - killtri, then push.
+    ///
+    /// Invariants (ADR 0002 section 3): dead-stack discipline (d) - the
+    /// push makes slot 0 pool-private; the reuse order stays exact-LIFO
+    /// (e); the integrity walk runs at the push (pool.rs, debug only).
     pub(crate) fn tri_dealloc(&mut self, t: u32) {
         self.killtri(t);
         self.triangles.dealloc(t);
@@ -708,12 +942,16 @@ impl Mesh {
 
     /// Allocate a subsegment row: C poolalloc(&m->subsegs) at every makesubseg
     /// / subseg allocation site.
+    ///
+    /// Invariants (ADR 0002 section 3): as tri_alloc (b, D3, e).
     pub(crate) fn sub_alloc(&mut self) -> Result<u32, Oom> {
         self.subsegs.alloc()
     }
 
     /// Deallocate a subsegment row: the C subsegdealloc body
     /// (triangle.c:1229-1241) - killsubseg, then push.
+    ///
+    /// Invariants (ADR 0002 section 3): as tri_dealloc (d, e).
     pub(crate) fn sub_dealloc(&mut self, s: u32) {
         self.killsubseg(s);
         self.subsegs.dealloc(s);
@@ -721,6 +959,10 @@ impl Mesh {
 
     /// Allocate a vertex row: C poolalloc(&m->vertices) at every vertex
     /// allocation site.
+    ///
+    /// Invariants (ADR 0002 section 3): the null id is never handed out
+    /// (b); the vertex pool has no sentinel row (D3) and the dead pop
+    /// keeps reuse exact-LIFO (e).
     pub(crate) fn vx_alloc(&mut self) -> Result<u32, Oom> {
         self.vertices.alloc()
     }
@@ -728,6 +970,10 @@ impl Mesh {
     /// Deallocate a vertex row: the C vertexdealloc body
     /// (triangle.c:1262-1271) - the type overlay is set to DEADVERTEX first
     /// (dead detection), then the push.
+    ///
+    /// Invariants (ADR 0002 section 3): the DEADVERTEX overlay marks the
+    /// row for vertextraverse's skip (the data-model side of d); slot 0
+    /// becomes pool-private at the push; reuse stays exact-LIFO (e).
     pub(crate) fn vx_dealloc(&mut self, v: u32) {
         self.vx_set_type(v, DEADVERTEX);
         self.vertices.dealloc(v);
@@ -746,23 +992,37 @@ impl Mesh {
     /// restarts (triangle.c:3130, 3239) and enforcequality's checkquality
     /// stage init (triangle.c:7565-7566). (This doc carried a stale 3160
     /// anchor from before the c-anchor audit; re-measured for refine.rs.)
+    ///
+    /// Invariants (ADR 0002 section 3 d): the dead chain is dropped; the
+    /// debug integrity walk runs on the emptied chain.
     pub(crate) fn flip_restart(&mut self) {
         self.flipstackers.restart();
     }
 
     /// C: m->lastflip = (struct flipstacker *) poolalloc(&m->flipstackers):
     /// the fresh flipstacker row id (INTERIOR hole: D4).
+    ///
+    /// Invariants (ADR 0002 section 3): the null id is never handed out
+    /// (b); the dead pop keeps reuse exact-LIFO (e); the integrity walk
+    /// runs at the pop (d, debug only).
     pub(crate) fn flip_alloc(&mut self) -> Result<u32, Oom> {
         self.flipstackers.alloc()
     }
 
     /// C: m->lastflip->flippedtri: the stored encode()d triangle handle
     /// (word 0); the caller decodes through handles.rs.
+    ///
+    /// Invariants (ADR 0002 section 3): slot-role (c) at the pool seam
+    /// (2-word row); the caller's decode carries the null (b) and
+    /// orientation (a) checks; the row id is checked at its next storage
+    /// access.
     pub(crate) fn flip_flippedtri(&self, id: u32) -> u64 {
         self.flipstackers.word(id, 0)
     }
 
     /// C: m->lastflip->flippedtri = encode(horiz) (triangle.c:3162).
+    /// Invariants (ADR 0002 section 3 b/c) ride set_word; orientation (a)
+    /// at the encode.
     pub(crate) fn set_flip_flippedtri(&mut self, id: u32, w: u64) {
         self.flipstackers.set_word(id, 0, w);
     }
@@ -772,11 +1032,15 @@ impl Mesh {
     /// port mirror of C's `(struct flipstacker *) &insertvertex` marker
     /// (triangle.c:3163/3770) is the row id that can never be handed out
     /// (transform.rs::INSERTVERTEX_MARKER).
+    ///
+    /// Invariant (ADR 0002 section 3 b): the marker id is data on this
+    /// link, never a row; the null id 0 is the C NULL pointer.
     pub(crate) fn flip_prevflip(&self, id: u32) -> u32 {
         self.flipstackers.word(id, 1) as u32
     }
 
     /// C: newflip->prevflip = m->lastflip (triangle.c:3392).
+    /// Invariants (ADR 0002 section 3 b/c) ride set_word.
     pub(crate) fn set_flip_prevflip(&mut self, id: u32, prev: u32) {
         self.flipstackers.set_word(id, 1, prev as u64);
     }
@@ -791,22 +1055,32 @@ impl Mesh {
 
     /// C: poolalloc(&m->badsubsegs) at insertvertex's encroachment
     /// enqueue (triangle.c:2975): the fresh badsubseg row id.
+    ///
+    /// Invariants (ADR 0002 section 3): the null id is never handed out
+    /// (b); LIFO reuse (e); the dead-chain walk runs at the pop (d,
+    /// debug only).
     pub(crate) fn bad_subseg_alloc(&mut self) -> Result<u32, Oom> {
         self.badsubsegs.alloc()
     }
 
     /// C: encroached->encsubseg = sencode(brokensubseg) (triangle.c:2976).
+    /// Invariants (ADR 0002 section 3 b/c) ride set_word; ssorient in
+    /// range (a) at the caller's sencode.
     pub(crate) fn set_bad_sub_seg_enc(&mut self, id: u32, encsubseg: u64) {
         self.badsubsegs.set_word(id, 0, encsubseg);
     }
 
     /// C: sorg(brokensubseg, encroached->subsegorg) (triangle.c:2977): the
     /// vertex id of the subsegment's origin (D1: ids replace pointers).
+    /// Invariants (ADR 0002 section 3 b/c) ride set_word; the stored id
+    /// is data. The NULL store here is the badsubsegdealloc dead-row
+    /// idiom (mesh.rs; the data-model side of invariant d).
     pub(crate) fn set_bad_sub_seg_org(&mut self, id: u32, org: u32) {
         self.badsubsegs.set_word(id, 1, org as u64);
     }
 
     /// C: sdest(brokensubseg, encroached->subsegdest) (triangle.c:2978).
+    /// Invariants (ADR 0002 section 3 b/c) ride set_word.
     pub(crate) fn set_bad_sub_seg_dest(&mut self, id: u32, dest: u32) {
         self.badsubsegs.set_word(id, 2, dest as u64);
     }
@@ -814,6 +1088,10 @@ impl Mesh {
     /// C: encroached->encsubseg, read by splitencsegs' sdecode
     /// (triangle.c:7208); promoted from the test-only readers when
     /// refine.rs landed (the module tests still pin the enqueue).
+    ///
+    /// Invariants (ADR 0002 section 3): slot-role (c) at the pool seam
+    /// (3-word row); the caller's sdecode carries null (b) and the
+    /// decoded subseg row is checked at its next storage access (a).
     pub(crate) fn bad_sub_seg_enc(&self, id: u32) -> u64 {
         self.badsubsegs.word(id, 0)
     }
@@ -821,24 +1099,31 @@ impl Mesh {
     /// C: encroached->subsegorg, read by splitencsegs' identity check
     /// (triangle.c:7216); the NULL mark of the badsubsegdealloc idiom
     /// (triangle.c:1302) lives in this word.
+    /// Invariant (ADR 0002 section 3 b/c): the NULL read here is the
+    /// dead-row skip of badsubsegtraverse (the data-model side of d);
+    /// the word access rides the pool seam.
     pub(crate) fn bad_sub_seg_org(&self, id: u32) -> u32 {
         self.badsubsegs.word(id, 1) as u32
     }
 
     /// C: encroached->subsegdest, read by splitencsegs' identity check
     /// (triangle.c:7216).
+    /// Invariants (ADR 0002 section 3 b/c) ride the pool seam.
     pub(crate) fn bad_sub_seg_dest(&self, id: u32) -> u32 {
         self.badsubsegs.word(id, 2) as u32
     }
 
     /// C: poolrestart(&m->badsubsegs) (triangle.c:7533-7534,
     /// enforcequality's badsubseg pool init).
+    /// Invariants (ADR 0002 section 3 d): the dead chain is dropped; the
+    /// debug integrity walk runs on the emptied chain.
     pub(crate) fn bad_sub_seg_restart(&mut self) {
         self.badsubsegs.restart();
     }
 
     /// C: poolrestart(&m->badtriangles) (triangle.c:7555-7556,
     /// enforcequality's badtriang pool init).
+    /// Invariants (ADR 0002 section 3 d): as bad_sub_seg_restart.
     pub(crate) fn bad_tri_restart(&mut self) {
         self.badtriangles.restart();
     }
@@ -846,6 +1131,10 @@ impl Mesh {
     /// C: pooldealloc(&m->badtriangles) in enforcequality's else arm
     /// (triangle.c:7586; C defines no badtridealloc wrapper for this
     /// site - the queue empties by dequeue, so no dead-row mark).
+    ///
+    /// Invariants (ADR 0002 section 3): the push makes slot 0
+    /// pool-private (d); reuse stays exact-LIFO (e); the integrity walk
+    /// runs at the push (debug only).
     pub(crate) fn bad_tri_dealloc(&mut self, id: u32) {
         self.badtriangles.dealloc(id);
     }
@@ -866,12 +1155,18 @@ impl Mesh {
 
     /// C: poolalloc(&m->badtriangles) at enqueuebadtri (triangle.c:1820):
     /// the fresh badtriang row id.
+    ///
+    /// Invariants (ADR 0002 section 3): the null id is never handed out
+    /// (b); LIFO reuse (e); the dead-chain walk runs at the pop (d,
+    /// debug only).
     pub(crate) fn bad_tri_alloc(&mut self) -> Result<u32, Oom> {
         self.badtriangles.alloc()
     }
 
     /// C: newbad->poortri = encode(*enqtri) (triangle.c:1821): the packed
     /// handle word of the offending triangle (D1).
+    /// Invariants (ADR 0002 section 3 b/c) ride set_word; orientation (a)
+    /// at the encode.
     pub(crate) fn set_bad_tri_poortri(&mut self, id: u32, poortri: u64) {
         self.badtriangles.set_word(id, 0, poortri);
     }
@@ -879,62 +1174,87 @@ impl Mesh {
     /// C: newbad->key = minedge (triangle.c:1822): the queue key (the
     /// square of the shortest edge length; the triangle.h comment says
     /// "cos^2 of smallest (apical) angle", the code stores minedge).
+    /// Invariants (ADR 0002 section 3 b/c) ride set_word (the f64 bits
+    /// are data).
     pub(crate) fn set_bad_tri_key(&mut self, id: u32, key: f64) {
         self.badtriangles.set_word(id, 1, key.to_bits());
     }
 
     /// C: newbad->triangapex = enqapex (triangle.c:1823; the C writes
     /// apex before org and dest, mirrored here and in the following two).
+    /// Invariants (ADR 0002 section 3 b/c) ride set_word; the stored id
+    /// is data.
     pub(crate) fn set_bad_tri_apex(&mut self, id: u32, apex: u32) {
         self.badtriangles.set_word(id, 4, apex as u64);
     }
 
     /// C: newbad->triangorg = enqorg (triangle.c:1824).
+    /// Invariants (ADR 0002 section 3 b/c) ride set_word; the stored id
+    /// is data.
     pub(crate) fn set_bad_tri_org(&mut self, id: u32, org: u32) {
         self.badtriangles.set_word(id, 2, org as u64);
     }
 
     /// C: newbad->triangdest = enqdest (triangle.c:1825).
+    /// Invariants (ADR 0002 section 3 b/c) ride set_word; the stored id
+    /// is data.
     pub(crate) fn set_bad_tri_dest(&mut self, id: u32, dest: u32) {
         self.badtriangles.set_word(id, 3, dest as u64);
     }
 
     /// C: badtri->nexttriang = NULL / the tail-link write
     /// (triangle.c:1791, 1814): the queue link.
+    /// Invariants (ADR 0002 section 3 b/c) ride set_word; the null id 0
+    /// is the queue end, exactly C's NULL next pointer.
     pub(crate) fn set_bad_tri_next(&mut self, id: u32, next: u32) {
         self.badtriangles.set_word(id, 5, next as u64);
     }
 
     /// C: result->poortri reads (dequeuebadtriang's drainers and the
     /// quality module's tests; triangle.c:1846-1860 reads the links).
+    ///
+    /// Invariants (ADR 0002 section 3): slot-role (c) at the pool seam
+    /// (6-word row); the caller's decode carries null (b) and
+    /// orientation (a); the row id is checked at its next storage
+    /// access.
     pub(crate) fn bad_tri_poortri(&self, id: u32) -> u64 {
         self.badtriangles.word(id, 0)
     }
 
     /// C: badtri->key reads (the queue key arithmetic of enqueuebadtriang,
     /// triangle.c:1721-1751).
+    /// Invariants (ADR 0002 section 3 b/c) ride the pool seam; the f64
+    /// bits are data.
     pub(crate) fn bad_tri_key(&self, id: u32) -> f64 {
         f64::from_bits(self.badtriangles.word(id, 1))
     }
 
     /// C: badtri->triangapex reads (the apex for the split-site
     /// circumcenter test; triangle.c:1846ff drainers).
+    /// Invariants (ADR 0002 section 3 b/c) ride the pool seam; the
+    /// returned id is data.
     pub(crate) fn bad_tri_apex(&self, id: u32) -> u32 {
         self.badtriangles.word(id, 4) as u32
     }
 
     /// C: badtri->triangorg reads.
+    /// Invariants (ADR 0002 section 3 b/c) ride the pool seam; the
+    /// returned id is data.
     pub(crate) fn bad_tri_org(&self, id: u32) -> u32 {
         self.badtriangles.word(id, 2) as u32
     }
 
     /// C: badtri->triangdest reads.
+    /// Invariants (ADR 0002 section 3 b/c) ride the pool seam; the
+    /// returned id is data.
     pub(crate) fn bad_tri_dest(&self, id: u32) -> u32 {
         self.badtriangles.word(id, 3) as u32
     }
 
     /// C: badtri->nexttriang reads (dequeuebadtriang's pop,
     /// triangle.c:1852).
+    /// Invariants (ADR 0002 section 3 b/c) ride the pool seam; the null
+    /// id 0 is the queue end (C NULL).
     pub(crate) fn bad_tri_next(&self, id: u32) -> u32 {
         self.badtriangles.word(id, 5) as u32
     }
@@ -950,6 +1270,10 @@ impl Mesh {
 
     /// C: poolalloc(&m->splaynodes) (triangle.c:5139): the fresh splaynode
     /// row id.
+    ///
+    /// Invariants (ADR 0002 section 3): the null id is never handed out
+    /// (b); LIFO reuse (e); the dead-chain walk runs at the pop (d,
+    /// debug only).
     pub(crate) fn splay_alloc(&mut self) -> Result<u32, Oom> {
         self.splaynodes.alloc()
     }
@@ -960,48 +1284,69 @@ impl Mesh {
     /// pool is eagerly inited by Mesh::new (identical geometry) and the
     /// deinit is a no-op, keeping maxitems readable after the run exactly
     /// like C's stale-pool statistics reads (triangle_api.c).
+    ///
+    /// Invariants (ADR 0002 section 3): the push makes slot 0
+    /// pool-private (d); reuse stays exact-LIFO (e); the integrity walk
+    /// runs at the push (debug only).
     pub(crate) fn splay_dealloc(&mut self, id: u32) {
         self.splaynodes.dealloc(id);
     }
 
     /// C: splaytree->keyedge (triangle.h:324): the stored encode()d front
     /// handle at word 0; the caller decodes through handles.rs.
+    ///
+    /// Invariants (ADR 0002 section 3): null (b) at the decode; the
+    /// decoded row id inside the triangle pool id space (a), the dummy
+    /// row included - debug_asserted here at the chokepoint.
     pub(crate) fn splay_keyedge(&self, id: u32) -> Otri {
-        decode(self.splaynodes.word(id, 0))
+        let n = decode(self.splaynodes.word(id, 0));
+        self.triangles.debug_assert_row_in_space(n.tri);
+        n
     }
 
     /// C: newsplaynode->keyedge = *newkey (triangle.c:5140).
+    /// Invariants (ADR 0002 section 3 b/c) ride set_word; orientation (a)
+    /// at the encode.
     pub(crate) fn set_splay_keyedge(&mut self, id: u32, key: Otri) {
         self.splaynodes.set_word(id, 0, encode(key));
     }
 
     /// C: splaytree->keydest (triangle.h:325): the vertex id (D1) of the
     /// keyedge destination, at word 1.
+    /// Invariants (ADR 0002 section 3 b/c) ride the pool seam (5-word
+    /// row); the returned id is data.
     pub(crate) fn splay_keydest(&self, id: u32) -> u32 {
         self.splaynodes.word(id, 1) as u32
     }
 
     /// C: newsplaynode->keydest = dest(*newkey) (triangle.c:5141).
+    /// Invariants (ADR 0002 section 3 b/c) ride set_word.
     pub(crate) fn set_splay_keydest(&mut self, id: u32, keydest: u32) {
         self.splaynodes.set_word(id, 1, keydest as u64);
     }
 
     /// C: splaytree->lchild (word 2; the null id 0 is C NULL).
+    /// Invariants (ADR 0002 section 3 b/c) ride the pool seam; the null
+    /// id 0 is the C NULL child.
     pub(crate) fn splay_lchild(&self, id: u32) -> u32 {
         self.splaynodes.word(id, 2) as u32
     }
 
     /// C: splaytree->lchild = ... (the splay rotations).
+    /// Invariants (ADR 0002 section 3 b/c) ride set_word.
     pub(crate) fn set_splay_lchild(&mut self, id: u32, child: u32) {
         self.splaynodes.set_word(id, 2, child as u64);
     }
 
     /// C: splaytree->rchild (word 3; the null id 0 is C NULL).
+    /// Invariants (ADR 0002 section 3 b/c) ride the pool seam; the null
+    /// id 0 is the C NULL child.
     pub(crate) fn splay_rchild(&self, id: u32) -> u32 {
         self.splaynodes.word(id, 3) as u32
     }
 
     /// C: splaytree->rchild = ... (the splay rotations).
+    /// Invariants (ADR 0002 section 3 b/c) ride set_word.
     pub(crate) fn set_splay_rchild(&mut self, id: u32, child: u32) {
         self.splaynodes.set_word(id, 3, child as u64);
     }
@@ -1019,6 +1364,10 @@ impl Mesh {
     /// *deadtriangle = hulltri.tri (infecthull, plague, regionplague,
     /// carveholes). One virus row stores one infected triangle's row id
     /// in word 0 (D1: the id replaces the stored triangle*).
+    ///
+    /// Invariants (ADR 0002 section 3): the alloc never hands out the
+    /// null id (b); the stored triangle id is data; the dead-chain walk
+    /// runs at the alloc (d, debug only).
     pub(crate) fn viri_push_tri(&mut self, tri: u32) -> Result<(), Oom> {
         let row = self.viri.alloc()?;
         self.viri.set_word(row, 0, tri as u64);
@@ -1026,11 +1375,15 @@ impl Mesh {
     }
 
     /// Read the triangle stored in virus row `row` (C: *virusloop).
+    /// Invariants (ADR 0002 section 3 b/c) ride the pool seam; the
+    /// stored id is data.
     pub(crate) fn viri_tri(&self, row: u32) -> u32 {
         self.viri.word(row, 0) as u32
     }
 
     /// The traversal cursor for the virus pool (C: traversalinit).
+    /// Invariant (ADR 0002 section 3 b): the null row is never yielded
+    /// (debug-pinned at the pool seam).
     pub(crate) fn viri_traversal(&self) -> crate::pool::Traversal {
         self.viri.traversal()
     }
@@ -1041,12 +1394,16 @@ impl Mesh {
     /// mid-traversal extends the loop exactly like C's traverse
     /// (triangle.c:970) - the spreading phases of plague/regionplague
     /// rely on that.
+    /// Invariant (ADR 0002 section 3 b): the null row is never yielded
+    /// (debug-pinned at the pool seam).
     pub(crate) fn viri_traverse(&self, t: &mut crate::pool::Traversal) -> Option<u32> {
         self.viri.traverse_next(t)
     }
 
     /// C: poolrestart(&m->viri) (the plague/regionplague tails empty the
     /// virus pool).
+    /// Invariants (ADR 0002 section 3 d): the dead chain is dropped; the
+    /// debug integrity walk runs on the emptied chain.
     pub(crate) fn viri_restart(&mut self) {
         self.viri.restart();
     }
@@ -1055,6 +1412,7 @@ impl Mesh {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::handles::NULL;
     use crate::mesh::Mesh;
     use crate::options::Behavior;
 
@@ -1441,7 +1799,14 @@ mod tests {
         let live0 = m.splaynodes.live_count();
         let n = m.splay_alloc().expect("splaynode alloc");
         assert_eq!(m.splaynodes.live_count(), live0 + 1);
-        let key = Otri { tri: 7, orient: 2 };
+        // R1: the keyedge handle must name a materialized triangle row
+        // (the decode-site range check fires on fabricated ids), so the
+        // roundtrip allocates a real row instead of inventing one.
+        let keytri = m.tri_alloc().expect("tri row for the key");
+        let key = Otri {
+            tri: keytri,
+            orient: 2,
+        };
         m.set_splay_keyedge(n, key);
         m.set_splay_keydest(n, 9);
         m.set_splay_lchild(n, 0);
@@ -1460,5 +1825,89 @@ mod tests {
         assert_eq!(m.splaynodes.live_count(), live0);
         // the dead row comes back first (C poolalloc's LIFO dead stack)
         assert_eq!(m.splay_alloc().expect("realloc"), n);
+    }
+
+    #[test]
+    #[should_panic(expected = "outside the pool id space")]
+    fn sym_over_a_corrupted_neighbor_row_id_fires_the_range_invariant() {
+        // Invariant (ADR 0002 section 3 a): a stored handle word whose row
+        // id lies beyond the pool's id space is a corrupt slot; the
+        // decode-site check fires before the handle can be used.
+        let mut m = mesh(false);
+        let t = m.tri_alloc().expect("alloc");
+        m.set_tri_slot(t, 0, 0x7FFF_FFFFu64 << 2);
+        let _ = m.sym(Otri { tri: t, orient: 0 });
+    }
+
+    #[test]
+    #[should_panic(expected = "tri slot")]
+    fn an_out_of_stride_tri_slot_fires_the_slot_role_invariant() {
+        // Invariant (ADR 0002 section 3 c): slot index below stride.
+        let m = mesh(false);
+        let _ = m.tri_slot(DUMMY_TRI, m.tri_shape.stride);
+    }
+
+    #[test]
+    #[should_panic(expected = "never a live-or-sentinel row")]
+    fn decoding_a_handle_that_names_the_null_row_fires_the_null_discipline() {
+        // Invariant (ADR 0002 section 3 a/b): a stored word packing only
+        // orientation bits decodes to the null row - a handle no legal
+        // encode produces, because C never decodes a NULL slot.
+        let mut m = mesh(false);
+        let t = m.tri_alloc().expect("alloc");
+        m.set_tri_slot(t, 0, 1); // orientation bits only: decodes to row 0
+        let _ = m.sym(Otri { tri: t, orient: 0 });
+    }
+
+    #[test]
+    fn dead_chain_integrity_over_tri_push_pop_with_reuse() {
+        // R1: dead-stack discipline (d) + exact LIFO (e) at the mesh seam:
+        // tri_dealloc killtri-marks then pushes, tri_alloc pops the head,
+        // and the debug double-walk validates the chain after every
+        // operation of the sequence (dead reuse included).
+        let mut m = mesh(false);
+        let t0 = m.tri_alloc().expect("alloc");
+        let t1 = m.tri_alloc().expect("alloc");
+        let t2 = m.tri_alloc().expect("alloc");
+        assert_eq!((t0, t1, t2), (2, 3, 4));
+        m.tri_dealloc(t1);
+        m.tri_dealloc(t0);
+        assert_eq!(m.tri_alloc().expect("realloc"), t0, "LIFO pops the head");
+        m.tri_dealloc(t2);
+        assert!(m.deadtri(t2));
+        assert_eq!(m.tri_alloc().expect("realloc"), t2);
+        assert_eq!(
+            m.tri_alloc().expect("realloc"),
+            t1,
+            "the deep dead row pops next"
+        );
+        assert_eq!(m.tri_alloc().expect("fresh"), 5, "fresh past the reuse");
+        assert_eq!(m.triangles.live_count(), 4);
+        assert_eq!(m.triangles.high_water(), 4);
+    }
+
+    #[test]
+    fn mesh_traversals_exclude_the_reserved_rows() {
+        // D3 discipline: the sentinel rows are never a traversal yield;
+        // the null row neither (debug-pinned at the pool seam).
+        let mut m = mesh(true);
+        let t = m.maketriangle(true, false).expect("alloc");
+        let s = m.makesubseg().expect("alloc");
+        let v = m.vx_alloc().expect("alloc");
+        let mut tt = m.triangles.traversal();
+        while let Some(id) = m.triangletraverse(&mut tt) {
+            assert_ne!(id, NULL);
+            assert_ne!(id, DUMMY_TRI);
+        }
+        let mut st = m.subsegs.traversal();
+        while let Some(id) = m.subsegtraverse(&mut st) {
+            assert_ne!(id, NULL);
+            assert_ne!(id, DUMMY_SUB);
+        }
+        let mut vt = m.vertices.traversal();
+        while let Some(id) = m.vertextraverse(&mut vt) {
+            assert_ne!(id, NULL);
+        }
+        assert!(t.tri > DUMMY_TRI && s.ss > DUMMY_SUB && v > NULL);
     }
 }

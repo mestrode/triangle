@@ -6,6 +6,14 @@
 //! here (the fields are pub(crate) for this module, and nothing outside
 //! slots.rs calls the pools' word/alloc/dealloc - review-enforced).
 //!
+//! R1 accessor-invariant rung (ADR 0002 section 3): the init functions
+//! here are the only builders of the row-shape role tables (invariant
+//! c), and each debug_asserts that its computed shape lands inside the
+//! row it sizes; the constructors reserve the D3 sentinel rows; the
+//! traversal mirrors skip dead rows (d) and inherit the reserved-row
+//! exclusion from the pool seam. Debug builds only; release compiles
+//! no check.
+//!
 //! Landed in this PR: Mesh (pools, row shapes, counters),
 //! Mesh::new (the triangleinit + poolzero + pool-init sequence collapsed
 //! into construction, D11), initializevertexpool, initializetrisubpools,
@@ -415,6 +423,10 @@ impl Mesh {
     /// first-block hint. Int and word indices are computed on the pinned
     /// 64-bit platform (sizeof(REAL) = 8, sizeof(int) = 4) exactly like C:
     /// mark_int is vertexmarkindex in int units, vertexsize in bytes.
+    ///
+    /// Invariant (ADR 0002 section 3 c): the computed overlays and the
+    /// vertex2tri word are debug_asserted inside the stride this function
+    /// computes (the role table is built only here).
     pub(crate) fn initializevertexpool(&mut self, poly: bool) -> Result<(), Oom> {
         let mark_int = ((self.mesh_dim + self.nextras) * 8 + 3) / 4;
         let mut vertexsize = (mark_int + 2) * 4;
@@ -440,6 +452,23 @@ impl Mesh {
             },
             v2tri,
         };
+        // Slot-role invariant (ADR 0002 section 3 c): the role table this
+        // init computes must land inside the row the same formulas size -
+        // the debug_asserts pin the init formulas themselves.
+        debug_assert!(
+            self.vertex_shape.mark.word < self.vertex_shape.stride,
+            "vertex marker overlay outside the row (slot-role invariant)"
+        );
+        debug_assert!(
+            self.vertex_shape.vtype.word < self.vertex_shape.stride,
+            "vertex type overlay outside the row (slot-role invariant)"
+        );
+        if let Some(slot) = self.vertex_shape.v2tri {
+            debug_assert!(
+                slot < self.vertex_shape.stride,
+                "vertex2tri word outside the row (slot-role invariant)"
+            );
+        }
         let first = if self.invertices > VERTEXPERBLOCK {
             self.invertices
         } else {
@@ -460,6 +489,10 @@ impl Mesh {
     /// exactly C's numbers on the pinned platform), initializes the
     /// triangle and (with -p) subseg pools with C's first-block hints, and
     /// creates the sentinels via dummyinit.
+    ///
+    /// Invariant (ADR 0002 section 3 c): the computed role indices are
+    /// debug_asserted inside the stride this function computes (the role
+    /// table is built only here).
     pub(crate) fn initializetrisubpools(
         &mut self,
         order: i32,
@@ -508,6 +541,30 @@ impl Mesh {
                 None
             },
         };
+        // Slot-role invariant (ADR 0002 section 3 c): the role indices
+        // must land inside the row they size - the debug_asserts pin the
+        // init formulas. The area-bound word only exists under vararea
+        // (C's own trisize formula), so its check is gated the same way.
+        debug_assert!(
+            self.tri_shape.highorderindex <= self.tri_shape.elemattribindex,
+            "highorderindex past the first attribute word (slot-role invariant)"
+        );
+        debug_assert!(
+            self.tri_shape.elemattribindex + self.eextras as usize <= self.tri_shape.stride,
+            "element attributes past the row end (slot-role invariant)"
+        );
+        if vararea {
+            debug_assert!(
+                self.tri_shape.areaboundindex < self.tri_shape.stride,
+                "area-bound word outside the row (slot-role invariant)"
+            );
+        }
+        if let Some(number) = self.tri_shape.numberindex {
+            debug_assert!(
+                number.word < self.tri_shape.stride,
+                "-n numbering overlay outside the row (slot-role invariant)"
+            );
+        }
         // C: first block max(2 * invertices - 2, TRIPERBLOCK)
         let first = {
             let two_in = 2 * self.invertices - 2;
@@ -538,6 +595,10 @@ impl Mesh {
     /// the alignment no port needs). Calling this twice is C-visible: the
     /// C function relies on being called once at init; the port
     /// idempotently rewrites the same words.
+    ///
+    /// Invariant (ADR 0002 section 3 a, D3): every stored word here is a
+    /// legal decode target (the sentinels self-bond; every dissolve and
+    /// sdissolve site later stores exactly these words).
     pub(crate) fn dummyinit(&mut self) {
         // encode of the sentinel row, orientation 0: the exact value the C
         // macros store for m->dummytri (the aligned raw pointer)
@@ -583,6 +644,11 @@ impl Mesh {
     /// orientation zero, its three edges bonded to outer space (and, with
     /// -p, its three sides to the omnipresent subsegment), three NULL
     /// vertices, element attributes zeroed, areabound -1 under -a.
+    ///
+    /// Invariants (ADR 0002 section 3): the fresh row is legal on every
+    /// decode (a: the dummy handles name the reserved sentinel rows);
+    /// the NULL vertex slots are data, never decoded (b); the
+    /// initialization writes stay below the stride (c).
     pub(crate) fn maketriangle(&mut self, usesegments: bool, vararea: bool) -> Result<Otri, Oom> {
         let tri = self.tri_alloc()?;
         let dummy_tri = encode(Otri {
@@ -617,6 +683,10 @@ impl Mesh {
     /// orientation zero, both ends bonded to the omnipresent subsegment,
     /// four NULL vertices, two adjoining triangles bonded to outer space,
     /// boundary marker 0.
+    ///
+    /// Invariants (ADR 0002 section 3): as maketriangle (a, b, c) - the
+    /// fresh row is legal on every decode, the NULL vertex slots are
+    /// data, and the writes stay below the stride.
     pub(crate) fn makesubseg(&mut self) -> Result<Osub, Oom> {
         let ss = self.sub_alloc()?;
         let dummy_sub = sencode(Osub {
@@ -645,6 +715,11 @@ impl Mesh {
     /// rows come back like every allocated vertex); the end-of-pool NULL
     /// of C's traverse is the None here. Pool traversal itself walks dead
     /// rows (D3), so this skip loop is the whole of C's do-while.
+    ///
+    /// Invariants (ADR 0002 section 3): dead rows are skipped by the
+    /// DEADVERTEX overlay (d); the null row is never yielded (b,
+    /// debug-pinned at the pool seam); the vertex pool has no sentinel
+    /// row (D3).
     pub(crate) fn vertextraverse(&self, t: &mut crate::pool::Traversal) -> Option<u32> {
         loop {
             let newvertex = self.vertices.traverse_next(t)?;
@@ -659,6 +734,10 @@ impl Mesh {
     /// killtri pattern through the chokepoint); the end-of-pool NULL of
     /// C's traverse is the None here. Pool traversal walks dead rows
     /// (D3), so this skip loop is the whole of C's do-while.
+    ///
+    /// Invariants (ADR 0002 section 3): dead rows skipped (d); the
+    /// reserved sentinel row is excluded by the pool walk (D3,
+    /// debug-pinned); the null row is never yielded (b).
     pub(crate) fn triangletraverse(&self, t: &mut crate::pool::Traversal) -> Option<u32> {
         loop {
             let newtri = self.triangles.traverse_next(t)?;
@@ -670,6 +749,7 @@ impl Mesh {
 
     /// C: subsegtraverse (triangle.c:1243-1261). Same walk over the
     /// subsegment pool, skipping dead rows (ss[1] == NULL, killsubseg).
+    /// Invariants (ADR 0002 section 3): as triangletraverse (d, D3, b).
     pub(crate) fn subsegtraverse(&self, t: &mut crate::pool::Traversal) -> Option<u32> {
         loop {
             let newsub = self.subsegs.traverse_next(t)?;
@@ -683,6 +763,10 @@ impl Mesh {
     /// subsegorg = NULL first (triangle.c:1302) so badsubsegtraverse
     /// skips the row, then pooldealloc (triangle.c:1303); splitencsegs
     /// (refine.rs) is the consumer.
+    ///
+    /// Invariants (ADR 0002 section 3): the NULL word is the dead-row
+    /// mark, never decoded (b); the push makes slot 0 pool-private (d);
+    /// reuse stays exact-LIFO (e).
     pub(crate) fn badsubsegdealloc(&mut self, dyingsubseg: u32) {
         self.set_bad_sub_seg_org(dyingsubseg, NULL);
         self.badsubsegs.dealloc(dyingsubseg);
@@ -692,6 +776,10 @@ impl Mesh {
     /// skip the rows badsubsegdealloc marked (the subsegorg == NULL
     /// test of the do-while, triangle.c:1321-1326); splitencsegs'
     /// traversalinit (triangle.c:7367) starts it.
+    ///
+    /// Invariants (ADR 0002 section 3): the NULL mark is the skip test
+    /// (b); the null row itself is never yielded (b, debug-pinned at
+    /// the pool seam).
     pub(crate) fn badsubsegtraverse(&self, t: &mut crate::pool::Traversal) -> Option<u32> {
         loop {
             let newsub = self.badsubsegs.traverse_next(t)?;
@@ -709,6 +797,9 @@ impl Mesh {
     /// in the same allocation order. Input vertices are allocated
     /// contiguously in input order (transfernodes), so number -
     /// firstnumber is the allocation index.
+    ///
+    /// Invariant (ADR 0002 section 3 a): the computed row id is
+    /// debug_asserted inside the vertex pool's id space.
     pub(crate) fn getvertex(&self, firstnumber: i32, number: i32) -> u32 {
         // C: getblock = m->vertices.firstblock; current = b->firstnumber.
         let mut block: u64 = 0;
@@ -727,7 +818,12 @@ impl Mesh {
 
         // C: foundvertex = aligned block start + itembytes * (number -
         // current); block_base_id is the same walk in id units.
-        self.vertices.block_base_id(block) + (number - current) as u32
+        let vertex = self.vertices.block_base_id(block) + (number - current) as u32;
+        // Range invariant (ADR 0002 section 3 a): the mapped id must name
+        // a materialized vertex row (the input numbers are caller-trusted
+        // in C; the debug check catches block-walk slips). Debug only.
+        self.vertices.debug_assert_row_in_space(vertex);
+        vertex
     }
 }
 
