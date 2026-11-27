@@ -227,9 +227,9 @@ side changes; the function names are the stable key).
 | --- | --- | --- | --- | --- | --- |
 | `file_writenodes` | triangle_io.c:23 | `io.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46); inline numbering (setvertexmark at triangle_io.c:64-65), the writer seam is D31, the open funnels to Error::Io (D8) |
 | `file_writeelements` | triangle_io.c:78 | `io.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46); the order-2 mid slots ho+1, ho+2, ho (triangle_io.c:107-118) |
-| `file_writepoly` | triangle_io.c:133 | `io.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46); the hole/region tails render unconditionally (the port builds the full CDT shape) |
+| `file_writepoly` | triangle_io.c:133 | `io.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46); the hole/region tails (triangle_io.c:173-193) sit behind #ifndef CDT_ONLY, which this fork's build leaves undefined, so they always render in the measured binary; the port builds the full shape |
 | `file_writeedges` | triangle_io.c:203 | `io.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46); the emit gate's conjunct swap is D29 |
-| `file_writeneighbors` | triangle_io.c:264 | `io.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46); the word-6 overlay without the restore, the dummy's -1 stays (triangle_io.c:296-309) |
+| `file_writeneighbors` | triangle_io.c:264 | `io.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46); the word-6 overlay without the restore, the dummy's -1 stays (the overlay numbering at triangle_io.c:283-287 with the dummy's -1 at 287, the neighbor reads at 295-301) |
 | `file_write_eps` | triangle_io.c:312 | `io.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46); composes the eps.rs unit (triangle_io.c:331-347) |
 | `readline` | triangle_io.c:370 | `io.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46); INPUTLINESIZE, '#' comments, the number-lookahead charset, the rescan loop |
 | `findfield` | triangle_io.c:401 | `io.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46) |

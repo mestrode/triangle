@@ -2,7 +2,8 @@
 //! '%.17g' family of the file writers (triangle_io.c:51, 55, 61, 104,
 //! 117, 162-186, 237-253, 303, 178-190), the '%.3g' of the EPS writer
 //! (eps_writer.c:194, 200-201) and the width-padded g-forms of the
-//! example CLI's renderers (src/examples/triangle-cli/util.c:348-366).
+//! example CLI's renderers (src/examples/triangle-cli/util.c:353-374:
+//! %16.5g, %12.5g, %8.5g, %6.6g, %15.5g).
 //! std-only: no libc at the boundary, no crates.
 //!
 //! Correctness argument: every decimal form is derived from Rust's
@@ -292,7 +293,7 @@ mod tests {
         assert_eq!(g(1000.0, 3), "1e+03");
     }
 
-    // The padded forms of print_statistics (util.c:348-366):
+    // The padded forms of print_statistics (util.c:353-374):
     #[test]
     fn g_padded_forms() {
         // %16.5g of 1.5: right-aligned in 16.

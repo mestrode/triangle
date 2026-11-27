@@ -7,9 +7,9 @@
 //! Boundary decisions (the deviation register and the PR body carry
 //! the details):
 //! - The C FILE* NULL checks (file == NULL -> TRI_FILE_OPEN,
-//!   triangle_io.c:30, 86, 141, 212, 271, 318, 443, 568, 645, 753,
-//!   806; triangle_api.c fopen NULL -> TRI_FILE_OPEN at 481, 500, 517,
-//!   533) dissolve: the port's api.rs wrappers own the open, and
+//!   triangle_io.c:30, 86, 141, 212, 271, 318, 443, 555, 625, 755,
+//!   837; triangle_api.c fopen NULL -> TRI_FILE_OPEN at 498, 514, 530,
+//!   546) dissolve: the port's api.rs wrappers own the open, and
 //!   File::open's error carries straight into Error::Io (the
 //!   TRI_FILE_OPEN equivalence of the D8 funnel).
 //! - C's unchecked fprintf return values in the writers surface as
@@ -240,9 +240,10 @@ pub(crate) fn file_writepoly(
         subsegnumber += 1;
     }
 
-    // C: the hole tail (173-181; always behind #ifndef CDT_ONLY in C,
-    // unconditional here - the port builds the full shape). The count
-    // line prints even when there are no holes.
+    // C: the hole tail (173-181; behind #ifndef CDT_ONLY, which this
+    // fork's build leaves undefined, so the tails always render in
+    // the measured binary - unconditional here, the port builds the
+    // full shape). The count line prints even when there are no holes.
     write!(polyfile, "{}\n", d(holelist.len() as i32))?;
     for (holenumber, hole) in holelist.iter().enumerate() {
         // Hole number, x and y coordinates (178-179:
