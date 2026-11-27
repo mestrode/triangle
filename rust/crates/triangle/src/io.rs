@@ -91,9 +91,9 @@ pub(crate) fn file_writenodes(
             line.clear();
             write_d4(&mut line, vertexnumber);
             line.push_str("    ");
-            write_g(&mut line, m.vx_real(vertexloop, 0), 17);
+            write_g(&mut line, m.vx_x(vertexloop), 17);
             line.push_str("  ");
-            write_g(&mut line, m.vx_real(vertexloop, 1), 17);
+            write_g(&mut line, m.vx_y(vertexloop), 17);
             for i in 0..m.nextras as usize {
                 // Write an attribute (54-55: "  %.17g").
                 line.push_str("  ");
@@ -162,9 +162,9 @@ pub(crate) fn file_writeelements(
             // C: the mid-edge nodes (107-109: highorderindex + 1,
             // + 2 and highorderindex, exactly where highorder stored
             // them).
-            let mid1 = m.tri_slot(tri, m.tri_shape.highorderindex + 1) as u32;
-            let mid2 = m.tri_slot(tri, m.tri_shape.highorderindex + 2) as u32;
-            let mid3 = m.tri_slot(tri, m.tri_shape.highorderindex) as u32;
+            let mid1 = m.tri_midnode(tri, 1) as u32;
+            let mid2 = m.tri_midnode(tri, 2) as u32;
+            let mid3 = m.tri_midnode(tri, 0) as u32;
             // Triangle number, indices for six vertices (111-113).
             line.push_str("  ");
             write_d4(&mut line, m.vx_mark(mid1));
@@ -1387,17 +1387,17 @@ mod tests {
     fn square_two_triangles(b: &Behavior, eextras: i32) -> (Mesh, u32, u32, [u32; 4]) {
         let mut m = Mesh::new(b, 8, 2, 0, eextras).expect("mesh init");
         let a = m.vx_alloc().expect("vx");
-        m.vx_set_real(a, 0, 0.0);
-        m.vx_set_real(a, 1, 0.0);
+        m.set_vx_x(a, 0.0);
+        m.set_vx_y(a, 0.0);
         let e = m.vx_alloc().expect("vx");
-        m.vx_set_real(e, 0, 1.0);
-        m.vx_set_real(e, 1, 0.0);
+        m.set_vx_x(e, 1.0);
+        m.set_vx_y(e, 0.0);
         let c = m.vx_alloc().expect("vx");
-        m.vx_set_real(c, 0, 1.0);
-        m.vx_set_real(c, 1, 1.0);
+        m.set_vx_x(c, 1.0);
+        m.set_vx_y(c, 1.0);
         let d = m.vx_alloc().expect("vx");
-        m.vx_set_real(d, 0, 0.0);
-        m.vx_set_real(d, 1, 1.0);
+        m.set_vx_x(d, 0.0);
+        m.set_vx_y(d, 1.0);
         let t1 = m.maketriangle(b.usesegments, b.vararea).expect("tri");
         m.setorg(t1, a);
         m.setdest(t1, e);

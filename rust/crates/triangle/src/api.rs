@@ -1049,14 +1049,14 @@ mod tests {
     fn lone_core_triangle(m: &mut Mesh, pa: (f64, f64), pb: (f64, f64), pc: (f64, f64)) {
         let core = &mut *m.core.borrow_mut();
         let a = core.vx_alloc().expect("vertex");
-        core.vx_set_real(a, 0, pa.0);
-        core.vx_set_real(a, 1, pa.1);
+        core.set_vx_x(a, pa.0);
+        core.set_vx_y(a, pa.1);
         let e = core.vx_alloc().expect("vertex");
-        core.vx_set_real(e, 0, pb.0);
-        core.vx_set_real(e, 1, pb.1);
+        core.set_vx_x(e, pb.0);
+        core.set_vx_y(e, pb.1);
         let c = core.vx_alloc().expect("vertex");
-        core.vx_set_real(c, 0, pc.0);
-        core.vx_set_real(c, 1, pc.1);
+        core.set_vx_x(c, pc.0);
+        core.set_vx_y(c, pc.1);
         let t = core.maketriangle(false, false).expect("tri");
         core.setorg(t, a);
         core.setdest(t, e);
@@ -1176,14 +1176,14 @@ mod tests {
         {
             let core = &mut *m.core.borrow_mut();
             let v_a = core.vx_alloc().expect("vx");
-            core.vx_set_real(v_a, 0, 0.0);
-            core.vx_set_real(v_a, 1, 0.0);
+            core.set_vx_x(v_a, 0.0);
+            core.set_vx_y(v_a, 0.0);
             let v_b = core.vx_alloc().expect("vx");
-            core.vx_set_real(v_b, 0, 1.0);
-            core.vx_set_real(v_b, 1, 0.0);
+            core.set_vx_x(v_b, 1.0);
+            core.set_vx_y(v_b, 0.0);
             let v_c = core.vx_alloc().expect("vx");
-            core.vx_set_real(v_c, 0, 0.0);
-            core.vx_set_real(v_c, 1, -1.0);
+            core.set_vx_x(v_c, 0.0);
+            core.set_vx_y(v_c, -1.0);
             let t = core.maketriangle(false, false).expect("tri");
             core.setorg(t, v_a);
             core.setdest(t, v_b);

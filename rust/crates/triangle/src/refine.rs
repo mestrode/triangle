@@ -120,10 +120,8 @@ pub(crate) fn splitencsegs(m: &mut Mesh, b: &Behavior, triflaws: bool) -> Result
                 if !b.conformdel && !acuteorg && !acutedest {
                     let mut eapex = m.apex(enctri);
                     while m.vx_type(eapex) == FREEVERTEX
-                        && (m.vx_real(eorg, 0) - m.vx_real(eapex, 0))
-                            * (m.vx_real(edest, 0) - m.vx_real(eapex, 0))
-                            + (m.vx_real(eorg, 1) - m.vx_real(eapex, 1))
-                                * (m.vx_real(edest, 1) - m.vx_real(eapex, 1))
+                        && (m.vx_x(eorg) - m.vx_x(eapex)) * (m.vx_x(edest) - m.vx_x(eapex))
+                            + (m.vx_y(eorg) - m.vx_y(eapex)) * (m.vx_y(edest) - m.vx_y(eapex))
                             < 0.0
                     {
                         deletevertex(m, b, &mut testtri)?;
@@ -155,10 +153,8 @@ pub(crate) fn splitencsegs(m: &mut Mesh, b: &Behavior, triflaws: bool) -> Result
                     if !b.conformdel && !acuteorg2 && !acutedest2 {
                         let mut eapex = m.org(testtri);
                         while m.vx_type(eapex) == FREEVERTEX
-                            && (m.vx_real(eorg, 0) - m.vx_real(eapex, 0))
-                                * (m.vx_real(edest, 0) - m.vx_real(eapex, 0))
-                                + (m.vx_real(eorg, 1) - m.vx_real(eapex, 1))
-                                    * (m.vx_real(edest, 1) - m.vx_real(eapex, 1))
+                            && (m.vx_x(eorg) - m.vx_x(eapex)) * (m.vx_x(edest) - m.vx_x(eapex))
+                                + (m.vx_y(eorg) - m.vx_y(eapex)) * (m.vx_y(edest) - m.vx_y(eapex))
                                 < 0.0
                         {
                             deletevertex(m, b, &mut testtri)?;
@@ -174,10 +170,9 @@ pub(crate) fn splitencsegs(m: &mut Mesh, b: &Behavior, triflaws: bool) -> Result
                 // (triangle.c:7286-7287).
                 let mut split: f64;
                 if acuteorg || acutedest {
-                    let segmentlength = ((m.vx_real(edest, 0) - m.vx_real(eorg, 0))
-                        * (m.vx_real(edest, 0) - m.vx_real(eorg, 0))
-                        + (m.vx_real(edest, 1) - m.vx_real(eorg, 1))
-                            * (m.vx_real(edest, 1) - m.vx_real(eorg, 1)))
+                    let segmentlength = ((m.vx_x(edest) - m.vx_x(eorg))
+                        * (m.vx_x(edest) - m.vx_x(eorg))
+                        + (m.vx_y(edest) - m.vx_y(eorg)) * (m.vx_y(edest) - m.vx_y(eorg)))
                     .sqrt();
                     // Find the power of two that most evenly splits the
                     // segment. The worst case is a 2:1 ratio between
@@ -226,10 +221,8 @@ pub(crate) fn splitencsegs(m: &mut Mesh, b: &Behavior, triflaws: bool) -> Result
                         vertex_coords(m, edest),
                         vertex_coords(m, newvertex),
                     );
-                    let divisor = (m.vx_real(eorg, 0) - m.vx_real(edest, 0))
-                        * (m.vx_real(eorg, 0) - m.vx_real(edest, 0))
-                        + (m.vx_real(eorg, 1) - m.vx_real(edest, 1))
-                            * (m.vx_real(eorg, 1) - m.vx_real(edest, 1));
+                    let divisor = (m.vx_x(eorg) - m.vx_x(edest)) * (m.vx_x(eorg) - m.vx_x(edest))
+                        + (m.vx_y(eorg) - m.vx_y(edest)) * (m.vx_y(eorg) - m.vx_y(edest));
                     if (multiplier != 0.0) && (divisor != 0.0) {
                         multiplier /= divisor;
                         // Watch out for NANs (triangle.c:7327).
@@ -237,17 +230,13 @@ pub(crate) fn splitencsegs(m: &mut Mesh, b: &Behavior, triflaws: bool) -> Result
                         // tests NaN by self-equality,
                         // verbatim.
                         if multiplier == multiplier {
-                            m.vx_set_real(
+                            m.set_vx_x(
                                 newvertex,
-                                0,
-                                m.vx_real(newvertex, 0)
-                                    + multiplier * (m.vx_real(edest, 1) - m.vx_real(eorg, 1)),
+                                m.vx_x(newvertex) + multiplier * (m.vx_y(edest) - m.vx_y(eorg)),
                             );
-                            m.vx_set_real(
+                            m.set_vx_y(
                                 newvertex,
-                                1,
-                                m.vx_real(newvertex, 1)
-                                    + multiplier * (m.vx_real(eorg, 0) - m.vx_real(edest, 0)),
+                                m.vx_y(newvertex) + multiplier * (m.vx_x(eorg) - m.vx_x(edest)),
                             );
                         }
                     }
@@ -257,10 +246,8 @@ pub(crate) fn splitencsegs(m: &mut Mesh, b: &Behavior, triflaws: bool) -> Result
                 m.vx_set_type(newvertex, SEGMENTVERTEX);
                 // Check whether the new vertex lies on an endpoint
                 // (triangle.c:7337).
-                if (m.vx_real(newvertex, 0) == m.vx_real(eorg, 0)
-                    && m.vx_real(newvertex, 1) == m.vx_real(eorg, 1))
-                    || (m.vx_real(newvertex, 0) == m.vx_real(edest, 0)
-                        && m.vx_real(newvertex, 1) == m.vx_real(edest, 1))
+                if (m.vx_x(newvertex) == m.vx_x(eorg) && m.vx_y(newvertex) == m.vx_y(eorg))
+                    || (m.vx_x(newvertex) == m.vx_x(edest) && m.vx_y(newvertex) == m.vx_y(edest))
                 {
                     // C: TODO: Precision error: splitencsegs() - Ran out
                     // of precision at (newvertex)
@@ -364,8 +351,8 @@ pub(crate) fn splittriangle(m: &mut Mesh, b: &Behavior, badtri: u32) -> Result<(
                     vertex_coords(m, bapex),
                     true,
                 );
-                m.vx_set_real(newvertex, 0, x);
-                m.vx_set_real(newvertex, 1, y);
+                m.set_vx_x(newvertex, x);
+                m.set_vx_y(newvertex, y);
                 xi = xi_v;
                 eta = eta_v;
             } else {
@@ -395,8 +382,8 @@ pub(crate) fn splittriangle(m: &mut Mesh, b: &Behavior, badtri: u32) -> Result<(
                 vertex_coords(m, bapex),
                 true,
             );
-            m.vx_set_real(newvertex, 0, x);
-            m.vx_set_real(newvertex, 1, y);
+            m.set_vx_x(newvertex, x);
+            m.set_vx_y(newvertex, y);
             xi = xi_v;
             eta = eta_v;
         }
@@ -405,14 +392,11 @@ pub(crate) fn splittriangle(m: &mut Mesh, b: &Behavior, badtri: u32) -> Result<(
         // could not be placed at all: a triangle with no area has no
         // circumcenter, and the one computed for it is not finite
         // (triangle.c:7443-7445).
-        if !m.vx_real(newvertex, 0).is_finite()
-            || !m.vx_real(newvertex, 1).is_finite()
-            || (m.vx_real(newvertex, 0) == m.vx_real(borg, 0)
-                && m.vx_real(newvertex, 1) == m.vx_real(borg, 1))
-            || (m.vx_real(newvertex, 0) == m.vx_real(bdest, 0)
-                && m.vx_real(newvertex, 1) == m.vx_real(bdest, 1))
-            || (m.vx_real(newvertex, 0) == m.vx_real(bapex, 0)
-                && m.vx_real(newvertex, 1) == m.vx_real(bapex, 1))
+        if !m.vx_x(newvertex).is_finite()
+            || !m.vx_y(newvertex).is_finite()
+            || (m.vx_x(newvertex) == m.vx_x(borg) && m.vx_y(newvertex) == m.vx_y(borg))
+            || (m.vx_x(newvertex) == m.vx_x(bdest) && m.vx_y(newvertex) == m.vx_y(bdest))
+            || (m.vx_x(newvertex) == m.vx_x(bapex) && m.vx_y(newvertex) == m.vx_y(bapex))
         {
             // C: the _DEBUG warning printf (triangle.c:7450-7454)
             // compiles out of the pinned oracle build.
@@ -646,11 +630,9 @@ pub(crate) fn highorder(m: &mut Mesh, b: &Behavior) -> Result<(), Oom> {
                 }
                 // Record the new node in the (one or two) adjacent
                 // elements (triangle.c:7675).
-                let hi = m.tri_shape.highorderindex + orient as usize;
-                m.set_tri_slot(tri, hi, newvertex as u64);
+                m.set_tri_midnode(tri, orient as usize, newvertex as u64);
                 if trisym.tri != DUMMY_TRI {
-                    let hi = m.tri_shape.highorderindex + trisym.orient as usize;
-                    m.set_tri_slot(trisym.tri, hi, newvertex as u64);
+                    m.set_tri_midnode(trisym.tri, trisym.orient as usize, newvertex as u64);
                 }
             }
         }
@@ -707,8 +689,8 @@ mod tests {
 
     fn vxy(m: &mut Mesh, x: f64, y: f64) -> u32 {
         let v = m.vx_alloc().expect("vertex alloc");
-        m.vx_set_real(v, 0, x);
-        m.vx_set_real(v, 1, y);
+        m.set_vx_x(v, x);
+        m.set_vx_y(v, y);
         v
     }
 
@@ -770,7 +752,7 @@ mod tests {
     fn find_vertex(m: &Mesh, x: f64, y: f64, tol: f64) -> Option<u32> {
         let mut t = m.vertices.traversal();
         while let Some(v) = m.vertextraverse(&mut t) {
-            if (m.vx_real(v, 0) - x).abs() <= tol && (m.vx_real(v, 1) - y).abs() <= tol {
+            if (m.vx_x(v) - x).abs() <= tol && (m.vx_y(v) - y).abs() <= tol {
                 return Some(v);
             }
         }
@@ -817,8 +799,8 @@ mod tests {
         // The split vertex is the binary-exact midpoint (split = 0.5 is
         // exact in f64, so is the coordinate arithmetic).
         let nv = find_vertex(&m, 1.0, 0.0, 1e-12).expect("split vertex");
-        assert_eq!(m.vx_real(nv, 0), 1.0);
-        assert_eq!(m.vx_real(nv, 1), 0.0);
+        assert_eq!(m.vx_x(nv), 1.0);
+        assert_eq!(m.vx_y(nv), 0.0);
         assert_eq!(m.vx_mark(nv), 7);
         assert_eq!(m.vx_type(nv), SEGMENTVERTEX);
         // The original subseg row is reused as one half plus a fresh
@@ -975,8 +957,8 @@ mod tests {
         splitencsegs(&mut m, &b, false).expect("splitencsegs");
         // The free lens vertex was deleted and its row reused (LIFO) by
         // the segment split vertex.
-        assert_eq!(m.vx_real(c, 0), 1.0);
-        assert_eq!(m.vx_real(c, 1), 0.0);
+        assert_eq!(m.vx_x(c), 1.0);
+        assert_eq!(m.vx_y(c), 0.0);
         assert_eq!(m.vx_mark(c), 7);
         assert_eq!(m.vx_type(c), SEGMENTVERTEX);
         // The degree-3 splice deleted two of the star's rows, and both
@@ -1302,14 +1284,14 @@ mod tests {
         // (the interior edge is its orient-2 edge), then t2's two hull
         // edges get 8 and 9.
         let interior = 7u32;
-        assert_eq!(m.vx_real(interior, 0), 0.5);
-        assert_eq!(m.vx_real(interior, 1), 0.5);
+        assert_eq!(m.vx_x(interior), 0.5);
+        assert_eq!(m.vx_y(interior), 0.5);
         assert_eq!(m.vx_mark(interior), 0);
         assert_eq!(m.vx_type(interior), SEGMENTVERTEX);
         // Both adjacent element rows record the interior node on the
         // shared edge's orientation slots.
-        assert_eq!(m.tri_slot(t1.tri, hi + 2), u64::from(interior));
-        assert_eq!(m.tri_slot(t2.tri, hi), u64::from(interior));
+        assert_eq!(m.tri_midnode(t1.tri, 2), u64::from(interior));
+        assert_eq!(m.tri_midnode(t2.tri, 0), u64::from(interior));
         // The hull nodes: mark 1, FREEVERTEX, recorded on their edges.
         for (tri, orient, x, y) in [
             (t1.tri, 0usize, 0.5, 0.0),
@@ -1317,7 +1299,7 @@ mod tests {
             (t2.tri, 1, 0.5, 1.0),
             (t2.tri, 2, 0.0, 0.5),
         ] {
-            let node = m.tri_slot(tri, hi + orient) as u32;
+            let node = m.tri_midnode(tri, orient) as u32;
             let v = find_vertex(&m, x, y, 1e-12).expect("hull node");
             assert_eq!(node, v);
             assert_eq!(m.vx_mark(v), 1);
@@ -1345,9 +1327,8 @@ mod tests {
         assert_eq!(m.vertices.live_count(), 6);
         // The dead row was not handed out again.
         assert_eq!(m.vx_type(dead), DEADVERTEX);
-        let hi = m.tri_shape.highorderindex;
         for (orient, want) in [(0usize, fresh), (1, fresh + 1), (2, fresh + 2)] {
-            assert_eq!(m.tri_slot(t.tri, hi + orient), u64::from(want));
+            assert_eq!(m.tri_midnode(t.tri, orient), u64::from(want));
         }
     }
 
@@ -1369,18 +1350,18 @@ mod tests {
         highorder(&mut m, &b).expect("highorder");
         assert_eq!(m.vertices.live_count(), 6);
         // The segment edge's node.
-        let segnode = m.tri_slot(t.tri, hi) as u32;
-        assert_eq!(m.vx_real(segnode, 0), 1.0);
-        assert_eq!(m.vx_real(segnode, 1), 0.0);
+        let segnode = m.tri_midnode(t.tri, 0) as u32;
+        assert_eq!(m.vx_x(segnode), 1.0);
+        assert_eq!(m.vx_y(segnode), 0.0);
         assert_eq!(m.vx_mark(segnode), 7);
         assert_eq!(m.vx_type(segnode), SEGMENTVERTEX);
         // The other two edges: boundary nodes.
         for (orient, x, y) in [(1usize, 1.5, 0.5), (2, 0.5, 0.5)] {
-            let node = m.tri_slot(t.tri, hi + orient) as u32;
+            let node = m.tri_midnode(t.tri, orient) as u32;
             assert_eq!(m.vx_mark(node), 1);
             assert_eq!(m.vx_type(node), FREEVERTEX);
-            assert_eq!(m.vx_real(node, 0), x);
-            assert_eq!(m.vx_real(node, 1), y);
+            assert_eq!(m.vx_x(node), x);
+            assert_eq!(m.vx_y(node), y);
         }
     }
 }

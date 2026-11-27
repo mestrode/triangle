@@ -609,10 +609,10 @@ impl Mesh {
         // outer space: three adjoining triangles = itself, three NULL
         // vertices (C dummyinit, triangle.c:1042-1054)
         for i in 0..3 {
-            self.set_tri_slot(DUMMY_TRI, i, dummy_tri);
+            self.set_tri_neighbor_word(DUMMY_TRI, i, dummy_tri);
         }
-        for i in 3..6 {
-            self.set_tri_slot(DUMMY_TRI, i, 0);
+        for i in 0..3 {
+            self.set_tri_vertex_word(DUMMY_TRI, i, 0);
         }
         if self.tri_shape.usesegments {
             let dummy_sub = sencode(Osub {
@@ -623,19 +623,19 @@ impl Mesh {
             // adjoining subsegs = itself, four NULL vertices, two
             // adjoining triangles = outer space, boundary marker 0
             for i in 0..2 {
-                self.set_sub_slot(DUMMY_SUB, i, dummy_sub);
+                self.set_sub_neighbor_word(DUMMY_SUB, i, dummy_sub);
             }
-            for i in 2..6 {
-                self.set_sub_slot(DUMMY_SUB, i, 0);
+            for i in 0..4 {
+                self.set_sub_vertex_word(DUMMY_SUB, i, 0);
             }
-            for i in 6..8 {
-                self.set_sub_slot(DUMMY_SUB, i, dummy_tri);
+            for i in 0..2 {
+                self.set_sub_tri_word(DUMMY_SUB, i, dummy_tri);
             }
             self.set_sub_mark(DUMMY_SUB, 0);
             // outer space's three adjoining subsegments = the omnipresent
             // subsegment (C triangle.c:1072-1075)
-            for i in 6..9 {
-                self.set_tri_slot(DUMMY_TRI, i, dummy_sub);
+            for i in 0..3 {
+                self.set_tri_subseg_word(DUMMY_TRI, i, dummy_sub);
             }
         }
     }
@@ -656,18 +656,18 @@ impl Mesh {
             orient: 0,
         });
         for i in 0..3 {
-            self.set_tri_slot(tri, i, dummy_tri);
+            self.set_tri_neighbor_word(tri, i, dummy_tri);
         }
-        for i in 3..6 {
-            self.set_tri_slot(tri, i, 0);
+        for i in 0..3 {
+            self.set_tri_vertex_word(tri, i, 0);
         }
         if usesegments {
             let dummy_sub = sencode(Osub {
                 ss: DUMMY_SUB,
                 ssorient: 0,
             });
-            for i in 6..9 {
-                self.set_tri_slot(tri, i, dummy_sub);
+            for i in 0..3 {
+                self.set_tri_subseg_word(tri, i, dummy_sub);
             }
         }
         for i in 0..self.eextras {
@@ -694,17 +694,17 @@ impl Mesh {
             ssorient: 0,
         });
         for i in 0..2 {
-            self.set_sub_slot(ss, i, dummy_sub);
+            self.set_sub_neighbor_word(ss, i, dummy_sub);
         }
-        for i in 2..6 {
-            self.set_sub_slot(ss, i, 0);
+        for i in 0..4 {
+            self.set_sub_vertex_word(ss, i, 0);
         }
         let dummy_tri = encode(Otri {
             tri: DUMMY_TRI,
             orient: 0,
         });
-        for i in 6..8 {
-            self.set_sub_slot(ss, i, dummy_tri);
+        for i in 0..2 {
+            self.set_sub_tri_word(ss, i, dummy_tri);
         }
         self.set_sub_mark(ss, 0);
         Ok(Osub { ss, ssorient: 0 })
@@ -992,23 +992,23 @@ mod tests {
         });
         // outer space (row 1 of the triangle pool)
         for i in 0..3 {
-            assert_eq!(m.tri_slot(crate::handles::DUMMY_TRI, i), dummy_tri);
+            assert_eq!(m.tri_neighbor_word(crate::handles::DUMMY_TRI, i), dummy_tri);
         }
-        for i in 3..6 {
-            assert_eq!(m.tri_slot(crate::handles::DUMMY_TRI, i), 0);
+        for i in 0..3 {
+            assert_eq!(m.tri_vertex_word(crate::handles::DUMMY_TRI, i), 0);
         }
-        for i in 6..9 {
-            assert_eq!(m.tri_slot(crate::handles::DUMMY_TRI, i), dummy_sub);
+        for i in 0..3 {
+            assert_eq!(m.tri_subseg_word(crate::handles::DUMMY_TRI, i), dummy_sub);
         }
         // the omnipresent subsegment (row 1 of the subseg pool)
         for i in 0..2 {
-            assert_eq!(m.sub_slot(crate::handles::DUMMY_SUB, i), dummy_sub);
+            assert_eq!(m.sub_neighbor_word(crate::handles::DUMMY_SUB, i), dummy_sub);
         }
-        for i in 2..6 {
-            assert_eq!(m.sub_slot(crate::handles::DUMMY_SUB, i), 0);
+        for i in 0..4 {
+            assert_eq!(m.sub_vertex_word(crate::handles::DUMMY_SUB, i), 0);
         }
-        for i in 6..8 {
-            assert_eq!(m.sub_slot(crate::handles::DUMMY_SUB, i), dummy_tri);
+        for i in 0..2 {
+            assert_eq!(m.sub_tri_word(crate::handles::DUMMY_SUB, i), dummy_tri);
         }
         assert_eq!(
             m.sub_mark(crate::handles::DUMMY_SUB),
@@ -1126,14 +1126,14 @@ mod tests {
             ssorient: 0,
         });
         for i in 0..2 {
-            assert_eq!(m.sub_slot(s.ss, i), dummy_sub);
+            assert_eq!(m.sub_neighbor_word(s.ss, i), dummy_sub);
         }
-        for i in 2..6 {
-            assert_eq!(m.sub_slot(s.ss, i), 0);
+        for i in 0..4 {
+            assert_eq!(m.sub_vertex_word(s.ss, i), 0);
         }
-        for i in 6..8 {
+        for i in 0..2 {
             assert_eq!(
-                m.sub_slot(s.ss, i),
+                m.sub_tri_word(s.ss, i),
                 crate::handles::encode(Otri {
                     tri: crate::handles::DUMMY_TRI,
                     orient: 0

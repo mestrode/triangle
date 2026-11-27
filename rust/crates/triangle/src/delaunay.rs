@@ -99,8 +99,8 @@ pub(crate) fn vertexsort(m: &mut Mesh, sortarray: &mut [u32]) {
 
     if arraysize == 2 {
         // Recursive base case.
-        let p0 = (m.vx_real(sortarray[0], 0), m.vx_real(sortarray[0], 1));
-        let p1 = (m.vx_real(sortarray[1], 0), m.vx_real(sortarray[1], 1));
+        let p0 = (m.vx_x(sortarray[0]), m.vx_y(sortarray[0]));
+        let p1 = (m.vx_x(sortarray[1]), m.vx_y(sortarray[1]));
         if p0.0 > p1.0 || (p0.0 == p1.0 && p0.1 > p1.1) {
             // C swaps the two (the `vertex temp` local dissolves into the
             // tuple exchange; identical comparisons and swap order).
@@ -111,8 +111,8 @@ pub(crate) fn vertexsort(m: &mut Mesh, sortarray: &mut [u32]) {
     // Choose a random pivot to split the array.
     // C: pivot = (int) randomnation((unsigned int) arraysize);
     let pivot = randomnation(m, arraysize as u32) as usize;
-    let pivotx = m.vx_real(sortarray[pivot], 0);
-    let pivoty = m.vx_real(sortarray[pivot], 1);
+    let pivotx = m.vx_x(sortarray[pivot]);
+    let pivoty = m.vx_y(sortarray[pivot]);
     // Split the array.
     left = -1;
     right = arraysize;
@@ -121,9 +121,9 @@ pub(crate) fn vertexsort(m: &mut Mesh, sortarray: &mut [u32]) {
         loop {
             left += 1;
             if !(left <= right
-                && (m.vx_real(sortarray[left as usize], 0) < pivotx
-                    || (m.vx_real(sortarray[left as usize], 0) == pivotx
-                        && m.vx_real(sortarray[left as usize], 1) < pivoty)))
+                && (m.vx_x(sortarray[left as usize]) < pivotx
+                    || (m.vx_x(sortarray[left as usize]) == pivotx
+                        && m.vx_y(sortarray[left as usize]) < pivoty)))
             {
                 break;
             }
@@ -132,9 +132,9 @@ pub(crate) fn vertexsort(m: &mut Mesh, sortarray: &mut [u32]) {
         loop {
             right -= 1;
             if !(left <= right
-                && (m.vx_real(sortarray[right as usize], 0) > pivotx
-                    || (m.vx_real(sortarray[right as usize], 0) == pivotx
-                        && m.vx_real(sortarray[right as usize], 1) > pivoty)))
+                && (m.vx_x(sortarray[right as usize]) > pivotx
+                    || (m.vx_x(sortarray[right as usize]) == pivotx
+                        && m.vx_y(sortarray[right as usize]) > pivoty)))
             {
                 break;
             }
@@ -324,7 +324,7 @@ pub(crate) fn mergehulls(
         // The pointers to the extremal vertices are shifted to point to the
         //   topmost and bottommost vertex of each hull, rather than the
         //   leftmost and rightmost vertices.
-        while m.vx_real(farleftapex, 1) < m.vx_real(farleftpt, 1) {
+        while m.vx_y(farleftapex) < m.vx_y(farleftpt) {
             farleft.lnextself();
             m.symself(farleft);
             farleftpt = farleftapex;
@@ -332,14 +332,14 @@ pub(crate) fn mergehulls(
         }
         let mut checkedge = m.sym(*innerleft);
         let mut checkvertex = m.apex(checkedge);
-        while m.vx_real(checkvertex, 1) > m.vx_real(innerleftdest, 1) {
+        while m.vx_y(checkvertex) > m.vx_y(innerleftdest) {
             *innerleft = checkedge.lnext();
             innerleftapex = innerleftdest;
             innerleftdest = checkvertex;
             checkedge = m.sym(*innerleft);
             checkvertex = m.apex(checkedge);
         }
-        while m.vx_real(innerrightapex, 1) < m.vx_real(innerrightorg, 1) {
+        while m.vx_y(innerrightapex) < m.vx_y(innerrightorg) {
             innerright.lnextself();
             m.symself(innerright);
             innerrightorg = innerrightapex;
@@ -347,7 +347,7 @@ pub(crate) fn mergehulls(
         }
         let mut checkedge = m.sym(*farright);
         let mut checkvertex = m.apex(checkedge);
-        while m.vx_real(checkvertex, 1) > m.vx_real(farrightpt, 1) {
+        while m.vx_y(checkvertex) > m.vx_y(farrightpt) {
             *farright = checkedge.lnext();
             farrightapex = farrightpt;
             farrightpt = checkvertex;
@@ -464,14 +464,14 @@ pub(crate) fn mergehulls(
                 // The pointers to the extremal vertices are restored to the
                 //   leftmost and rightmost vertices (rather than topmost and
                 //   bottommost).
-                while m.vx_real(checkvertex, 0) < m.vx_real(farleftpt, 0) {
+                while m.vx_x(checkvertex) < m.vx_x(farleftpt) {
                     *farleft = checkedge.lprev();
                     farleftapex = farleftpt;
                     farleftpt = checkvertex;
                     checkedge = m.sym(*farleft);
                     checkvertex = m.apex(checkedge);
                 }
-                while m.vx_real(farrightapex, 0) > m.vx_real(farrightpt, 0) {
+                while m.vx_x(farrightapex) > m.vx_x(farrightpt) {
                     farright.lprevself();
                     m.symself(farright);
                     farrightpt = farrightapex;
@@ -836,7 +836,7 @@ pub(crate) fn removeghosts(m: &mut Mesh, b: &Behavior, startghost: &Otri) -> i64
     let mut searchedge = startghost.lprev();
     m.symself(&mut searchedge);
     // C: m->dummytri[0] = encode(searchedge).
-    m.set_tri_slot(DUMMY_TRI, 0, encode(searchedge));
+    m.set_tri_neighbor_word(DUMMY_TRI, 0, encode(searchedge));
     // Remove the bounding box and count the convex hull edges.
     // C: otricopy(*startghost, dissolveedge).
     let mut dissolveedge = *startghost;
@@ -901,8 +901,8 @@ pub(crate) fn divconqdelaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, Oom> {
     // Discard duplicate vertices, which can really mess up the algorithm.
     let mut i: usize = 0;
     for j in 1..m.invertices as usize {
-        if m.vx_real(sortarray[i], 0) == m.vx_real(sortarray[j], 0)
-            && m.vx_real(sortarray[i], 1) == m.vx_real(sortarray[j], 1)
+        if m.vx_x(sortarray[i]) == m.vx_x(sortarray[j])
+            && m.vx_y(sortarray[i]) == m.vx_y(sortarray[j])
         {
             // C prints the duplicate-vertex warning only under _DEBUG
             // (not compiled in the pinned oracle build); the accounting
@@ -974,12 +974,12 @@ pub(crate) fn boundingbox(m: &mut Mesh, b: &Behavior) -> Result<(), Oom> {
     m.infvertex1 = INFVERTEX1;
     m.infvertex2 = INFVERTEX2;
     m.infvertex3 = INFVERTEX3;
-    m.vx_set_real(m.infvertex1, 0, m.xmin - 50.0 * width);
-    m.vx_set_real(m.infvertex1, 1, m.ymin - 40.0 * width);
-    m.vx_set_real(m.infvertex2, 0, m.xmax + 50.0 * width);
-    m.vx_set_real(m.infvertex2, 1, m.ymin - 40.0 * width);
-    m.vx_set_real(m.infvertex3, 0, 0.5 * (m.xmin + m.xmax));
-    m.vx_set_real(m.infvertex3, 1, m.ymax + 60.0 * width);
+    m.set_vx_x(m.infvertex1, m.xmin - 50.0 * width);
+    m.set_vx_y(m.infvertex1, m.ymin - 40.0 * width);
+    m.set_vx_x(m.infvertex2, m.xmax + 50.0 * width);
+    m.set_vx_y(m.infvertex2, m.ymin - 40.0 * width);
+    m.set_vx_x(m.infvertex3, 0.5 * (m.xmin + m.xmax));
+    m.set_vx_y(m.infvertex3, m.ymax + 60.0 * width);
 
     // Create the bounding box.
     let inftri = m.maketriangle(b.usesegments, b.vararea)?;
@@ -990,7 +990,7 @@ pub(crate) fn boundingbox(m: &mut Mesh, b: &Behavior) -> Result<(), Oom> {
     //   edge to begin searching (point location) from.
     // C: m->dummytri[0] = (triangle) inftri.tri (the raw pointer carries
     // orientation zero).
-    m.set_tri_slot(
+    m.set_tri_neighbor_word(
         DUMMY_TRI,
         0,
         encode(Otri {
@@ -1041,7 +1041,7 @@ pub(crate) fn removebox(m: &mut Mesh, b: &Behavior) -> i64 {
     // Find a new boundary edge to search from, as the current search
     //   edge lies on a bounding box triangle and will be deleted.
     // C: m->dummytri[0] = encode(searchedge).
-    m.set_tri_slot(DUMMY_TRI, 0, encode(searchedge));
+    m.set_tri_neighbor_word(DUMMY_TRI, 0, encode(searchedge));
     let mut hullsize: i64 = -2;
     while !(nextedge == finaledge) {
         hullsize += 1;
@@ -1084,12 +1084,12 @@ pub(crate) fn removebox(m: &mut Mesh, b: &Behavior) -> i64 {
     // the D12 mirror zeroes the owned store and resets the ids to the
     // null id (the C pointers dangle unread; the port keeps a defined
     // superset).
-    m.vx_set_real(INFVERTEX1, 0, 0.0);
-    m.vx_set_real(INFVERTEX1, 1, 0.0);
-    m.vx_set_real(INFVERTEX2, 0, 0.0);
-    m.vx_set_real(INFVERTEX2, 1, 0.0);
-    m.vx_set_real(INFVERTEX3, 0, 0.0);
-    m.vx_set_real(INFVERTEX3, 1, 0.0);
+    m.set_vx_x(INFVERTEX1, 0.0);
+    m.set_vx_y(INFVERTEX1, 0.0);
+    m.set_vx_x(INFVERTEX2, 0.0);
+    m.set_vx_y(INFVERTEX2, 0.0);
+    m.set_vx_x(INFVERTEX3, 0.0);
+    m.set_vx_y(INFVERTEX3, 0.0);
     m.infvertex1 = NULL;
     m.infvertex2 = NULL;
     m.infvertex3 = NULL;
@@ -1364,8 +1364,8 @@ pub(crate) fn createeventheap(m: &Mesh) -> Result<(Vec<u32>, Vec<Event>, Option<
     for i in 0..m.invertices as usize {
         let thisvertex = m.vertextraverse(&mut tr).unwrap_or(NULL);
         events[i].eventptr = EventPtr::Vertex(thisvertex);
-        events[i].xkey = m.vx_real(thisvertex, 0);
-        events[i].ykey = m.vx_real(thisvertex, 1);
+        events[i].xkey = m.vx_x(thisvertex);
+        events[i].ykey = m.vx_y(thisvertex);
         eventheapinsert(&mut eventheap[..], i as i32, i as u32, &mut events[..]);
     }
     // C: *freeevents = NULL; then thread the spare cells high to low, so
@@ -1390,10 +1390,10 @@ pub(crate) fn rightofhyperbola(m: &mut Mesh, fronttri: &Otri, newsite: (f64, f64
 
     let leftvertex = m.dest(*fronttri);
     let rightvertex = m.apex(*fronttri);
-    let lx = m.vx_real(leftvertex, 0);
-    let ly = m.vx_real(leftvertex, 1);
-    let rx = m.vx_real(rightvertex, 0);
-    let ry = m.vx_real(rightvertex, 1);
+    let lx = m.vx_x(leftvertex);
+    let ly = m.vx_y(leftvertex);
+    let rx = m.vx_x(rightvertex);
+    let ry = m.vx_y(rightvertex);
     // C: if ((leftvertex[1] < rightvertex[1]) ||
     //         ((leftvertex[1] == rightvertex[1]) &&
     //          (leftvertex[0] < rightvertex[0]))) { early true }
@@ -1420,12 +1420,12 @@ pub(crate) fn rightofhyperbola(m: &mut Mesh, fronttri: &Otri, newsite: (f64, f64
 pub(crate) fn circletop(m: &mut Mesh, pa: u32, pb: u32, pc: u32, ccwabc: f64) -> f64 {
     m.circletopcount += 1;
 
-    let pax = m.vx_real(pa, 0);
-    let pay = m.vx_real(pa, 1);
-    let pbx = m.vx_real(pb, 0);
-    let pby = m.vx_real(pb, 1);
-    let pcx = m.vx_real(pc, 0);
-    let pcy = m.vx_real(pc, 1);
+    let pax = m.vx_x(pa);
+    let pay = m.vx_y(pa);
+    let pbx = m.vx_x(pb);
+    let pby = m.vx_y(pb);
+    let pcx = m.vx_x(pc);
+    let pcy = m.vx_y(pc);
     let xac = pax - pcx;
     let yac = pay - pcy;
     let xbc = pbx - pcx;
@@ -1673,12 +1673,12 @@ pub(crate) fn circletopinsert(
     pc: u32,
     topy: f64,
 ) -> Result<u32, Oom> {
-    let pax = m.vx_real(pa, 0);
-    let pay = m.vx_real(pa, 1);
-    let pbx = m.vx_real(pb, 0);
-    let pby = m.vx_real(pb, 1);
-    let pcx = m.vx_real(pc, 0);
-    let pcy = m.vx_real(pc, 1);
+    let pax = m.vx_x(pa);
+    let pay = m.vx_y(pa);
+    let pbx = m.vx_x(pb);
+    let pby = m.vx_y(pb);
+    let pcx = m.vx_x(pc);
+    let pcy = m.vx_y(pc);
     // C: ccwabc = tri_counterclockwise(m, b, pa, pb, pc).
     let ccwabc = tri_counterclockwise(
         m,
@@ -1720,7 +1720,7 @@ pub(crate) fn frontlocate(
     farright: &mut bool,
 ) -> u32 {
     // C: the search vertex's coordinates are the hyperbola query.
-    let searchpoint = (m.vx_real(searchvertex, 0), m.vx_real(searchvertex, 1));
+    let searchpoint = (m.vx_x(searchvertex), m.vx_y(searchvertex));
     // C: otricopy(*bottommost, *searchtri).
     *searchtri = *bottommost;
     let splayroot = splay(m, splayroot, searchpoint, searchtri);
@@ -1824,16 +1824,16 @@ pub(crate) fn sweeplinedelaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, crate
         freeevents = Some(e0);
         eventheapdelete(&mut eventheap[..], heapsize, 0, &mut events[..]);
         heapsize -= 1;
-        if (m.vx_real(firstvertex, 0) == m.vx_real(secondvertex, 0))
-            && (m.vx_real(firstvertex, 1) == m.vx_real(secondvertex, 1))
+        if (m.vx_x(firstvertex) == m.vx_x(secondvertex))
+            && (m.vx_y(firstvertex) == m.vx_y(secondvertex))
         {
             // C's _DEBUG duplicate warning is compiled out; the accounting
             // stays (triangle.c:5273-5274).
             m.vx_set_type(secondvertex, UNDEADVERTEX);
             m.undeads += 1;
         }
-        if !((m.vx_real(firstvertex, 0) == m.vx_real(secondvertex, 0))
-            && (m.vx_real(firstvertex, 1) == m.vx_real(secondvertex, 1)))
+        if !((m.vx_x(firstvertex) == m.vx_x(secondvertex))
+            && (m.vx_y(firstvertex) == m.vx_y(secondvertex)))
         {
             break;
         }
@@ -1922,8 +1922,8 @@ pub(crate) fn sweeplinedelaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, crate
                 EventPtr::Vertex(v) => v,
                 _ => NULL,
             };
-            if (m.vx_real(nextvertex, 0) == m.vx_real(lastvertex, 0))
-                && (m.vx_real(nextvertex, 1) == m.vx_real(lastvertex, 1))
+            if (m.vx_x(nextvertex) == m.vx_x(lastvertex))
+                && (m.vx_y(nextvertex) == m.vx_y(lastvertex))
             {
                 // C's _DEBUG duplicate warning is compiled out; the
                 // accounting stays (triangle.c:5323-5325).
@@ -1989,7 +1989,7 @@ pub(crate) fn sweeplinedelaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, crate
                         m,
                         splayroot,
                         &lefttri,
-                        (m.vx_real(nextvertex, 0), m.vx_real(nextvertex, 1)),
+                        (m.vx_x(nextvertex), m.vx_y(nextvertex)),
                     )?;
                 } else if randomnation(m, SAMPLERATE) == 0 {
                     inserttri = righttri.lnext();
@@ -1997,7 +1997,7 @@ pub(crate) fn sweeplinedelaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, crate
                         m,
                         splayroot,
                         &inserttri,
-                        (m.vx_real(nextvertex, 0), m.vx_real(nextvertex, 1)),
+                        (m.vx_x(nextvertex), m.vx_y(nextvertex)),
                     )?;
                 }
             }
@@ -2175,14 +2175,14 @@ mod tests {
         let mut m = Mesh::new(&behavior(poly), points.len() as i32, 2, 0, 0).expect("mesh init");
         for &(x, y) in points {
             let v = m.vx_alloc().expect("vertex alloc");
-            m.vx_set_real(v, 0, x);
-            m.vx_set_real(v, 1, y);
+            m.set_vx_x(v, x);
+            m.set_vx_y(v, y);
         }
         m
     }
 
     fn coords(m: &Mesh, v: u32) -> (f64, f64) {
-        (m.vx_real(v, 0), m.vx_real(v, 1))
+        (m.vx_x(v), m.vx_y(v))
     }
 
     fn ids(points: &[(f64, f64)]) -> Vec<u32> {
@@ -2618,7 +2618,7 @@ mod tests {
         assert_eq!(coords(&m, m.infvertex3), (0.5, 1.0 + 60.0));
         // dummytri[0] points at the box with orientation zero
         assert_eq!(
-            m.tri_slot(DUMMY_TRI, 0),
+            m.tri_neighbor_word(DUMMY_TRI, 0),
             encode(Otri { tri: 2, orient: 0 }),
             "first allocated triangle row (ids start at 2)"
         );
@@ -3557,8 +3557,8 @@ mod tests {
         let mut m5 = Mesh::new(&behavior(false), 5, 2, 0, 3).expect("mesh init");
         for &(x, y) in &pentagon {
             let v = m5.vx_alloc().expect("vertex");
-            m5.vx_set_real(v, 0, x);
-            m5.vx_set_real(v, 1, y);
+            m5.set_vx_x(v, x);
+            m5.set_vx_y(v, y);
         }
         assert_eq!(m5.eextras, 3);
         assert_eq!(m5.triangles.stride(), 9);

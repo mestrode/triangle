@@ -86,8 +86,7 @@ struct Entry {
 fn corpus_root() -> PathBuf {
     match std::env::var_os("TRIANGLE_BENCH_CORPUS") {
         Some(dir) => PathBuf::from(dir),
-        None => PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../tools/oracle/work/corpus"),
+        None => PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tools/oracle/work/corpus"),
     }
 }
 
@@ -118,10 +117,7 @@ fn build_entry(corpus: &Path, case: &Case, family: &Family) -> Entry {
     }
     // The CLI hands the parser the option string without its leading
     // dash (main.rs: option_string = &args[1][1..]).
-    let options = family
-        .options
-        .strip_prefix('-')
-        .unwrap_or(&family.options);
+    let options = family.options.strip_prefix('-').unwrap_or(&family.options);
     // One untimed construction call guards the entry.
     triangulate(Options::parse(options).expect("Options::parse"), &input)
         .expect("triangulate of a corpus workload");

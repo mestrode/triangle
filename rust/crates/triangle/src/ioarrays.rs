@@ -119,8 +119,8 @@ pub(crate) fn transfernodes(
         // Read the vertex coordinates.
         let x = pointlist[i].x;
         let y = pointlist[i].y;
-        m.vx_set_real(vertexloop, 0, x);
-        m.vx_set_real(vertexloop, 1, y);
+        m.set_vx_x(vertexloop, x);
+        m.set_vx_y(vertexloop, y);
         // Read the vertex attributes.
         for j in 0..numberofpointattribs as usize {
             let attribute = pointattriblist[attribindex];
@@ -218,8 +218,8 @@ pub(crate) fn writenodes(
         if !b.jettison || m.vx_type(vertexloop) != UNDEADVERTEX {
             // X and y coordinates (triangle.c:7811-7813).
             pointlist.push(Point2 {
-                x: m.vx_real(vertexloop, 0),
-                y: m.vx_real(vertexloop, 1),
+                x: m.vx_x(vertexloop),
+                y: m.vx_y(vertexloop),
             });
             // Vertex attributes (triangle.c:7814-7817).
             for i in 0..m.nextras as usize {
@@ -319,9 +319,9 @@ pub(crate) fn writeelements(
             // C: the mid-edge node reads (triangle.c:7906-7915) - mid1
             // at highorderindex + 1, mid2 at highorderindex + 2, mid3
             // at highorderindex, exactly where highorder stored them.
-            let mid1 = m.tri_slot(tri, m.tri_shape.highorderindex + 1) as u32;
-            let mid2 = m.tri_slot(tri, m.tri_shape.highorderindex + 2) as u32;
-            let mid3 = m.tri_slot(tri, m.tri_shape.highorderindex) as u32;
+            let mid1 = m.tri_midnode(tri, 1) as u32;
+            let mid2 = m.tri_midnode(tri, 2) as u32;
+            let mid3 = m.tri_midnode(tri, 0) as u32;
 
             trianglelist.push(m.vx_mark(p1));
             trianglelist.push(m.vx_mark(p2));
@@ -612,8 +612,8 @@ mod tests {
         let mut t = m.vertices.traversal();
         for (k, point) in points.iter().enumerate() {
             let v = m.vertextraverse(&mut t).expect("three rows");
-            assert_eq!(m.vx_real(v, 0), point.x);
-            assert_eq!(m.vx_real(v, 1), point.y);
+            assert_eq!(m.vx_x(v), point.x);
+            assert_eq!(m.vx_y(v), point.y);
             assert_eq!(m.vx_real(v, 2), attrs[k]);
             assert_eq!(m.vx_mark(v), markers[k]);
             assert_eq!(m.vx_type(v), INPUTVERTEX);
@@ -700,17 +700,17 @@ mod tests {
     fn square_two_triangles(b: &Behavior, eextras: i32) -> (Mesh, u32, u32, [u32; 4]) {
         let mut m = Mesh::new(b, 8, 2, 0, eextras).expect("mesh init");
         let a = m.vx_alloc().expect("vx");
-        m.vx_set_real(a, 0, 0.0);
-        m.vx_set_real(a, 1, 0.0);
+        m.set_vx_x(a, 0.0);
+        m.set_vx_y(a, 0.0);
         let e = m.vx_alloc().expect("vx");
-        m.vx_set_real(e, 0, 1.0);
-        m.vx_set_real(e, 1, 0.0);
+        m.set_vx_x(e, 1.0);
+        m.set_vx_y(e, 0.0);
         let c = m.vx_alloc().expect("vx");
-        m.vx_set_real(c, 0, 1.0);
-        m.vx_set_real(c, 1, 1.0);
+        m.set_vx_x(c, 1.0);
+        m.set_vx_y(c, 1.0);
         let d = m.vx_alloc().expect("vx");
-        m.vx_set_real(d, 0, 0.0);
-        m.vx_set_real(d, 1, 1.0);
+        m.set_vx_x(d, 0.0);
+        m.set_vx_y(d, 1.0);
         let t1 = m.maketriangle(b.usesegments, b.vararea).expect("tri");
         m.setorg(t1, a);
         m.setdest(t1, e);
