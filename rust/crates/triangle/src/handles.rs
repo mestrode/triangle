@@ -16,6 +16,16 @@
 //! re-encoding); the storage-touching methods live in slots.rs (the
 //! chokepoint). C names survive until idiomatization rung 4.
 //!
+//! Invariants enforced here (ADR 0002 section 3, debug builds only):
+//! range (a) - the orientation is debug_asserted in range at every
+//! encode and decode (triangles < 3; a subsegment's ssorient is one
+//! masked bit, in range by construction, and bit 1 stays the spare
+//! virus bit); null discipline (b) - the all-zero word is never
+//! decoded, exactly as C never decodes a NULL slot. The row-id side of
+//! the range invariant needs pool state and is enforced at the
+//! chokepoint decode sites (slots.rs) and the pool seam (pool.rs).
+//! Release builds compile no check.
+//!
 //! Stage-1 note: items here are consumed by the not-yet-transliterated
 //! modules per docs/function-mapping.md; the blanket below silences the
 //! ahead-of-use dead_code and is removed when they land.
@@ -64,6 +74,9 @@ pub(crate) struct Osub {
 /// word (D1 packing: 32-bit row id in the high bits, orientation in the two
 /// low bits). Identical encode/decode semantics and exact C slot density:
 /// one 8-byte word per stored handle.
+///
+/// Invariant (ADR 0002 section 3 a): the orientation is in range
+/// (debug_assert, < 3).
 #[inline]
 pub(crate) fn encode(otri: Otri) -> u64 {
     debug_assert!(otri.orient < 3, "triangle orientation out of range");
@@ -72,8 +85,8 @@ pub(crate) fn encode(otri: Otri) -> u64 {
 
 /// C: decode(): expand a word into an oriented triangle. Null discipline
 /// (ADR 0002 section 3): the all-zero word keeps the C NULL meaning and is
-/// never decoded, exactly as C never decodes a NULL slot; the orientation is
-/// in range.
+/// never decoded, exactly as C never decodes a NULL slot; the orientation
+/// is in range (invariant a; both debug_asserted below).
 #[inline]
 pub(crate) fn decode(word: u64) -> Otri {
     debug_assert!(word != 0, "null slot must never be decoded (C never does)");
@@ -89,6 +102,9 @@ pub(crate) fn decode(word: u64) -> Otri {
 /// bit 0, bit 1 permanently spare - the mirror of C's pointer-alignment
 /// bit that the viral-infection flag (slots.rs infect, triangle.h:875)
 /// occupies on triangle word 6 (D1; ADR 0002 amendment, issue #22).
+///
+/// Invariant (ADR 0002 section 3 a): ssorient is in range (debug_assert,
+/// < 2).
 #[inline]
 pub(crate) fn sencode(osub: Osub) -> u64 {
     debug_assert!(osub.ssorient < 2, "subsegment orientation out of range");
@@ -99,6 +115,9 @@ pub(crate) fn sencode(osub: Osub) -> u64 {
 /// as for decode(). The low two bits drop out exactly like C's ~3 mask;
 /// bit 1 (the virus flag when the word lives in triangle slot 6) never
 /// reaches the row id or the orientation (D1; ADR 0002 amendment, #22).
+///
+/// Invariants (ADR 0002 section 3): null discipline (b) debug_asserted;
+/// ssorient is one masked bit, in range (a) by construction.
 #[inline]
 pub(crate) fn sdecode(word: u64) -> Osub {
     debug_assert!(word != 0, "null slot must never be decoded (C never does)");
@@ -235,6 +254,14 @@ mod tests {
     #[should_panic(expected = "null slot must never be decoded")]
     fn sdecoding_the_null_word_is_a_discipline_violation() {
         let _ = sdecode(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "triangle orientation bits out of range")]
+    fn decoding_orientation_bits_three_is_a_range_violation() {
+        // Invariant (ADR 0002 section 3 a): orientation < 3; the packed
+        // low bits 0b11 cannot come out of a legal encode.
+        let _ = decode(0b11);
     }
 
     #[test]
