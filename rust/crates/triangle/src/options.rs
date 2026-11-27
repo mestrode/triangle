@@ -2,9 +2,9 @@
 //! 'Options', the public replacement of C's 'struct behavior'
 //! (triangle.h:371-470); 'Options::new', the exact 'parsecommandline("")
 //! defaults; 'Options::parse', the transliterated character loop of
-//! parsecommandline (triangle.c:364-512); 'Options::validate', the
+//! parsecommandline (triangle.c:389-526); 'Options::validate', the
 //! transliterated 'triangle_check_behavior' (triangle_helper.c:17-23)
-//! plus the derived-field tail of 'behavior_update' (triangle.c:275-310),
+//! plus the derived-field tail of 'behavior_update' (triangle.c:275-303),
 //! normalizing into the internal 'Behavior' that the transliterated
 //! core consumes; the 'Unsuitable' callback trait and its
 //! 'VertexSample' values (the triunsuitable_user_func mirror, D9).
@@ -134,7 +134,7 @@ pub struct Options {
 
 impl Options {
     /// The exact 'parsecommandline("")' defaults of C
-    /// (triangle.c:382-404): dwyer on, firstnumber 1, steiner
+    /// (triangle.c:369-387): dwyer on, firstnumber 1, steiner
     /// unlimited (-1), order 1, minangle 0.0, maxangle 0.0, maxarea
     /// -1.0 decimal.
     pub fn new() -> Options {
@@ -171,7 +171,7 @@ impl Options {
     }
 
     /// The transliterated character loop of C's parsecommandline
-    /// (triangle.c:364-512), defaults included: every 'if' of the C
+    /// (triangle.c:389-526), defaults included: every 'if' of the C
     /// loop is an independent branch here too, the inline number
     /// parsing mirrors C's digit/dot runs through strtod, and unknown
     /// characters are silently ignored exactly as unmatched C switches
@@ -299,7 +299,7 @@ impl Options {
     }
 
     /// The entry-point normalization (ADR 0004 section 5.1): the
-    /// transliterated 'behavior_update' (triangle.c:275-310), then the
+    /// transliterated 'behavior_update' (triangle.c:275-303), then the
     /// transliterated 'triangle_check_behavior'
     /// (triangle_helper.c:17-23). Consumes the Options and returns the
     /// normalized internal 'Behavior' the core functions take exactly
@@ -635,8 +635,8 @@ impl Behavior {
         Options::new().behavior()
     }
 
-    /// C behavior_update (triangle.c:275-310), the identical tail C's
-    /// parsecommandline runs (triangle.c:493-512). PI is the C literal
+    /// C behavior_update (triangle.c:275-303), the identical tail C's
+    /// parsecommandline runs (triangle.c:538-552). PI is the C literal
     /// of triangle_config.h:159 (the double truncation of both
     /// literals is identical); cos/sqrt call the same system libm on
     /// both sides of the differential run (ADR 0004 section 3).
@@ -654,17 +654,17 @@ impl Behavior {
         }
         self.goodangle *= self.goodangle;
         // No element area constraints will ever be assigned unless a
-        // PSLG or a refinement supplies them (C comment, triangle.c:293).
+        // PSLG or a refinement supplies them (C comment, triangle.c:288-289).
         if !self.refine && !self.poly {
             self.vararea = false;
         }
         // No extra attribute per element unless the input supports it
-        // (C comment, triangle.c:298).
+        // (C comment, triangle.c:293-294).
         if self.refine || !self.poly {
             self.regionattrib = false;
         }
         // Regular/weighted triangulations are incompatible with PSLGs
-        // and meshing (C comment, triangle.c:303).
+        // and meshing (C comment, triangle.c:298-299).
         if self.weighted != 0 && (self.poly || self.quality) {
             self.weighted = 0;
         }
@@ -803,7 +803,7 @@ mod tests {
 
     #[test]
     fn vararea_and_its_correction() {
-        // -a without poly/refine is corrected away (triangle.c:294).
+        // -a without poly/refine is corrected away (triangle.c:290-292).
         assert!(!bh("a").vararea);
         assert!(!bh("a").fixedarea);
         assert_eq!(bh("a").maxarea, -1.0);
@@ -828,7 +828,7 @@ mod tests {
     #[test]
     fn regionattrib_correction() {
         // No extra element attribute unless a PSLG (not refine) is read
-        // (triangle.c:298).
+        // (triangle.c:295-297).
         assert!(!bh("A").regionattrib);
         assert!(bh("pA").regionattrib);
         // refine also cancels it.
@@ -839,7 +839,7 @@ mod tests {
     fn weighted_correction() {
         assert_eq!(bh("w").weighted, 1);
         assert_eq!(bh("W").weighted, 2);
-        // Incompatible with PSLG and quality (triangle.c:303).
+        // Incompatible with PSLG and quality (triangle.c:300-302).
         assert_eq!(bh("pw").weighted, 0);
         assert_eq!(bh("qW").weighted, 0);
         assert_eq!(bh("wW").weighted, 2);
