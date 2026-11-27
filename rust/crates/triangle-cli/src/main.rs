@@ -38,6 +38,7 @@
 //! TRIANGLE_THREADS (lib.rs note, issue #12): parsed and validated
 //! (1..=1024) now; consumed when the internal multithreading lands.
 
+use std::fmt::Write as _;
 use std::io::Write as _;
 use triangle::api::{read_area, read_elements, read_nodes, read_poly};
 use triangle::formatter::{g_padded, g_padded_left};
@@ -650,6 +651,15 @@ fn check_mesh(mesh: &Mesh) {
 /// stored from the same triangleio), the mesh counts from
 /// Statistics, the quality block from Quality; the renderers are the
 /// formatter's padded g-forms.
+/// The pre-verbose block is formatted into one String and printed with
+/// a single print! before the verbose gate (ST rung, issue #62): C's
+/// stdio fully buffers a non-tty stdout, so C's statistics block leaves
+/// in one write(2), while the port's line-buffered stdout flushed one
+/// write(2) per println! (8 per non-verbose run, measured on the gate
+/// box). The verbose quality block keeps its per-line println! so a
+/// panic inside it leaves the same partial stdout as before. The bytes
+/// are identical either way; the 120-run differential harness gates
+/// them.
 fn print_statistics(mesh: &Mesh, input: &MeshInput, b: &BFields, lb: &BehaviorLegacy) {
     let st: Statistics = mesh.statistics();
     // The ratiotable constants (util.c:310, 316-322). C declares sixteen
@@ -660,36 +670,57 @@ fn print_statistics(mesh: &Mesh, input: &MeshInput, b: &BFields, lb: &BehaviorLe
         1.5, 2.0, 2.5, 3.0, 4.0, 6.0, 10.0, 15.0, 25.0, 50.0, 100.0, 300.0, 1000.0, 10000.0,
     ];
 
-    println!("\nStatistics:\n");
-    println!("  Input vertices: {}", input.points.len());
+    // Amortized stdout block (ST rung, issue #62): C's stdio fully
+    // buffers a non-tty stdout, so C's statistics block leaves in one
+    // write(2); the port's line-buffered stdout flushed one write(2)
+    // per println! (8 per non-verbose run, measured on the gate box).
+    // Formatting the pre-verbose block into one String and printing it
+    // once before the verbose gate restores C's write granularity with
+    // byte-identical output; print! keeps println!'s panic-on-failure
+    // contract. The verbose quality block below keeps its per-line
+    // println! so a panic inside it (the -V aspect histogram, register
+    // row D33) leaves the same partial stdout as before. The 120-run
+    // differential harness gates the bytes.
+    let mut out = String::new();
+    let _ = writeln!(out, "\nStatistics:\n");
+    let _ = writeln!(out, "  Input vertices: {}", input.points.len());
     if b.refine {
-        println!(
+        let _ = writeln!(
+            out,
             "  Input triangles: {}",
             input.elements.len() / input.corners_per_element.max(1)
         );
     }
     if b.poly {
-        println!("  Input segments: {}", input.segments.len());
+        let _ = writeln!(out, "  Input segments: {}", input.segments.len());
         if !b.refine {
-            println!("  Input holes: {}", input.holes.len());
+            let _ = writeln!(out, "  Input holes: {}", input.holes.len());
         }
     }
 
-    println!(
+    let _ = writeln!(
+        out,
         "\n  Mesh vertices: {}",
         st.vertices as i64 - st.undeads as i64
     );
-    println!("  Mesh triangles: {}", st.triangles);
-    println!("  Mesh edges: {}", st.edges);
-    println!("  Mesh exterior boundary edges: {}", st.hullsize);
+    let _ = writeln!(out, "  Mesh triangles: {}", st.triangles);
+    let _ = writeln!(out, "  Mesh edges: {}", st.edges);
+    let _ = writeln!(out, "  Mesh exterior boundary edges: {}", st.hullsize);
     if b.poly || b.refine {
-        println!(
+        let _ = writeln!(
+            out,
             "  Mesh interior boundary edges: {}",
             st.subsegs as i64 - st.hullsize as i64
         );
-        println!("  Mesh subsegments (constrained edges): {}", st.subsegs);
+        let _ = writeln!(
+            out,
+            "  Mesh subsegments (constrained edges): {}",
+            st.subsegs
+        );
     }
-    println!();
+    let _ = writeln!(out);
+
+    print!("{}", out);
 
     if lb.verbose > 0 {
         let q: Quality = mesh
