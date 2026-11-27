@@ -7,10 +7,11 @@
 //! triangulate, Mesh, the triangle_read_* / triangle_write_* file
 //! wrappers of triangle::api).
 //!
-//! Candidate contract (tools/oracle, the I/O-phase ticket): invoked
-//! inside a prepared run directory as `./candidate` with the ported
-//! option switches; stdout is captured but not compared, the .node /
-//! .ele / .poly / .edge / .neigh bytes are; exit 0 expected.
+//! Candidate contract (tools/oracle): invoked inside a prepared run
+//! directory as `./candidate` with the ported option switches; the
+//! .node / .ele / .poly / .edge / .neigh bytes are gated byte-for-byte,
+//! and since issue #66 the captured stdout is gated byte-for-byte too
+//! (the non-verbose chatter); exit 0 expected.
 //!
 //! C anchors: main.c:8-114 (the flow), util.c:17-78 (syntax),
 //! util.c:86-103 (info), util.c:112-274 (parsecommandline_legacy),
@@ -32,8 +33,9 @@
 //!   frozen public surface (per-pool maxitems and the predicate
 //!   counters are crate-internal), and C reads ratiotable[14]
 //!   uninitialized (util.c:369); the port stops after the angle
-//!   histogram and renders that one value as 0. Stdout is ungated by
-//!   the harness either way.
+//!   histogram and renders that one value as 0. The -V verbose surface
+//!   stays ungated (no corpus family is verbose); the non-verbose
+//!   chatter is gated byte-for-byte since issue #66.
 //!
 //! TRIANGLE_THREADS (lib.rs note, issue #12): parsed and validated
 //! (1..=1024) now; consumed when the internal multithreading lands.
@@ -520,24 +522,32 @@ fn check_behavior(b: &BFields, lb: &BehaviorLegacy) {
     }
 }
 
+/// The process-boundary exit mapping (register row D32), extracted
+/// from check() and the option-parse site as a testable seam (issue
+/// #66): None is the successful main return (process status 0 through
+/// Termination for ()); the option failures exit TRI_OPTIONS; the
+/// D32-recorded Io funnel exits -9 (C's distinct TRI_FILE_OPEN -9 and
+/// TRI_FILE_READ -10 both arrive as Error::Io); the remaining classes
+/// funnel to -1 like C's raw -1 TODO failures (Error::Input) and the
+/// D8 collapse of everything else. Pinned by construction in the
+/// exit_code_tests at the end of this file, never via the C oracle.
+fn exit_code(error: Option<&Error>) -> i32 {
+    match error {
+        None => 0,
+        Some(Error::Io(_)) => -9,
+        Some(Error::Options(_)) => TRI_OPTIONS,
+        Some(_) => -1,
+    }
+}
+
 /// check (util.c:504-510): print C's failure line and exit with the
-/// TRI_* code. The D8 funnel collapses the status granularity: C's
-/// TRI_FILE_OPEN (-9) and TRI_FILE_READ (-10) both arrive as
-/// Error::Io (exit -9), the raw -1 TODO failures arrive as Error::Input
-/// (exit -1); register row D32.
+/// TRI_* code through the exit_code seam.
 fn check<T>(result: Result<T, Error>, site: &str) -> T {
     match result {
         Ok(value) => value,
         Err(e) => {
             println!("ERROR: method 'triangle_{}' failed.", site);
-            let code = match &e {
-                Error::Io(_) => -9,
-                Error::Input(_) => -1,
-                Error::Options(_) => -2,
-                _ => -1,
-            };
-            let _ = e;
-            std::process::exit(code);
+            std::process::exit(exit_code(Some(&e)));
         }
     }
 }
@@ -767,8 +777,9 @@ fn print_statistics(mesh: &Mesh, input: &MeshInput, b: &BFields, lb: &BehaviorLe
         // The memory allocation and algorithmic sections
         // (util.c:385-418, 420-439) are not renderable on the frozen public
         // surface (per-pool maxitems and the predicate counters are
-        // crate-internal); register row D33. stdout is not compared
-        // by the harness.
+        // crate-internal); register row D33. The corpus families are all
+        // non-verbose, so this ungated -V surface stays outside the
+        // stdout gate (issue #66).
     }
 }
 
@@ -797,7 +808,7 @@ fn main() {
         Ok(options) => options,
         Err(e) => {
             println!("{}", e);
-            std::process::exit(TRI_OPTIONS);
+            std::process::exit(exit_code(Some(&e)));
         }
     };
     let bf = scan_b_fields(option_string);
@@ -904,4 +915,68 @@ fn main() {
 
     // triangle_context_destroy (main.c:112) dissolves over the owned
     // values. main returns 0 (main.c:114).
+}
+
+/// The exit-code contract of the process boundary, pinned by
+/// construction (issue #66; never via the C oracle): every arm of the
+/// exit_code seam and the OS-level reduction of the negative codes.
+/// C anchors: util.c:504-510 (check exits the raw TRI_* code),
+/// util.c:278-285 (check_behavior's two exit(TRI_OPTIONS) sites),
+/// triangle_config.h (TRI_OPTIONS -2), main.c:114 (success returns 0).
+#[cfg(test)]
+mod exit_code_tests {
+    use super::*;
+    use triangle::SegmentRecoveryKind;
+
+    /// Success: main returns normally (main.c:114 returns 0); the seam
+    /// maps the successful arm to process status 0.
+    #[test]
+    fn success_maps_to_zero() {
+        assert_eq!(exit_code(None), 0);
+    }
+
+    /// The option failures (Options::parse, check_behavior) exit
+    /// TRI_OPTIONS exactly like C's exit(TRI_OPTIONS) sites
+    /// (util.c:280, 285).
+    #[test]
+    fn options_errors_exit_tri_options() {
+        assert_eq!(TRI_OPTIONS, -2);
+        assert_eq!(
+            exit_code(Some(&Error::Options("no acute".to_string()))),
+            TRI_OPTIONS
+        );
+    }
+
+    /// C's exit(-2) surfaces as process status 254 through the OS
+    /// (register row D32): the wait status keeps the low byte of the
+    /// negative code. std::process::exit hands the i32 to the OS
+    /// verbatim, so the same reduction applies to the port.
+    #[test]
+    fn tri_options_surfaces_as_process_status_254() {
+        assert_eq!((TRI_OPTIONS as u32) & 0xff, 254);
+    }
+
+    /// The D32 Io funnel: C's distinct TRI_FILE_OPEN (-9, the missing
+    /// file) and TRI_FILE_READ (-10) both arrive as Error::Io and exit
+    /// -9. Both reader failure kinds are pinned.
+    #[test]
+    fn io_funnel_exits_minus_9() {
+        let open_failure = Error::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "x"));
+        let read_failure = Error::Io(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+        assert_eq!(exit_code(Some(&open_failure)), -9);
+        assert_eq!(exit_code(Some(&read_failure)), -9);
+    }
+
+    /// The remaining classes funnel to -1: C's raw -1 TODO failures
+    /// (Error::Input) and the D8 collapse of the rest.
+    #[test]
+    fn remaining_classes_funnel_to_minus_1() {
+        assert_eq!(exit_code(Some(&Error::Input("bad index".to_string()))), -1);
+        assert_eq!(
+            exit_code(Some(&Error::SegmentRecovery(SegmentRecoveryKind::Insert))),
+            -1
+        );
+        assert_eq!(exit_code(Some(&Error::OutOfMemory)), -1);
+        assert_eq!(exit_code(Some(&Error::Internal("bug".to_string()))), -1);
+    }
 }
