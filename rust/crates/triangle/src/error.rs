@@ -54,8 +54,9 @@ pub enum Error {
     /// internalerror() (triangle.c:349-354): a port bug, 5 call sites in
     /// C. The payload is the C stdout text.
     Internal(String),
-    /// TRI_FILE_OPEN / TRI_FILE_READ. Dormant until the I/O phase fills
-    /// the file functions.
+    /// TRI_FILE_OPEN / TRI_FILE_READ (the read-side failures) and the
+    /// writers I/O failures: the api boundary funnels them here carrying the
+    /// io::Error (the register writer-seam row D31).
     Io(std::io::Error),
 }
 
@@ -153,7 +154,7 @@ impl From<crate::pool::Oom> for InternalStatus {
 /// inspects returned statuses. The generic payloads carry the C code
 /// names; sites with richer knowledge (input validation, options
 /// validation) build their Error directly with the specific message.
-/// FileOpen/FileRead are dormant until the I/O phase.
+/// FileOpen/FileRead carry the read-side failures of the landed I/O phase.
 impl From<InternalStatus> for Error {
     fn from(s: InternalStatus) -> Error {
         match s {
@@ -177,10 +178,10 @@ impl From<InternalStatus> for Error {
             InternalStatus::SegInsert => Error::SegmentRecovery(SegmentRecoveryKind::Insert),
             InternalStatus::SegScout => Error::SegmentRecovery(SegmentRecoveryKind::Scout),
             InternalStatus::FileOpen => Error::Io(std::io::Error::other(
-                "file open failure (TRI_FILE_OPEN; dormant until the I/O phase)",
+                "file open failure (TRI_FILE_OPEN)",
             )),
             InternalStatus::FileRead => Error::Io(std::io::Error::other(
-                "file read failure (TRI_FILE_READ; dormant until the I/O phase)",
+                "file read failure (TRI_FILE_READ)",
             )),
             InternalStatus::Cycle => Error::SegmentRecovery(SegmentRecoveryKind::Cycle),
             InternalStatus::Oom => Error::OutOfMemory,

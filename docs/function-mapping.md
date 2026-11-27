@@ -38,7 +38,7 @@ pseudo-rows below. Nothing is unassigned.
 | `triangle_api.c` | `api.rs`, `options.rs`, `error.rs`, `lib.rs`, `io.rs` (context lifecycle dissolves) | S1 shell / IO |
 | `triangle_config.h` (TRI_* codes) | `error.rs` (InternalStatus mirror + funnel) | S1 shell |
 | `triangle_version.h.in` | `lib.rs` (VERSION, HAS_ACUTE) | S1 shell |
-| `src/examples/triangle-cli` | `rust/crates/triangle-cli` (sketch only; argument compatibility pinned in the I/O phase) | IO |
+| `src/examples/triangle-cli` | `rust/crates/triangle-cli` (the real main, landed in the I/O-phase PR (#46)) | IO |
 
 ## Function table
 
@@ -204,15 +204,15 @@ side changes; the function names are the stable key).
 
 | C function | C site | Rust module | Rust symbol (stage 1) | Stage | Notes |
 | --- | --- | --- | --- | --- | --- |
-| `eps_write_header` | eps_writer.c:14 | `eps.rs` | same name (snake_case) | IO | |
-| `eps_write_trailer` | eps_writer.c:32 | `eps.rs` | same name (snake_case) | IO | |
-| `eps_draw_clip` | eps_writer.c:43 | `eps.rs` | same name (snake_case) | IO | |
-| `eps_draw_edges` | eps_writer.c:87 | `eps.rs` | same name (snake_case) | IO | |
-| `eps_draw_segments` | eps_writer.c:132 | `eps.rs` | same name (snake_case) | IO | |
-| `eps_draw_points` | eps_writer.c:161 | `eps.rs` | same name (snake_case) | IO | |
-| `eps_set_color` | eps_writer.c:192 | `eps.rs` | same name (snake_case) | IO | |
-| `eps_set_stroke` | eps_writer.c:198 | `eps.rs` | same name (snake_case) | IO | |
-| `eps_update_metrics` | eps_writer.c:205 | `eps.rs` | same name (snake_case) | IO | |
+| `eps_write_header` | eps_writer.c:14 | `eps.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46); byte-for-byte through the formatter seam |
+| `eps_write_trailer` | eps_writer.c:32 | `eps.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46) |
+| `eps_draw_clip` | eps_writer.c:43 | `eps.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46) |
+| `eps_draw_edges` | eps_writer.c:87 | `eps.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46); the visit gate's conjunct swap is D30 |
+| `eps_draw_segments` | eps_writer.c:132 | `eps.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46) |
+| `eps_draw_points` | eps_writer.c:161 | `eps.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46) |
+| `eps_set_color` | eps_writer.c:192 | `eps.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46) |
+| `eps_set_stroke` | eps_writer.c:198 | `eps.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46) |
+| `eps_update_metrics` | eps_writer.c:205 | `eps.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46); the 5% margins and the aspect-fit delta |
 ### `triangle_helper.c` (src/Triangle/triangle_helper.c)
 
 | C function | C site | Rust module | Rust symbol (stage 1) | Stage | Notes |
@@ -225,21 +225,21 @@ side changes; the function names are the stable key).
 
 | C function | C site | Rust module | Rust symbol (stage 1) | Stage | Notes |
 | --- | --- | --- | --- | --- | --- |
-| `file_writenodes` | triangle_io.c:23 | `io.rs` | same name (snake_case) | IO | |
-| `file_writeelements` | triangle_io.c:78 | `io.rs` | same name (snake_case) | IO | |
-| `file_writepoly` | triangle_io.c:133 | `io.rs` | same name (snake_case) | IO | |
-| `file_writeedges` | triangle_io.c:203 | `io.rs` | same name (snake_case) | IO | |
-| `file_writeneighbors` | triangle_io.c:264 | `io.rs` | same name (snake_case) | IO | |
-| `file_write_eps` | triangle_io.c:312 | `io.rs` | same name (snake_case) | IO | |
-| `readline` | triangle_io.c:370 | `io.rs` | same name (snake_case) | IO | |
-| `findfield` | triangle_io.c:401 | `io.rs` | same name (snake_case) | IO | |
-| `file_readnodes_internal` | triangle_io.c:432 | `io.rs` | same name (snake_case) | IO | |
-| `file_readsegments_internal` | triangle_io.c:546 | `io.rs` | same name (snake_case) | IO | |
-| `file_readholes_internal` | triangle_io.c:616 | `io.rs` | same name (snake_case) | IO | |
-| `file_readnodes` | triangle_io.c:712 | `io.rs` | same name (snake_case) | IO | |
-| `file_readpoly` | triangle_io.c:723 | `io.rs` | same name (snake_case) | IO | |
-| `file_readelements` | triangle_io.c:744 | `io.rs` | same name (snake_case) | IO | |
-| `file_readelementsarea` | triangle_io.c:828 | `io.rs` | same name (snake_case) | IO | |
+| `file_writenodes` | triangle_io.c:23 | `io.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46); inline numbering (setvertexmark at triangle_io.c:64-65), the writer seam is D31, the open funnels to Error::Io (D8) |
+| `file_writeelements` | triangle_io.c:78 | `io.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46); the order-2 mid slots ho+1, ho+2, ho (triangle_io.c:107-118) |
+| `file_writepoly` | triangle_io.c:133 | `io.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46); the hole/region tails render unconditionally (the port builds the full CDT shape) |
+| `file_writeedges` | triangle_io.c:203 | `io.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46); the emit gate's conjunct swap is D29 |
+| `file_writeneighbors` | triangle_io.c:264 | `io.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46); the word-6 overlay without the restore, the dummy's -1 stays (triangle_io.c:296-309) |
+| `file_write_eps` | triangle_io.c:312 | `io.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46); composes the eps.rs unit (triangle_io.c:331-347) |
+| `readline` | triangle_io.c:370 | `io.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46); INPUTLINESIZE, '#' comments, the number-lookahead charset, the rescan loop |
+| `findfield` | triangle_io.c:401 | `io.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46) |
+| `file_readnodes_internal` | triangle_io.c:432 | `io.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46); firstnode captured at i == 0, the attribute/marker defaults fill (triangle_io.c:432-536) |
+| `file_readsegments_internal` | triangle_io.c:546 | `io.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46) |
+| `file_readholes_internal` | triangle_io.c:616 | `io.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46); the missing-area branch copies the attribute (triangle_io.c:694) |
+| `file_readnodes` | triangle_io.c:712 | `io.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46) |
+| `file_readpoly` | triangle_io.c:723 | `io.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46) |
+| `file_readelements` | triangle_io.c:744 | `io.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46); numberofcorners pinned to 3 (triangle_io.c:783) |
+| `file_readelementsarea` | triangle_io.c:828 | `io.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46); a missing field stores -1.0 (triangle_io.c:864) |
 ### `triangle_api.c` (src/Triangle/triangle_api.c)
 
 | C function | C site | Rust module | Rust symbol (stage 1) | Stage | Notes |
@@ -260,16 +260,16 @@ side changes; the function names are the stable key).
 | `triangle_mesh_refine` | triangle_api.c:332 | `api.rs` | Mesh::refine | S1 shell | wired in the refine PR (#39): the quality gate (triangle_api.c:347), the status funnel, and the m->edges writer inside the gate (triangle_api.c:354-355) |
 | `triangle_mesh_copy` | triangle_api.c:362 | `api.rs` | Mesh::output | S1 shell | |
 | `triangle_free` | triangle_api.c:430 | `-` | same name (snake_case) | - | dissolves: Drop/RAII (D11) |
-| `triangle_write_nodes` | triangle_api.c:437 | `io.rs` | same name (snake_case) | IO | serializes MeshOutput (formats pinned by the I/O-phase ticket) |
-| `triangle_write_elements` | triangle_api.c:446 | `io.rs` | same name (snake_case) | IO | serializes MeshOutput (formats pinned by the I/O-phase ticket) |
-| `triangle_write_poly` | triangle_api.c:455 | `io.rs` | same name (snake_case) | IO | serializes MeshOutput (formats pinned by the I/O-phase ticket) |
-| `triangle_write_edges` | triangle_api.c:466 | `io.rs` | same name (snake_case) | IO | serializes MeshOutput (formats pinned by the I/O-phase ticket) |
-| `triangle_write_neighbors` | triangle_api.c:475 | `io.rs` | same name (snake_case) | IO | serializes MeshOutput (formats pinned by the I/O-phase ticket) |
-| `triangle_write_eps` | triangle_api.c:484 | `io.rs` | same name (snake_case) | IO | serializes MeshOutput (formats pinned by the I/O-phase ticket) |
-| `triangle_read_nodes` | triangle_api.c:493 | `io.rs` | same name (snake_case) | IO | fills MeshInput (formats pinned by the I/O-phase ticket) |
-| `triangle_read_poly` | triangle_api.c:509 | `io.rs` | same name (snake_case) | IO | fills MeshInput (formats pinned by the I/O-phase ticket) |
-| `triangle_read_elements` | triangle_api.c:525 | `io.rs` | same name (snake_case) | IO | fills MeshInput (formats pinned by the I/O-phase ticket) |
-| `triangle_read_area` | triangle_api.c:541 | `io.rs` | same name (snake_case) | IO | fills MeshInput (formats pinned by the I/O-phase ticket) |
+| `triangle_write_nodes` | triangle_api.c:437 | `io.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46): the api.rs wrapper owns the open (fopen NULL -> TRI_FILE_OPEN dissolves into File::open's Error::Io, D8) and calls the io.rs writer through the D15 RefCell bridge |
+| `triangle_write_elements` | triangle_api.c:446 | `io.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46): the api.rs wrapper owns the open (fopen NULL -> TRI_FILE_OPEN dissolves into File::open's Error::Io, D8) and calls the io.rs writer through the D15 RefCell bridge |
+| `triangle_write_poly` | triangle_api.c:455 | `io.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46): the api.rs wrapper owns the open (fopen NULL -> TRI_FILE_OPEN dissolves into File::open's Error::Io, D8) and calls the io.rs writer through the D15 RefCell bridge |
+| `triangle_write_edges` | triangle_api.c:466 | `io.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46): the api.rs wrapper owns the open (fopen NULL -> TRI_FILE_OPEN dissolves into File::open's Error::Io, D8) and calls the io.rs writer through the D15 RefCell bridge |
+| `triangle_write_neighbors` | triangle_api.c:475 | `io.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46): the api.rs wrapper owns the open (fopen NULL -> TRI_FILE_OPEN dissolves into File::open's Error::Io, D8) and calls the io.rs writer through the D15 RefCell bridge |
+| `triangle_write_eps` | triangle_api.c:484 | `io.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46): the api.rs wrapper owns the open (fopen NULL -> TRI_FILE_OPEN dissolves into File::open's Error::Io, D8) and calls the io.rs writer through the D15 RefCell bridge |
+| `triangle_read_nodes` | triangle_api.c:493 | `io.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46): the api.rs wrapper owns the open and fills MeshInput through the io.rs readers (fopen NULL -> Error::Io, D8; the reader status funnels per D8) |
+| `triangle_read_poly` | triangle_api.c:509 | `io.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46): the api.rs wrapper owns the open and fills MeshInput through the io.rs readers (fopen NULL -> Error::Io, D8; the reader status funnels per D8) |
+| `triangle_read_elements` | triangle_api.c:525 | `io.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46): the api.rs wrapper owns the open and fills MeshInput through the io.rs readers (fopen NULL -> Error::Io, D8; the reader status funnels per D8) |
+| `triangle_read_area` | triangle_api.c:541 | `io.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46): the api.rs wrapper owns the open and fills MeshInput through the io.rs readers (fopen NULL -> Error::Io, D8; the reader status funnels per D8) |
 
 ## Types and macros (triangle.h and friends)
 
@@ -287,7 +287,7 @@ side changes; the function names are the stable key).
 | `TRI_*` status codes | triangle_config.h:28-40 | `error.rs` | `InternalStatus` mirror + `Error` funnel (D8) |
 | `enumerations` (`locateresult`, `insertvertexresult`, `finddirectionresult`, ...) | triangle.h | the owning module of the function that returns them | transliterated verbatim |
 | `triunsuitable_user_func` (typedef) | triangle.h | `options.rs` | `Unsuitable` trait + `VertexSample` values (D9) |
-| `FILENAMESIZE`, `TRINAME`-style string helpers | triangle_io.c / util.c of the example CLI | `io.rs` / `triangle-cli` | I/O phase |
+| `FILENAMESIZE`, `TRINAME`-style string helpers | triangle_io.c / util.c of the example CLI | `io.rs` / `triangle-cli` | landed in the I/O-phase PR (#46): owned Strings, no FILENAMESIZE truncation (D32) |
 
 
 ## Maintenance rules

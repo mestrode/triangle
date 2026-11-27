@@ -1,32 +1,889 @@
-//! triangle-cli: the CLI binary of the Rust Triangle port.
+//! triangle-cli: the CLI binary of the Rust Triangle port. The real
+//! main of the I/O phase: the transliteration of
+//! src/examples/triangle-cli/main.c (the run flow) and util.c
+//! (parsecommandline_legacy, syntax, info, check_behavior,
+//! print_statistics, check, finishfile, the write_* wrappers,
+//! check_mesh), driving the landed library surface (Options,
+//! triangulate, Mesh, the triangle_read_* / triangle_write_* file
+//! wrappers of triangle::api).
 //!
-//! Stage-1 stub per the stage-1 foundation PR: argument echo and exit 0,
-//! nothing else. Its only job today is to exist as the differential
-//! harness's candidate executable (tools/oracle, invoke via run-harness.sh
-//! --candidate) so the plumbing from harness to port is proven wired and
-//! documented before the I/O phase lands (byte parity is NOT expected at
-//! this stage; the harness wiring proof is recorded in that PR).
+//! Candidate contract (tools/oracle, the I/O-phase ticket): invoked
+//! inside a prepared run directory as `./candidate` with the ported
+//! option switches; stdout is captured but not compared, the .node /
+//! .ele / .poly / .edge / .neigh bytes are; exit 0 expected.
 //!
-//! Notes for the arriving phases:
-//! - Candidate contract: invoked inside a prepared run directory with the
-//!   ported option switches; the option-switch families, file-name
-//!   derivation and iteration suffixes are pinned by the I/O-phase ticket.
-//! - The thread-count knob for the future internal multithreading is the
-//!   TRIANGLE_THREADS environment variable (spelled exactly so). Its
-//!   validation returns with the I/O phase; this stage must not exit
-//!   nonzero, so the stub performs no validation at all.
+//! C anchors: main.c:14-115 (the flow), util.c:14-97 (syntax),
+//! util.c:103-115 (info), util.c:121-266 (parsecommandline_legacy),
+//! util.c:268-289 (check_behavior), util.c:295-435 (print_statistics),
+//! util.c:437-456 (reset/free_triangleio, dissolved by the owned
+//! MeshInput), util.c:458-467 (check_mesh), util.c:469-476 (check),
+//! util.c:478-492 (finishfile), util.c:494-621 (the write_*
+//! wrappers).
+//!
+//! CLI-site register rows (docs/deviation-register.md):
+//! - D32: the out-of-bounds suffix compares of parsecommandline_legacy
+//!   (util.c:188-199) are guarded; main.c's uninitialized `firstnode`
+//!   out-param starts at 0 (never read, C's own dead store); the exit
+//!   codes lose TRI_FILE_OPEN / TRI_FILE_READ granularity because the
+//!   D8 funnel merges them into Error::Io (exit -9); the FILENAMESIZE
+//!   truncations of C's fixed buffers do not apply to owned Strings.
+//! - D33: the verbose memory and algorithmic sections of
+//!   print_statistics (util.c:368-432) are not renderable on the
+//!   frozen public surface (per-pool maxitems and the predicate
+//!   counters are crate-internal), and C reads ratiotable[14]
+//!   uninitialized (util.c:365-366); the port stops after the angle
+//!   histogram and renders that one value as 0. Stdout is ungated by
+//!   the harness either way.
+//!
+//! TRIANGLE_THREADS (lib.rs note, issue #12): parsed and validated
+//! (1..=1024) now; consumed when the internal multithreading lands.
 
-fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+use std::io::Write as _;
+
+use triangle::api::{read_area, read_elements, read_nodes, read_poly};
+use triangle::formatter::{g_padded, g_padded_left};
+use triangle::{Error, Mesh, MeshInput, Options, Quality, Statistics};
+
+/// TRI_OPTIONS (triangle_config.h): C's exit(-2) becomes process
+/// status 254 through the OS, exactly like C.
+const TRI_OPTIONS: i32 = -2;
+
+/// The command-line switches and file names of behavior_legacy
+/// (util.h:11-33): C's fixed FILENAMESIZE buffers become Strings (the
+/// truncation semantics of the fixed buffers are not observable in
+/// the harness; register row D32).
+struct BehaviorLegacy {
+    /// Set at util.c:167, never read by main.c (C's own dead store);
+    /// the mesh's firstnumber comes from the options (-z).
+    #[allow(dead_code)]
+    firstnumber: i32,
+    edgesout: bool,
+    epsout: bool,
+    neighbors: bool,
+    /// Set by -B at util.c:150; only the behavior's copy is read.
+    #[allow(dead_code)]
+    nobound: bool,
+    nopolywritten: bool,
+    nonodewritten: bool,
+    noelewritten: bool,
+    noiterationnum: bool,
+    /// Set by -O at util.c:158; only the behavior's copy is read.
+    #[allow(dead_code)]
+    noholes: bool,
+    docheck: bool,
+    quiet: bool,
+    verbose: i32,
+    innodefilename: String,
+    inelefilename: String,
+    inpolyfilename: String,
+    areafilename: String,
+    outnodefilename: String,
+    outelefilename: String,
+    outpolyfilename: String,
+    edgefilename: String,
+    neighborfilename: String,
+    epsfilename: String,
+}
+
+impl BehaviorLegacy {
+    fn new() -> BehaviorLegacy {
+        BehaviorLegacy {
+            firstnumber: 1,
+            edgesout: false,
+            epsout: false,
+            neighbors: false,
+            nobound: false,
+            nopolywritten: false,
+            nonodewritten: false,
+            noelewritten: false,
+            noiterationnum: false,
+            noholes: false,
+            docheck: false,
+            quiet: false,
+            verbose: 0,
+            innodefilename: String::new(),
+            inelefilename: String::new(),
+            inpolyfilename: String::new(),
+            areafilename: String::new(),
+            outnodefilename: String::new(),
+            outelefilename: String::new(),
+            outpolyfilename: String::new(),
+            edgefilename: String::new(),
+            neighborfilename: String::new(),
+            epsfilename: String::new(),
+        }
+    }
+}
+
+/// The behavior fields main.c, check_behavior and print_statistics
+/// read (b->poly, b->refine, b->vararea, b->convex, b->weighted,
+/// b->quality, b->fixedarea, b->maxarea, b->jettison). Options is
+/// opaque to the bin crate by design (ADR 0004 section 5.1), so the
+/// CLI scans the option string itself, transliterating exactly the
+/// parsecommandline branches that set these fields (triangle.c:386,
+/// 390-450) plus the tail rules that touch them (triangle.c:509-531).
+struct BFields {
+    poly: bool,
+    refine: bool,
+    quality: bool,
+    vararea: bool,
+    fixedarea: bool,
+    maxarea: f64,
+    convex: bool,
+    weighted: bool,
+    jettison: bool,
+}
+
+/// scan_b_fields: the parsecommandline branches for the BFields set.
+/// Digits and '.' are never switches, so the number consumption of
+/// 'q'/'U'/'S' (which only advances the scan over non-switch
+/// characters) has no effect on these fields and is omitted; 'a'
+/// captures its number run for maxarea like C's workstring + strtod
+/// (triangle.c:415-431).
+fn scan_b_fields(options: &str) -> BFields {
+    let s = options.as_bytes();
+    let mut f = BFields {
+        poly: false,
+        refine: false,
+        quality: false,
+        vararea: false,
+        fixedarea: false,
+        // triangle.c:383: b->maxarea = -1.0.
+        maxarea: -1.0,
+        convex: false,
+        weighted: false,
+        jettison: false,
+    };
+    let mut i = 0usize;
+    while i < s.len() {
+        let c = s[i];
+        if c == b'p' {
+            f.poly = true;
+        }
+        if c == b'r' {
+            f.refine = true;
+        }
+        if c == b'a' {
+            // triangle.c:415-431: quality, then the number branch.
+            f.quality = true;
+            let mut j = i + 1;
+            while j < s.len() && (s[j].is_ascii_digit() || s[j] == b'.') {
+                j += 1;
+            }
+            if j > i + 1 {
+                f.fixedarea = true;
+                f.maxarea = strtod_run(&s[i + 1..j]);
+            } else {
+                f.vararea = true;
+            }
+        }
+        if c == b'u' {
+            // triangle.c:433-436.
+            f.quality = true;
+        }
+        if c == b'c' {
+            // triangle.c:451-453.
+            f.convex = true;
+        }
+        if c == b'w' {
+            // triangle.c:455-457.
+            f.weighted = true;
+        }
+        if c == b'W' {
+            // triangle.c:459-461 (weighted = 2; the warning only
+            // tests nonzero).
+            f.weighted = true;
+        }
+        if c == b'j' {
+            // triangle.c:463-465.
+            f.jettison = true;
+        }
+        if c == b'q' || c == b'U' {
+            // triangle.c:390-414: quality (the angles are not
+            // CLI-read).
+            f.quality = true;
+        }
+        if c == b'D' || c == b'L' {
+            // triangle.c:485-489.
+            f.quality = true;
+        }
+        i += 1;
+    }
+    // The tail rules that touch these fields (triangle.c:509-531):
+    // vararea is zeroed unless refining or reading a PSLG, and
+    // weighted triangulations are incompatible with PSLGs and
+    // meshing (which makes check_behavior's weighted warning dead,
+    // exactly like C).
+    if !f.refine && !f.poly {
+        f.vararea = false;
+    }
+    if f.weighted && (f.poly || f.quality) {
+        f.weighted = false;
+    }
+    f
+}
+
+/// strtod over a digits-and-dots run (the workstring of
+/// triangle.c:415-431): the longest valid decimal prefix, like C.
+fn strtod_run(bytes: &[u8]) -> f64 {
+    for end in (1..=bytes.len()).rev() {
+        if let Ok(txt) = std::str::from_utf8(&bytes[..end]) {
+            if let Ok(v) = txt.parse::<f64>() {
+                return v;
+            }
+        }
+    }
+    0.0
+}
+
+/// TRIANGLE_THREADS (issue #12): validated now, consumed when the
+/// internal multithreading lands. Anything but an integer in 1..=1024
+/// fails to stderr with exit 1.
+fn read_thread_count() {
+    if let Ok(val) = std::env::var("TRIANGLE_THREADS") {
+        match val.parse::<u32>() {
+            Ok(n) if (1..=1024).contains(&n) => {}
+            _ => {
+                eprintln!("Error: TRIANGLE_THREADS must be an integer between 1 and 1024.");
+                std::process::exit(1);
+            }
+        }
+    }
+}
+
+/// syntax (util.c:14-99), the full-shape variant (not CDT_ONLY, not
+/// REDUCED). Exit 0 like C.
+fn syntax() -> ! {
+    println!("triangle [-prq__a__uAcDjenBPNEIOXzo_YS__iFlsCQVh] input_file");
+    println!("    -p  Triangulates a Planar Straight Line Graph (.poly file).");
+    println!("    -r  Refines a previously generated mesh.");
+    println!("    -q  Quality mesh generation.  A minimum angle may be specified.");
+    println!("    -a  Applies a maximum triangle area constraint.");
+    println!("    -u  Applies a user-defined triangle constraint.");
+    println!("    -A  Applies attributes to identify triangles in certain regions.");
+    println!("    -c  Encloses the convex hull with segments.");
+    println!("    -D  Conforming Delaunay:  all triangles are truly Delaunay.");
+    println!("    -w  Weighted Delaunay triangulation.");
+    println!("    -W  Regular triangulation (lower hull of a height field).");
+    println!("    -j  Jettison unused vertices from output .node file.");
+    println!("    -e  Generates an edge list.");
+    println!("    -n  Generates a list of triangle neighbors.");
+    println!("    -B  Suppresses output of boundary information.");
+    println!("    -P  Suppresses output of .poly file.");
+    println!("    -N  Suppresses output of .node file.");
+    println!("    -E  Suppresses output of .ele file.");
+    println!("    -I  Suppresses mesh iteration numbers.");
+    println!("    -O  Ignores holes in .poly file.");
+    println!("    -X  Suppresses use of exact arithmetic.");
+    println!("    -z  Numbers all items starting from zero (rather than one).");
+    println!("    -o2 Generates second-order subparametric elements.");
+    println!("    -Y  Suppresses boundary segment splitting.");
+    println!("    -S  Specifies maximum number of added Steiner points.");
+    println!("    -i  Uses incremental method, rather than divide-and-conquer.");
+    println!("    -F  Uses Fortune's sweepline algorithm, rather than d-and-c.");
+    println!("    -l  Uses vertical cuts only, rather than alternating cuts.");
+    println!("    -s  Force segments into mesh by splitting (instead of using CDT).");
+    println!("    -C  Check consistency of final mesh.");
+    println!("    -Q  Quiet:  No terminal output except errors.");
+    println!("    -V  Verbose:  Detailed information on what I'm doing.");
+    println!("    -h  Help:  Detailed instructions for Triangle.");
+    std::process::exit(0)
+}
+
+/// info (util.c:103-115). TRIANGLE_VERSION is "1.7.0_acute" with the
+/// acute feature (the fork's numbering, src/CMakeLists.txt), plain
+/// "1.7.0" without. Exit 0 like C.
+fn info() -> ! {
     let (major, minor, patch) = triangle::VERSION;
+    let version = if triangle::HAS_ACUTE {
+        format!("{}.{}.{}_acute", major, minor, patch)
+    } else {
+        format!("{}.{}.{}", major, minor, patch)
+    };
+    println!("Triangle (version {})", version);
+    println!("A Two-Dimensional Quality Mesh Generator and Delaunay Triangulator.");
+    println!();
+    println!("Copyright 1993, 1995, 1997, 1998, 2002, 2005 Jonathan Richard Shewchuk");
+    println!();
+    println!("Detailed instructions can be found in the README file or online at");
+    println!("http://www.cs.cmu.edu/~quake/triangle.html.");
+    std::process::exit(0)
+}
+
+/// parsecommandline_legacy (util.c:121-266).
+fn parsecommandline_legacy(args: &[String], b: &mut BehaviorLegacy) {
+    // util.c:133-146: the switch resets.
+    b.firstnumber = 1;
+    b.edgesout = false;
+    b.epsout = false;
+    b.neighbors = false;
+    b.nobound = false;
+    b.nopolywritten = false;
+    b.nonodewritten = false;
+    b.noelewritten = false;
+    b.noiterationnum = false;
+    b.noholes = false;
+    b.docheck = false;
+    b.quiet = false;
+    b.verbose = 0;
+    b.innodefilename.clear();
+
+    // STARTINDEX 1 (util.c:131): argv[0] is skipped.
+    for arg in args.iter().skip(1) {
+        if arg.as_bytes().first() == Some(&b'-') {
+            for c in arg.bytes().skip(1) {
+                if c == b'z' {
+                    b.firstnumber = 0;
+                }
+                if c == b'e' {
+                    b.edgesout = true;
+                }
+                if c == b'm' {
+                    b.epsout = true;
+                }
+                if c == b'n' {
+                    b.neighbors = true;
+                }
+                if c == b'B' {
+                    b.nobound = true;
+                }
+                if c == b'P' {
+                    b.nopolywritten = true;
+                }
+                if c == b'N' {
+                    b.nonodewritten = true;
+                }
+                if c == b'E' {
+                    b.noelewritten = true;
+                }
+                if c == b'I' {
+                    b.noiterationnum = true;
+                }
+                if c == b'O' {
+                    b.noholes = true;
+                }
+                if c == b'C' {
+                    b.docheck = true;
+                }
+                if c == b'Q' {
+                    b.quiet = true;
+                }
+                if c == b'V' {
+                    b.verbose += 1;
+                }
+                if c == b'h' || c == b'H' || c == b'?' {
+                    info();
+                }
+                if c == b'v' {
+                    println!("WARNING: Voronoi option [v] not supported.");
+                }
+                if c == b'g' {
+                    println!("WARNING: Geomview option [g] not supported.");
+                }
+            }
+        } else {
+            // util.c:182-186: strncpy - the last plain argument wins.
+            b.innodefilename = arg.clone();
+        }
+    }
+    if b.innodefilename.is_empty() {
+        syntax();
+    }
+    // The suffix strips (util.c:187-199). C compares &name[len - 5]
+    // unconditionally, reading out of bounds when the name is shorter
+    // than the suffix; the port guards the compare (register row
+    // D32), byte-identical whenever C is in bounds.
+    if has_suffix(&b.innodefilename, ".node") {
+        b.innodefilename.truncate(b.innodefilename.len() - 5);
+    }
+    if has_suffix(&b.innodefilename, ".poly") {
+        b.innodefilename.truncate(b.innodefilename.len() - 5);
+    }
+    if has_suffix(&b.innodefilename, ".ele") {
+        b.innodefilename.truncate(b.innodefilename.len() - 4);
+    }
+    if has_suffix(&b.innodefilename, ".area") {
+        b.innodefilename.truncate(b.innodefilename.len() - 5);
+    }
+
+    // The derived input names (util.c:201-204).
+    b.inpolyfilename = b.innodefilename.clone();
+    b.inelefilename = b.innodefilename.clone();
+    b.areafilename = b.innodefilename.clone();
+
+    // The iteration-number scan (util.c:205-229): the position after
+    // the last '.' with a non-NUL next character, then the
+    // digit-verification do-while that cancels the increment on any
+    // non-digit tail.
+    let mut increment = 0usize;
+    {
+        let workstring = b.innodefilename.as_bytes();
+        let mut j = 1usize;
+        while j < workstring.len() {
+            if workstring[j] == b'.' && j + 1 < workstring.len() {
+                increment = j + 1;
+            }
+            j += 1;
+        }
+    }
+    let mut meshnumber: i32 = 0;
+    if increment > 0 {
+        let workstring = b.innodefilename.as_bytes();
+        let mut j = increment;
+        loop {
+            if workstring[j].is_ascii_digit() {
+                // C: int arithmetic; overflow is undefined in C, the
+                // port wraps (the options.rs steiner precedent).
+                meshnumber = meshnumber
+                    .wrapping_mul(10)
+                    .wrapping_add((workstring[j] - b'0') as i32);
+            } else {
+                increment = 0;
+            }
+            j += 1;
+            if j >= workstring.len() {
+                break;
+            }
+        }
+    }
+
+    // The output names (util.c:230-262).
+    if b.noiterationnum {
+        // Plain names, iteration numbers suppressed (util.c:230-242).
+        b.outnodefilename = format!("{}.node", b.innodefilename);
+        b.outelefilename = format!("{}.ele", b.innodefilename);
+        b.edgefilename = format!("{}.edge", b.innodefilename);
+        b.epsfilename = format!("{}.eps", b.innodefilename);
+        b.neighborfilename = format!("{}.neigh", b.innodefilename);
+    } else if increment == 0 {
+        // The ".1." names (util.c:243-256).
+        b.outnodefilename = format!("{}.1.node", b.innodefilename);
+        b.outpolyfilename = format!("{}.1.poly", b.innodefilename);
+        b.outelefilename = format!("{}.1.ele", b.innodefilename);
+        b.edgefilename = format!("{}.1.edge", b.innodefilename);
+        b.epsfilename = format!("{}.1.eps", b.innodefilename);
+        b.neighborfilename = format!("{}.1.neigh", b.innodefilename);
+    } else {
+        // The prefix + sprintf("%d", meshnumber + 1) names
+        // (util.c:257-262): workstring with '%d' written over the
+        // number start, then the suffix appended to the shared base.
+        let base = format!(
+            "{}{}",
+            &b.innodefilename[..increment],
+            meshnumber.wrapping_add(1)
+        );
+        b.outnodefilename = format!("{}.node", base);
+        b.outpolyfilename = format!("{}.poly", base);
+        b.outelefilename = format!("{}.ele", base);
+        b.edgefilename = format!("{}.edge", base);
+        b.epsfilename = format!("{}.eps", base);
+        b.neighborfilename = format!("{}.neigh", base);
+    }
+
+    // The input suffixes (util.c:263-266).
+    b.innodefilename.push_str(".node");
+    b.inpolyfilename.push_str(".poly");
+    b.inelefilename.push_str(".ele");
+    b.areafilename.push_str(".area");
+}
+
+fn has_suffix(name: &str, suffix: &str) -> bool {
+    name.len() >= suffix.len() && name.ends_with(suffix)
+}
+
+/// check_behavior (util.c:268-289), the CLI-side checks and warnings.
+fn check_behavior(b: &BFields, lb: &BehaviorLegacy) {
+    if b.fixedarea && b.maxarea <= 0.0 {
+        println!("ERROR: Maximum area must be greater than zero.");
+        std::process::exit(TRI_OPTIONS);
+    }
+
+    if b.refine && lb.noiterationnum {
+        println!("ERROR: You cannot use the -I switch when refining a triangulation.");
+        std::process::exit(TRI_OPTIONS);
+    }
+
+    // Regular/weighted triangulations are incompatible with PSLGs
+    // and meshing (util.c:273-276). The branch is dead exactly like
+    // in C: the parse tail zeroed weighted under poly/quality
+    // (triangle.c:528-530).
+    if b.weighted && !lb.quiet && (b.poly || b.quality) {
+        println!("WARNING:  weighted triangulations (-w, -W) are incompatible");
+        println!("  with PSLGs (-p) and meshing (-q, -a, -u).  Weights ignored.");
+    }
+
+    if b.jettison && lb.nonodewritten && !lb.quiet {
+        println!("WARNING:  -j and -N switches are somewhat incompatible.");
+        println!("  If any vertices are jettisoned, you will need the output");
+        // util.c:287: no trailing newline, verbatim.
+        print!("  .node file to reconstruct the new node indices.");
+    }
+}
+
+/// check (util.c:469-476): print C's failure line and exit with the
+/// TRI_* code. The D8 funnel collapses the status granularity: C's
+/// TRI_FILE_OPEN (-9) and TRI_FILE_READ (-10) both arrive as
+/// Error::Io (exit -9), the raw -1 TODO failures arrive as Error::Input
+/// (exit -1); register row D32.
+fn check<T>(result: Result<T, Error>, site: &str) -> T {
+    match result {
+        Ok(value) => value,
+        Err(e) => {
+            println!("ERROR: method 'triangle_{}' failed.", site);
+            let code = match &e {
+                Error::Io(_) => -9,
+                Error::Input(_) => -1,
+                Error::Options(_) => -2,
+                _ => -1,
+            };
+            let _ = e;
+            std::process::exit(code);
+        }
+    }
+}
+
+/// finishfile (util.c:478-492): the "# Generated by" trailer with
+/// every argv element (argv[0] included), then the close. C ignores
+/// the fprintf return values here; the port ignores them too.
+fn finishfile(file: &mut std::fs::File, args: &[String]) {
+    let _ = write!(file, "# Generated by");
+    for arg in args {
+        let _ = write!(file, " {}", arg);
+    }
+    let _ = writeln!(file);
+}
+
+/// write_nodes (util.c:494-509): fopen "w" failure returns -1 and
+/// main ignores the status (main.c:69); the port skips silently,
+/// exactly the observable C behavior.
+fn write_nodes(mesh: &Mesh, filename: &str, args: &[String]) {
+    let Ok(mut file) = std::fs::File::create(filename) else {
+        return;
+    };
+    let status = mesh.write_nodes(&mut file);
+    finishfile(&mut file, args);
+    let _ = status;
+}
+
+/// write_elements (util.c:511-526).
+fn write_elements(mesh: &Mesh, filename: &str, args: &[String]) {
+    let Ok(mut file) = std::fs::File::create(filename) else {
+        return;
+    };
+    let status = mesh.write_elements(&mut file);
+    finishfile(&mut file, args);
+    let _ = status;
+}
+
+/// write_poly (util.c:528-545): the holes and regions come from the
+/// read input exactly like C's in->holelist / in->regionlist.
+fn write_poly(mesh: &Mesh, filename: &str, input: &MeshInput, args: &[String]) {
+    let Ok(mut file) = std::fs::File::create(filename) else {
+        return;
+    };
+    let status = mesh.write_poly(&mut file, &input.holes, &input.regions);
+    finishfile(&mut file, args);
+    let _ = status;
+}
+
+/// write_edges (util.c:547-562).
+fn write_edges(mesh: &Mesh, filename: &str, args: &[String]) {
+    let Ok(mut file) = std::fs::File::create(filename) else {
+        return;
+    };
+    let status = mesh.write_edges(&mut file);
+    finishfile(&mut file, args);
+    let _ = status;
+}
+
+/// write_neighbors (util.c:564-579).
+fn write_neighbors(mesh: &Mesh, filename: &str, args: &[String]) {
+    let Ok(mut file) = std::fs::File::create(filename) else {
+        return;
+    };
+    let status = mesh.write_neighbors(&mut file);
+    finishfile(&mut file, args);
+    let _ = status;
+}
+
+/// write_postscript (util.c:581-596): no finishfile trailer, just the
+/// close.
+fn write_postscript(mesh: &Mesh, filename: &str) {
+    let Ok(mut file) = std::fs::File::create(filename) else {
+        return;
+    };
+    let status = mesh.write_eps(&mut file);
+    drop(file);
+    let _ = status;
+}
+
+/// check_mesh (util.c:458-467).
+fn check_mesh(mesh: &Mesh) {
+    if mesh.check_mesh() > 0 {
+        println!("WARNING: mesh is topologically inconsistent.");
+    }
+    if mesh.check_delaunay() > 0 {
+        println!("WARNING: mesh is not (constraint) Delaunay.");
+    }
+}
+
+/// print_statistics (util.c:295-435). The input counts come from the
+/// read MeshInput (C reads the m->in* counters the create sequence
+/// stored from the same triangleio), the mesh counts from
+/// Statistics, the quality block from Quality; the renderers are the
+/// formatter's padded g-forms.
+fn print_statistics(mesh: &Mesh, input: &MeshInput, b: &BFields, lb: &BehaviorLegacy) {
+    let st: Statistics = mesh.statistics();
+    // The ratiotable constants (util.c:305-315). C declares sixteen
+    // entries and initializes fourteen; its last histogram line reads
+    // ratiotable[14] uninitialized (util.c:365-366). The port renders
+    // 0.0 there (register row D33).
+    let ratiotable = [
+        1.5, 2.0, 2.5, 3.0, 4.0, 6.0, 10.0, 15.0, 25.0, 50.0, 100.0, 300.0, 1000.0, 10000.0,
+    ];
+
+    println!("\nStatistics:\n");
+    println!("  Input vertices: {}", input.points.len());
+    if b.refine {
+        println!(
+            "  Input triangles: {}",
+            input.elements.len() / input.corners_per_element.max(1)
+        );
+    }
+    if b.poly {
+        println!("  Input segments: {}", input.segments.len());
+        if !b.refine {
+            println!("  Input holes: {}", input.holes.len());
+        }
+    }
+
     println!(
-        "triangle-cli (stage-1 stub, Triangle {}.{}.{}, aCute {}): {}",
-        major,
-        minor,
-        patch,
-        triangle::HAS_ACUTE,
-        args.join(" ")
+        "\n  Mesh vertices: {}",
+        st.vertices as i64 - st.undeads as i64
     );
-    // exit 0: the harness records candidate invocations before comparing
-    // outputs, and this stub has no failure mode yet.
+    println!("  Mesh triangles: {}", st.triangles);
+    println!("  Mesh edges: {}", st.edges);
+    println!("  Mesh exterior boundary edges: {}", st.hullsize);
+    if b.poly || b.refine {
+        println!(
+            "  Mesh interior boundary edges: {}",
+            st.subsegs as i64 - st.hullsize as i64
+        );
+        println!("  Mesh subsegments (constrained edges): {}", st.subsegs);
+    }
+    println!();
+
+    if lb.verbose > 0 {
+        let q: Quality = mesh
+            .quality()
+            .expect("triangle_mesh_quality is failure-free (triangle_api.c:102)");
+
+        println!("Mesh quality statistics:\n");
+
+        println!(
+            "  Smallest area: {}   |  Largest area: {}",
+            g_padded(q.smallest_area, 5, 16),
+            g_padded(q.biggest_area, 5, 16)
+        );
+        println!(
+            "  Shortest edge: {}   |  Longest edge: {}",
+            g_padded(q.shortest, 5, 16),
+            g_padded(q.longest, 5, 16)
+        );
+        println!(
+            "  Shortest altitude: {}   |  Largest aspect ratio: {}\n",
+            g_padded(q.min_altitude, 5, 12),
+            g_padded(q.worst_aspect, 5, 8)
+        );
+
+        println!("  Triangle aspect ratio histogram:");
+        println!(
+            "  1.1547 - {}    :  {:>8}    | {} - {}     :  {:>8}",
+            g_padded_left(ratiotable[0], 6, 6),
+            q.aspect_table[0],
+            g_padded(ratiotable[7], 6, 6),
+            g_padded_left(ratiotable[8], 6, 6),
+            q.aspect_table[8]
+        );
+        for i in 1..7 {
+            println!(
+                "  {} - {}    :  {:>8}    | {} - {}     :  {:>8}",
+                g_padded(ratiotable[i - 1], 6, 6),
+                g_padded_left(ratiotable[i], 6, 6),
+                q.aspect_table[i],
+                g_padded(ratiotable[i + 7], 6, 6),
+                g_padded_left(ratiotable[i + 8], 6, 6),
+                q.aspect_table[i + 8]
+            );
+        }
+        println!(
+            "  {} - {}    :  {:>8}    | {} -            :  {:>8}",
+            g_padded(ratiotable[6], 6, 6),
+            g_padded_left(ratiotable[7], 6, 6),
+            q.aspect_table[7],
+            g_padded(0.0, 6, 6),
+            q.aspect_table[15]
+        );
+        println!("  (Aspect ratio is longest edge divided by shortest altitude)\n");
+
+        println!(
+            "  Smallest angle: {}   |  Largest angle: {}\n",
+            g_padded(q.smallest_angle, 5, 15),
+            g_padded(q.biggest_angle, 5, 15)
+        );
+
+        println!("  Angle histogram:");
+        for i in 0..9usize {
+            println!(
+                "    {:>3} - {:>3} degrees:  {:>8}    |    {:>3} - {:>3} degrees:  {:>8}",
+                i * 10,
+                i * 10 + 10,
+                q.angle_table[i],
+                i * 10 + 90,
+                i * 10 + 100,
+                q.angle_table[i + 9]
+            );
+        }
+        println!();
+
+        // The memory allocation and algorithmic sections
+        // (util.c:368-432) are not renderable on the frozen public
+        // surface (per-pool maxitems and the predicate counters are
+        // crate-internal); register row D33. stdout is not compared
+        // by the harness.
+    }
+}
+
+/// main (main.c:14-115), the full-shape (#else of CDT_ONLY) flow.
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+
+    read_thread_count();
+
+    let mut lb = BehaviorLegacy::new();
+    parsecommandline_legacy(&args, &mut lb);
+
+    // At this point argc is guaranteed to be > 1 (syntax() exits
+    // otherwise, main.c:20 comment).
+    let option_string = if args[1].as_bytes().first() == Some(&b'-') {
+        &args[1][1..]
+    } else {
+        ""
+    };
+    // triangle_context_options (main.c:22): the option string goes to
+    // the parser. The port's Options::parse rejects only what the C
+    // NO_ACUTE build rejects (-U without the acute feature,
+    // ADR 0004 section 2); C's parsecommandline never fails
+    // (unknown switches are silently ignored, triangle.c:364-532).
+    let options = match Options::parse(option_string) {
+        Ok(options) => options,
+        Err(e) => {
+            println!("{}", e);
+            std::process::exit(TRI_OPTIONS);
+        }
+    };
+    let bf = scan_b_fields(option_string);
+
+    check_behavior(&bf, &lb);
+
+    // reset_triangleio (main.c:18, util.c:437-456): the owned MeshInput
+    // starts empty. C's `int firstnode` (main.c:12) is an out-param
+    // main never reads; the port zero-initializes it (register row
+    // D32, C leaves it uninitialized).
+    let mut input = MeshInput::default();
+    let mut firstnode: i32 = 0;
+
+    if bf.poly {
+        check(
+            read_poly(&lb.inpolyfilename, &mut input, &mut firstnode),
+            "read_poly",
+        );
+    }
+
+    if input.points.is_empty() {
+        // The poly file had no vertices (main.c:29-33).
+        check(
+            read_nodes(&lb.innodefilename, &mut input, &mut firstnode),
+            "read_nodes",
+        );
+    }
+
+    let mesh = if bf.refine {
+        // Read the mesh (main.c:36-39).
+        check(
+            read_elements(&lb.inelefilename, &mut input),
+            "read_elements",
+        );
+        if bf.vararea {
+            check(read_area(&lb.areafilename, &mut input), "read_area");
+        }
+        // Reconstruct the mesh (main.c:41-43). The load orchestration
+        // is the remaining stage-1 scaffold; its NotImplemented
+        // failure prints C's check line and exits exactly like a C
+        // TRI_FAILURE would.
+        let mut loaded = check(Mesh::load_mesh(options, &input), "mesh_load");
+        check(loaded.refine(), "mesh_refine");
+        loaded
+    } else {
+        // Triangulate the polygon (main.c:45).
+        check(triangle::triangulate(options, &input), "mesh_create")
+    };
+
+    // If not using iteration numbers, don't write a .node file if one
+    // was read, because the original one would be overwritten
+    // (main.c:48-56).
+    if lb.nonodewritten || (lb.noiterationnum && !bf.poly) {
+        if !lb.quiet {
+            println!("NOT writing a .node file.");
+        }
+        // numbernodes(&m, &b) is commented out in C (main.c:54): the
+        // writers inline their own numbering.
+    } else {
+        // writenodes() numbers the vertices too (main.c:56).
+        write_nodes(&mesh, &lb.outnodefilename, &args);
+    }
+    if lb.noelewritten {
+        if !lb.quiet {
+            println!("NOT writing an .ele file.");
+        }
+    } else {
+        write_elements(&mesh, &lb.outelefilename, &args);
+    }
+    // The -c switch (convex switch) causes a PSLG to be written even
+    // if none was read (main.c:58-66).
+    if bf.poly || bf.convex {
+        // If not using iteration numbers, don't overwrite the .poly
+        // file (main.c:61-65).
+        if lb.nopolywritten || lb.noiterationnum {
+            if !lb.quiet {
+                println!("NOT writing a .poly file.");
+            }
+        } else {
+            write_poly(&mesh, &lb.outpolyfilename, &input, &args);
+        }
+    }
+
+    if lb.edgesout {
+        write_edges(&mesh, &lb.edgefilename, &args);
+    }
+
+    if lb.epsout {
+        write_postscript(&mesh, &lb.epsfilename);
+    }
+
+    if lb.neighbors {
+        write_neighbors(&mesh, &lb.neighborfilename, &args);
+    }
+
+    if !lb.quiet {
+        print_statistics(&mesh, &input, &bf, &lb);
+    }
+
+    // -C: check consistency of the final mesh (main.c:74-78).
+    if lb.docheck {
+        check_mesh(&mesh);
+    }
+
+    // triangle_context_destroy (main.c:80) dissolves over the owned
+    // values. main returns 0 (main.c:83).
 }

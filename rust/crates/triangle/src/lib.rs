@@ -37,6 +37,7 @@
 
 pub mod api;
 pub mod error;
+pub mod formatter;
 pub mod input;
 pub mod options;
 
