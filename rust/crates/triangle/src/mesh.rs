@@ -77,8 +77,8 @@ pub(crate) struct Mesh {
     /// Attributes per triangle (C m->eextras; sizes the triangle row and
     /// bounds tri_attribute).
     pub(crate) eextras: i32,
-    /// Input bounds (C m->xmin, xmax, ymin, ymax; REAL, triangle.h:514):
-    /// written by the transfernodes row (ioarrays.rs, not landed yet) and
+    /// Input bounds (C m->xmin, xmax, ymin, ymax; REAL, triangle.h:513):
+    /// written by transfernodes (ioarrays.rs) and
     /// read by boundingbox (delaunay.rs part 1) and sweeplinedelaunay
     /// (part 2). Zero superset of C's uninitialized read-before-write
     /// (D11).
@@ -86,8 +86,8 @@ pub(crate) struct Mesh {
     pub(crate) xmax: f64,
     pub(crate) ymin: f64,
     pub(crate) ymax: f64,
-    /// C m->xminextreme (triangle.h:517): 10 * xmin - 9 * xmax, written
-    /// by transfernodes (triangle.c:7754, ioarrays.rs, not landed yet)
+    /// C m->xminextreme (triangle.h:514): 10 * xmin - 9 * xmax, written
+    /// by transfernodes (triangle.c:7754, ioarrays.rs)
     /// and read by sweeplinedelaunay as the circle-event x key
     /// (triangle.c:5382/5397). Zero superset of C's uninitialized
     /// read-before-write (D11).
@@ -100,7 +100,7 @@ pub(crate) struct Mesh {
     /// every-build readers land with later rows).
     #[allow(dead_code)]
     pub(crate) undeads: i32,
-    /// C m->inelements (triangle.h:517): number of input triangles (the
+    /// C m->inelements (triangle.h:516): number of input triangles (the
     /// .ele count). Written by reconstruct (triangle.c:5498); read by the
     /// statistics rows that land with the later slices. Never read
     /// before the first write in the pipeline; the #[allow(dead_code)]
@@ -108,11 +108,24 @@ pub(crate) struct Mesh {
     /// readers land with later rows).
     #[allow(dead_code)]
     pub(crate) inelements: i32,
-    /// C m->insegments (triangle.h:518): number of input PSLG segments
+    /// C m->insegments (triangle.h:517): number of input PSLG segments
     /// (the .poly count). Written by reconstruct (triangle.c:5519) and
     /// formskeleton (triangle.c:6562); read by formskeleton's insertion
     /// loop and, later, the refine/enforcequality rows.
     pub(crate) insegments: i32,
+    /// C m->holes (triangle.h:518): number of input holes (the
+    /// triangleio numberofholes count). Stored by the create and load
+    /// orchestration (triangle_api.c:229/238, 316/322); read by the
+    /// output path (triangle_api.c:404-405) once the ioarrays writers
+    /// land. The #[allow(dead_code)] mirrors the inelements
+    /// convention (the reader lands with the later slice).
+    #[allow(dead_code)]
+    pub(crate) holes: i32,
+    /// C m->regions (triangle.h:519): number of input regions (the
+    /// triangleio numberofregions count); same writers and reader as
+    /// holes.
+    #[allow(dead_code)]
+    pub(crate) regions: i32,
     /// C m->scoutsteps (triangle.h:532, long to i64): vertices reached so
     /// far inserting the current segment. Zeroed by triangleinit
     /// (triangle.c:1499, mirrored in Mesh::new) and by each
@@ -336,7 +349,10 @@ impl Mesh {
             // struct memory until their owning algorithms run); the
             // port picks the deterministic zero superset of that
             // undefined state. inelements/insegments join that zero
-            // superset; steinerleft takes b->steiner at construction
+            // superset; holes/regions join it too (C stores them in
+            // the create/load orchestration, triangle_api.c:229/238
+            // and 316/322); steinerleft takes b->steiner at
+            // construction
             // (C triangle_context_create:35 / triangle_mesh_load:208,
             // both before any core call runs).
             randomseed: 1,
@@ -349,6 +365,8 @@ impl Mesh {
             lastflip: NULL,
             inelements: 0,
             insegments: 0,
+            holes: 0,
+            regions: 0,
             scoutsteps: 0,
             steinerleft: b.steiner,
             infvertex1: NULL,
