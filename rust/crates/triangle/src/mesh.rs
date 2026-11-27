@@ -116,15 +116,11 @@ pub(crate) struct Mesh {
     /// C m->holes (triangle.h:518): number of input holes (the
     /// triangleio numberofholes count). Stored by the create and load
     /// orchestration (triangle_api.c:229/238, 316/322); read by the
-    /// output path (triangle_api.c:404-405) once the ioarrays writers
-    /// land. The #[allow(dead_code)] mirrors the inelements
-    /// convention (the reader lands with the later slice).
-    #[allow(dead_code)]
+    /// output path (Mesh::output, triangle_api.c:404-405).
     pub(crate) holes: i32,
     /// C m->regions (triangle.h:519): number of input regions (the
     /// triangleio numberofregions count); same writers and reader as
     /// holes.
-    #[allow(dead_code)]
     pub(crate) regions: i32,
     /// C m->scoutsteps (triangle.h:532, long to i64): vertices reached so
     /// far inserting the current segment. Zeroed by triangleinit

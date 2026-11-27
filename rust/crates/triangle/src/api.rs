@@ -15,8 +15,9 @@
 //! carveholes, enforcequality, highorder). The remaining scaffolding
 //! sites return the funnel-marked InternalStatus::NotImplemented
 //! (each site carries a SCAFFOLDING comment naming the C step it
-//! awaits): load_mesh awaits its api-level load orchestration,
-//! output awaits the ioarrays writers.
+//! awaits): load_mesh awaits its api-level load orchestration.
+//! output runs the ioarray writers through the triangle_mesh_copy
+//! lift (the ioarrays part-2 PR).
 
 // The Mesh struct lands ahead of the core methods that read its
 // behavior (every stage-1 core module takes a &Behavior); the blanket
@@ -31,8 +32,8 @@ use crate::options::{Behavior, Options};
 use crate::pool::WordPool;
 
 /// The output half of the C triangleio surface (ADR 0004 section 5.2),
-/// produced by Mesh::output (triangle_mesh_copy) once the array
-/// writers land. Owned values, no libc types.
+/// produced by Mesh::output (the triangle_mesh_copy lift,
+/// triangle_api.c:362). Owned values, no libc types.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct MeshOutput {
     /// C pointlist as it leaves writenodes (numbered).
@@ -53,9 +54,10 @@ pub struct MeshOutput {
     pub segments: Vec<[i32; 2]>,
     /// C segmentmarkerlist.
     pub segment_markers: Vec<i32>,
-    /// C numberofholes / numberofregions (m->holes / m->regions; the
-    /// lists themselves are input passthrough in C and stay empty
-    /// until the output path lands).
+    /// C numberofholes / numberofregions (the m->holes / m->regions
+    /// stores, triangle_api.c:404-405). The lists themselves are the
+    /// commented-out input passthrough in C (triangle_api.c:407-408)
+    /// and stay empty; the !poly arm NULLs them in C (409-412).
     pub number_of_holes: usize,
     pub number_of_regions: usize,
     /// C edgelist, two ints per edge (Mesh::output(edges: true)).
@@ -135,8 +137,8 @@ impl Default for Quality {
 ///
 /// Stage-1 note: triangulate succeeds since the ioarrays input half
 /// (the full create sequence); load_mesh still returns the scaffold
-/// (its api-level load orchestration is unwired) and output awaits
-/// the ioarrays writers; the surface is frozen now so the stage-1
+/// (its api-level load orchestration is unwired); output runs the
+/// ioarray writers; the surface is frozen now so the stage-1
 /// core tickets fill it without churn.
 ///
 /// Interior note (serial-era bridge): the frozen `&self` check and
@@ -357,16 +359,90 @@ impl Mesh {
         Ok(())
     }
 
-    /// triangle_mesh_copy (triangle_api.c:362): the marshalled output
-    /// (writenodes, writeelements, writepoly, writeedges,
-    /// writeneighbors and the pointmarker restore step).
-    ///
-    /// SCAFFOLDING: awaits the ioarray writers (ioarrays.rs) and
-    /// triangle_restore_pointmarkers' vertex traversal; returns the
-    /// funnel-marked InternalStatus::NotImplemented today.
+    /// triangle_mesh_copy (triangle_api.c:362-428): the marshalled
+    /// output. C opens with its context NULL check (370-375), which
+    /// dissolves over the owned mesh (D8), then stores the count
+    /// fields (377-391) and runs the array writers in C order:
+    /// writenodes (393-395), writeelements (397-398, always), the
+    /// poly || convex gate's writepoly and hole/region stores
+    /// (400-413), writeedges under the edges arg (415-417),
+    /// writeneighbors under the neighbors arg (419-421) and the
+    /// pointmarker restore (423-425). The count-only stores have no
+    /// frozen MeshOutput field: the owned lists derive
+    /// numberofpoints / numberoftriangles /
+    /// numberofpointattributes / numberoftriangleattributes /
+    /// numberofcorners, and numberofedges (386) / numberofsegments
+    /// (387-391) leave through C's separate count fields only, so
+    /// they stay derivable (the edge list carries its own length,
+    /// the segment list likewise).
     pub fn output(&self, edges: bool, neighbors: bool) -> Result<MeshOutput, Error> {
-        let _ = (edges, neighbors);
-        Err(Error::from(InternalStatus::NotImplemented))
+        let behavior = self.behavior.borrow();
+        let mut core = self.core.borrow_mut();
+        // C: the count stores (triangle_api.c:377-391).
+        let mut out = MeshOutput {
+            attributes_per_point: core.nextras as usize,
+            // C: numberofcorners (triangle_api.c:384).
+            corners: ((behavior.order + 1) * (behavior.order + 2) / 2) as usize,
+            attributes_per_element: core.eextras as usize,
+            ..MeshOutput::default()
+        };
+        // C: writenodes (triangle_api.c:393-395), the numbering
+        // writer (it writes the vertex numbers over the marks,
+        // triangle.c:7823).
+        crate::ioarrays::writenodes(
+            &mut core,
+            &behavior,
+            &mut out.points,
+            &mut out.point_attributes,
+            &mut out.point_markers,
+        )?;
+        // C: always write elements (triangle_api.c:397-398).
+        crate::ioarrays::writeelements(
+            &mut core,
+            &behavior,
+            &mut out.elements,
+            &mut out.element_attributes,
+        )?;
+        // C: the poly || convex gate (triangle_api.c:400-402): the -c
+        // switch causes a PSLG to be written even if none was read.
+        if behavior.poly || behavior.convex {
+            crate::ioarrays::writepoly(
+                &mut core,
+                &behavior,
+                &mut out.segments,
+                &mut out.segment_markers,
+            )?;
+            // C: the m->holes / m->regions stores (triangle_api.c:
+            // 404-405).
+            out.number_of_holes = core.holes as usize;
+            out.number_of_regions = core.regions as usize;
+            // C: the -p arm is the commented-out input passthrough
+            // (triangle_api.c:406-408, upstream's own TODO) and the
+            // !poly arm NULLs the lists (409-412); the owned lists
+            // stay empty in both arms, exactly the C shape.
+        }
+        // C: the edges gate (triangle_api.c:415-417).
+        if edges {
+            crate::ioarrays::writeedges(
+                &mut core,
+                &behavior,
+                &mut out.edges,
+                &mut out.edge_markers,
+            )?;
+        }
+        // C: the neighbors gate (triangle_api.c:419-421).
+        if neighbors {
+            crate::ioarrays::writeneighbors(&mut core, &behavior, &mut out.neighbors)?;
+        }
+        // C: the pointmarker restore (triangle_api.c:423-425), gated
+        // on the marker list existing: writenodes wrote the vertex
+        // numbers over the marks and the original markers left in
+        // the list, so they go back exactly here (-B leaves the
+        // list empty and the numbers on the marks, C's NULL arm).
+        if !out.point_markers.is_empty() {
+            crate::input::restore_pointmarkers(&mut core, &behavior, &out.point_markers);
+        }
+        Ok(out)
     }
 
     /// triangle_mesh_statistics (triangle_api.c:111). The mirror of
@@ -485,8 +561,8 @@ mod tests {
         // the pool through transfernodes, delaunay triangulates them
         // (one triangle, hullsize 3), the -p/-q gates stay closed,
         // and the m->edges writer computes (3 * 1 + 3) / 2 = 3
-        // (triangle_api.c:252-253). The output half keeps its
-        // scaffolding until the ioarrays writers land.
+        // (triangle_api.c:252-253). The output half runs the
+        // triangle_mesh_copy lift over the created mesh.
         let mesh =
             triangulate(Options::new(), &triangle_input()).expect("triangulate must succeed");
         let s = mesh.statistics();
@@ -506,7 +582,47 @@ mod tests {
         );
         assert_eq!(mesh.check_mesh(), 0);
         assert_eq!(mesh.check_delaunay(), 0);
-        assert!(mesh.output(false, false).is_err());
+        // The output lift (triangle_api.c:362-428): the vertices
+        // marshal in traversal order (input order here), the single
+        // element records its corners, and a second run returns the
+        // same lists - the pointmarker restore (triangle_api.c:
+        // 423-425) put the original markers back over the numbers,
+        // so the walk is idempotent.
+        let out = mesh.output(false, false).expect("output");
+        assert_eq!(out.points, triangle_input().points);
+        // Without -p the hull marking of the create sequence left 1
+        // on every convex-hull vertex (removeghosts, triangle.c:
+        // 4522-4523, and divconqdelaunay, 4722-4723); writenodes
+        // marshals those marks.
+        assert_eq!(out.point_markers, vec![1, 1, 1]);
+        assert_eq!(out.attributes_per_point, 0);
+        assert!(out.point_attributes.is_empty());
+        assert_eq!(out.corners, 3);
+        assert_eq!(out.elements.len(), 3);
+        let mut corners = out.elements.clone();
+        corners.sort();
+        assert_eq!(corners, vec![1, 2, 3]);
+        // the element is the positively oriented (area 0.5)
+        // triangle over the three numbered vertices
+        let tri: Vec<Point2> = out
+            .elements
+            .iter()
+            .map(|&corner| out.points[(corner - 1) as usize])
+            .collect();
+        let area = 0.5
+            * ((tri[1].x - tri[0].x) * (tri[2].y - tri[0].y)
+                - (tri[2].x - tri[0].x) * (tri[1].y - tri[0].y));
+        assert!((area - 0.5).abs() < 1e-12);
+        assert_eq!(out.attributes_per_element, 0);
+        assert!(out.element_attributes.is_empty());
+        assert!(out.segments.is_empty());
+        assert!(out.segment_markers.is_empty());
+        assert_eq!(out.number_of_holes, 0);
+        assert_eq!(out.number_of_regions, 0);
+        assert!(out.edges.is_empty());
+        assert!(out.edge_markers.is_empty());
+        assert!(out.neighbors.is_empty());
+        assert_eq!(mesh.output(false, false).expect("second output"), out);
     }
 
     #[test]
@@ -572,14 +688,23 @@ mod tests {
         // triangle_api.c:347: without -q the stage is a no-op even with
         // triangles in the mesh, and the m->edges writer
         // (triangle_api.c:354-355) lives inside the gate, so the
-        // statistics field stays 0; the output scaffolding is
-        // untouched by this slice.
+        // statistics field stays 0; the output lift runs over the
+        // untouched mesh.
         let b = Options::new().validate().expect("validate");
         let mut m = scaffold(b, &empty_input());
         lone_core_triangle(&mut m, (0.0, 0.0), (2.0, 0.0), (1.0, 1.0));
         assert!(m.refine().is_ok());
         assert_eq!(m.statistics().edges, 0);
-        assert!(m.output(false, false).is_err());
+        // The output lift over the hand-inserted triangle: the
+        // corners are the numbered vertices, the marker list the
+        // default zeros.
+        let out = m.output(false, false).expect("output");
+        assert_eq!(out.points.len(), 3);
+        assert_eq!(out.point_markers, vec![0, 0, 0]);
+        assert_eq!(out.elements.len(), 3);
+        let mut corners = out.elements.clone();
+        corners.sort();
+        assert_eq!(corners, vec![1, 2, 3]);
     }
 
     #[test]
@@ -597,7 +722,11 @@ mod tests {
         assert!(m.refine().is_ok());
         assert_eq!(m.statistics().triangles, 1);
         assert_eq!(m.statistics().edges, 1);
-        assert!(m.output(false, false).is_err());
+        // The output lift over the refined mesh: one element, its
+        // corners the numbered vertices.
+        let out = m.output(false, false).expect("output");
+        assert_eq!(out.elements, vec![1, 2, 3]);
+        assert_eq!(out.point_markers, vec![0, 0, 0]);
     }
 
     #[test]
@@ -821,5 +950,134 @@ mod tests {
         let s = mesh.statistics();
         assert_eq!(s.vertices, 6);
         assert_eq!(s.triangles, 1);
+    }
+
+    #[test]
+    fn output_runs_the_poly_gate_with_segments_and_counters() {
+        // triangle_api.c:400-413: -p opens the poly gate, writepoly
+        // marshals the subsegments (endpoint pairs by vertex number,
+        // markers in pool order) and the hole/region counters
+        // surface (404-405; both zero here, and the lists are the
+        // commented-out C passthrough, 407-408).
+        let mut opts = Options::new();
+        opts.pslg();
+        let mut input = triangle_input();
+        input.segments = vec![[1, 2], [2, 3], [3, 1]];
+        input.segment_markers = vec![7, 8, 9];
+        let mesh = triangulate(opts, &input).expect("pslg create");
+        let out = mesh.output(false, false).expect("output");
+        assert_eq!(out.segments.len(), 3);
+        let mut pairs: Vec<[i32; 2]> = out
+            .segments
+            .iter()
+            .map(|p| [p[0].min(p[1]), p[0].max(p[1])])
+            .collect();
+        pairs.sort();
+        assert_eq!(pairs, vec![[1, 2], [1, 3], [2, 3]]);
+        let mut markers = out.segment_markers.clone();
+        markers.sort();
+        assert_eq!(markers, vec![7, 8, 9]);
+        assert_eq!(out.number_of_holes, 0);
+        assert_eq!(out.number_of_regions, 0);
+    }
+
+    #[test]
+    fn output_surfaces_the_hole_and_region_counters() {
+        // The holed square through the poly gate: the m->holes /
+        // m->regions stores (triangle_api.c:404-405) surface as the
+        // output counts, and the square's four PSLG segments marshal
+        // through writepoly.
+        let mut opts = Options::new();
+        opts.pslg();
+        let input = MeshInput {
+            points: vec![
+                Point2 { x: 0.0, y: 0.0 },
+                Point2 { x: 1.0, y: 0.0 },
+                Point2 { x: 1.0, y: 1.0 },
+                Point2 { x: 0.0, y: 1.0 },
+            ],
+            segments: vec![[1, 2], [2, 3], [3, 4], [4, 1]],
+            holes: vec![Hole { x: 0.5, y: 0.5 }],
+            regions: vec![Region {
+                x: 0.25,
+                y: 0.25,
+                attribute: 5.0,
+                max_area: 0.0,
+            }],
+            ..MeshInput::default()
+        };
+        let mesh = triangulate(opts, &input).expect("holed square create");
+        let out = mesh.output(false, false).expect("output");
+        assert_eq!(out.number_of_holes, 1);
+        assert_eq!(out.number_of_regions, 1);
+        // The hole seed sits in the unsegmented interior, so plague
+        // (triangle.c:6714) erases both triangles and, with them,
+        // every subsegment whose both abutting triangles are dying
+        // (triangle.c:6747-6751): a square with a centered hole
+        // swallows its whole PSLG, and writepoly has no subseg left
+        // to marshal.
+        assert!(out.segments.is_empty());
+    }
+
+    #[test]
+    fn output_runs_the_edges_and_neighbors_gates() {
+        // triangle_api.c:415-421: the four-point square triangulates
+        // into two triangles with five edges; writeedges visits every
+        // edge once (hull edges marked, the diagonal not) and
+        // writeneighbors records -1 for outer space and the two
+        // element numbers across the diagonal.
+        let mut opts = Options::new();
+        opts.neighbors();
+        let input = MeshInput {
+            points: vec![
+                Point2 { x: 0.0, y: 0.0 },
+                Point2 { x: 1.0, y: 0.0 },
+                Point2 { x: 1.0, y: 1.0 },
+                Point2 { x: 0.0, y: 1.0 },
+            ],
+            ..MeshInput::default()
+        };
+        let mesh = triangulate(opts, &input).expect("square create");
+        let out = mesh.output(true, true).expect("output");
+        assert_eq!(out.edges.len(), 5);
+        let mut pairs: Vec<[i32; 2]> = out
+            .edges
+            .iter()
+            .map(|p| [p[0].min(p[1]), p[0].max(p[1])])
+            .collect();
+        pairs.sort();
+        // the four hull edges plus one diagonal (the cocircular
+        // square leaves the diagonal choice to the triangulation)
+        for hull in [[1, 2], [2, 3], [3, 4], [1, 4]] {
+            assert!(pairs.contains(&hull));
+        }
+        assert!(pairs.contains(&[1, 3]) || pairs.contains(&[2, 4]));
+        let mut markers = out.edge_markers.clone();
+        markers.sort();
+        assert_eq!(markers, vec![0, 1, 1, 1, 1]);
+        let mut neighbors = out.neighbors.clone();
+        neighbors.sort();
+        assert_eq!(neighbors, vec![-1, -1, -1, -1, 1, 2]);
+    }
+
+    #[test]
+    fn output_without_bounds_writes_no_markers_and_keeps_the_numbers() {
+        // -B closes writenodes' marker list (triangle.c:7818-7821),
+        // so the restore gate (triangle_api.c:423-425, a non-NULL
+        // marker list) never fires: the marks keep the vertex
+        // numbers writenodes wrote.
+        let mut opts = Options::new();
+        opts.no_bounds();
+        let mesh = triangulate(opts, &triangle_input()).expect("create");
+        let out = mesh.output(false, false).expect("output");
+        assert!(out.point_markers.is_empty());
+        let core = mesh.core.borrow();
+        let mut t = core.vertices.traversal();
+        let v1 = core.vertextraverse(&mut t).expect("vx");
+        let v2 = core.vertextraverse(&mut t).expect("vx");
+        let v3 = core.vertextraverse(&mut t).expect("vx");
+        assert_eq!(core.vx_mark(v1), 1);
+        assert_eq!(core.vx_mark(v2), 2);
+        assert_eq!(core.vx_mark(v3), 3);
     }
 }

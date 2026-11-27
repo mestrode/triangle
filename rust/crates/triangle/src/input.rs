@@ -2,16 +2,17 @@
 //! Point2, mirroring the input half of C's 'triangleio' struct
 //! (triangle.h:83-90) as owned Vecs with no libc types, validated by the
 //! transliterated semantics of 'triangle_check_triangleio'
-//! (triangle_helper.c:25-72) and carrying the C row of
-//! 'triangle_restore_pointmarkers' (triangle_helper.c:75-91).
-//!
-//! 'triangle_restore_pointmarkers' is assigned here but NOT landed in
-//! this PR: it reduces to vertextraverse/setvertexmark and the vertex
-//! traversal row of mesh.rs has not landed yet (it arrives with the
-//! modules that own it). It becomes an internal step of the output path
-//! at that point, exactly as in C.
+//! (triangle_helper.c:25-72), plus the output path's internal
+//! 'triangle_restore_pointmarkers' (triangle_helper.c:77-97): the
+//! vertex traversal that puts the original point markers back over
+//! the vertex numbers writenodes left on the marks (triangle_api.c:
+//! 423-425). It reduces to vertextraverse/setvertexmark and rides the
+//! mesh.rs vertex traversal row.
 
 use crate::error::Error;
+use crate::mesh::Mesh;
+use crate::options::Behavior;
+use crate::slots::UNDEADVERTEX;
 
 /// A point in the plane: the two REALs of C's pointlist entry.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -166,9 +167,29 @@ impl MeshInput {
     }
 }
 
+/// triangle_restore_pointmarkers (triangle_helper.c:77-97): the
+/// output path's internal step - after writenodes numbered the
+/// vertices (the numbers sat over the marks, triangle.c:7823), the
+/// original markers left in the pointmarkerlist and this walk puts
+/// them back. The vertexnumber here is a list index (it starts at 0,
+/// not at b->firstnumber) and the jettison gate skips the undead
+/// exactly like the writer that produced the list (triangle.c:
+/// 7810-7814); C's ctx plumbing dissolves (D8).
+pub(crate) fn restore_pointmarkers(m: &mut Mesh, b: &Behavior, pointmarkers: &[i32]) {
+    let mut vertexnumber: usize = 0;
+    let mut t = m.vertices.traversal();
+    while let Some(vertexloop) = m.vertextraverse(&mut t) {
+        if !b.jettison || m.vx_type(vertexloop) != UNDEADVERTEX {
+            m.vx_set_mark(vertexloop, pointmarkers[vertexnumber]);
+            vertexnumber += 1;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::options::Options;
 
     fn simple_input() -> MeshInput {
         MeshInput {
@@ -244,5 +265,91 @@ mod tests {
         inp2.corners_per_element = 3;
         inp2.elements = vec![0, 1, 2];
         inp2.check(0).expect("valid triangle");
+    }
+
+    #[test]
+    fn restore_pointmarkers_puts_the_original_marks_back() {
+        // The output path's tail (triangle_helper.c:77-97):
+        // writenodes numbered the marks (triangle.c:7823) and the
+        // original markers left in the list; the restore walks the
+        // same traversal and puts them back, so a second writenodes
+        // run reproduces the same list.
+        let mut b = Options::new().validate().expect("validate");
+        let mut m = Mesh::new(&b, 3, 2, 0, 0).expect("mesh");
+        let points = [
+            Point2 { x: 0.0, y: 0.0 },
+            Point2 { x: 1.0, y: 0.0 },
+            Point2 { x: 0.0, y: 1.0 },
+        ];
+        let markers = [4, 5, 6];
+        crate::ioarrays::transfernodes(&mut m, &mut b, &points, &[], Some(&markers), 3, 0)
+            .expect("load");
+        let mut plist: Vec<Point2> = Vec::new();
+        let mut palist: Vec<f64> = Vec::new();
+        let mut pmlist: Vec<i32> = Vec::new();
+        crate::ioarrays::writenodes(&mut m, &b, &mut plist, &mut palist, &mut pmlist)
+            .expect("writenodes");
+        // the original markers left in the list, the numbers sit on
+        // the marks
+        assert_eq!(pmlist, vec![4, 5, 6]);
+        let mut t = m.vertices.traversal();
+        assert_eq!(m.vx_mark(m.vertextraverse(&mut t).expect("vx")), 1);
+        assert_eq!(m.vx_mark(m.vertextraverse(&mut t).expect("vx")), 2);
+        assert_eq!(m.vx_mark(m.vertextraverse(&mut t).expect("vx")), 3);
+        restore_pointmarkers(&mut m, &b, &pmlist);
+        let mut t = m.vertices.traversal();
+        assert_eq!(m.vx_mark(m.vertextraverse(&mut t).expect("vx")), 4);
+        assert_eq!(m.vx_mark(m.vertextraverse(&mut t).expect("vx")), 5);
+        assert_eq!(m.vx_mark(m.vertextraverse(&mut t).expect("vx")), 6);
+        // and the round trip is stable: writenodes again reproduces
+        // the same marshalled list
+        let mut plist2: Vec<Point2> = Vec::new();
+        let mut palist2: Vec<f64> = Vec::new();
+        let mut pmlist2: Vec<i32> = Vec::new();
+        crate::ioarrays::writenodes(&mut m, &b, &mut plist2, &mut palist2, &mut pmlist2)
+            .expect("writenodes");
+        assert_eq!(pmlist2, vec![4, 5, 6]);
+    }
+
+    #[test]
+    fn restore_pointmarkers_skips_the_undead_under_jettison() {
+        // The jettison gate (triangle_helper.c:91): the undead row
+        // never entered the marker list (writenodes skipped it,
+        // triangle.c:7810-7814), so the restore walks past it
+        // without consuming a list entry - the undead keeps its old
+        // marker through both walks.
+        let mut opts = Options::new();
+        opts.jettison();
+        let mut b = opts.validate().expect("validate");
+        let mut m = Mesh::new(&b, 3, 2, 0, 0).expect("mesh");
+        let points = [
+            Point2 { x: 0.0, y: 0.0 },
+            Point2 { x: 1.0, y: 0.0 },
+            Point2 { x: 0.0, y: 1.0 },
+        ];
+        let markers = [4, 5, 6];
+        crate::ioarrays::transfernodes(&mut m, &mut b, &points, &[], Some(&markers), 3, 0)
+            .expect("load");
+        let mut t = m.vertices.traversal();
+        let v1 = m.vertextraverse(&mut t).expect("vx");
+        let v2 = m.vertextraverse(&mut t).expect("vx");
+        let v3 = m.vertextraverse(&mut t).expect("vx");
+        m.vx_set_type(v2, UNDEADVERTEX);
+        m.undeads = 1;
+        let mut plist: Vec<Point2> = Vec::new();
+        let mut palist: Vec<f64> = Vec::new();
+        let mut pmlist: Vec<i32> = Vec::new();
+        crate::ioarrays::writenodes(&mut m, &b, &mut plist, &mut palist, &mut pmlist)
+            .expect("writenodes");
+        // the living rows carry numbers, the undead keeps its input
+        // marker, and the list holds the two living markers only
+        assert_eq!(m.vx_mark(v1), 1);
+        assert_eq!(m.vx_mark(v2), 5);
+        assert_eq!(m.vx_mark(v3), 2);
+        assert_eq!(pmlist, vec![4, 6]);
+        restore_pointmarkers(&mut m, &b, &pmlist);
+        assert_eq!(m.vx_mark(v1), 4);
+        assert_eq!(m.vx_mark(v2), 5);
+        assert_eq!(m.vx_mark(v3), 6);
     }
 }
