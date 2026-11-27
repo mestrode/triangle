@@ -9,31 +9,32 @@
 //! Stage-1 landing state: complete. The rows landed in two steps:
 //! makevertexmap with its algorithm/segments.rs consumer (PR #35), the rest,
 //! together with the #28 restoration of testtriangle/checkseg4encroach/
-//! inlens at the algorithm/transform.rs call sites, in the quality PR. The queue
+//! inlens at the algorithm/algorithm/transform.rs call sites, in the quality PR. The queue
 //! state (queuefront/queuetail/nextnonemptyq/firstnonemptyq) lives on
-//! mesh/mod.rs since this PR; the badtriang row accessors live in mesh/slots.rs.
+//! mesh/mod.rs since this PR; the badtriang row accessors live in mesh/mesh/slots.rs.
 //! dequeuebadtriang's consumer is enforcequality, which landed with
-//! algorithm/refine.rs; the ahead-of-use dead_code blanket is removed with that
+//! algorithm/algorithm/refine.rs; the ahead-of-use dead_code blanket is removed with that
 //! PR (every item of this module now has its production consumer).
 
 use std::f64::consts::PI;
 
 use crate::api::Quality;
 use crate::mesh::handles::{
-    encode, sencode, Osub, Otri, DUMMY_SUB, DUMMY_TRI, MINUS1MOD3, NULL, PLUS1MOD3,
+    encode, encode_subseg, Osub, Otri, DUMMY_SUB, DUMMY_TRI, MINUS_ONE_MOD_3, NULL_ROW,
+    PLUS_ONE_MOD_3,
 };
 
 use crate::mesh::pool::Oom;
-use crate::mesh::slots::SEGMENTVERTEX;
+use crate::mesh::slots::SEGMENT_VERTEX;
 use crate::mesh::util::vertex_coords;
 use crate::mesh::Mesh;
 use crate::options::{Behavior, VertexSample};
-use crate::predicates::{tri_counterclockwise, tri_nonregular, Vertex};
+use crate::predicates::{counterclockwise, nonregular, Vertex};
 
 /// C SQUAREROOTTWO (triangle_config.h:163), the full-precision literal.
 #[allow(clippy::approx_constant)] // C-parity: the C macro carries this
                                   // literal, verbatim, not std's SQRT_2 constant.
-const SQUAREROOTTWO: f64 = 1.4142135623730950488016887242096980785696718753769480732;
+const SQUARE_ROOT_TWO: f64 = 1.4142135623730950488016887242096980785696718753769480732;
 
 /// C: makevertexmap (triangle.c:2206-2222). Compute a mapping from each
 /// mesh vertex to one adjacent triangle (vertex2tri): walk the triangles
@@ -41,10 +42,10 @@ const SQUAREROOTTWO: f64 = 1.414213562373095048801688724209698078569671875376948
 /// store encode(triangleloop) on the origin vertex's vertex2tri slot.
 /// Later vertex2tri writes overwrite earlier ones, but in the end every
 /// vertex points to some triangle that contains it.
-pub(crate) fn makevertexmap(m: &mut Mesh, _b: &Behavior) {
+pub(crate) fn make_vertex_map(m: &mut Mesh, _b: &Behavior) {
     let mut t = m.triangles.traversal();
     // C: triangleloop.tri = triangletraverse(m) ... while != NULL.
-    while let Some(tri) = m.triangletraverse(&mut t) {
+    while let Some(tri) = m.traverse_triangle(&mut t) {
         // Check all three vertices of the triangle.
         for orient in 0..3u8 {
             let triangleloop = Otri { tri, orient };
@@ -66,14 +67,14 @@ pub(crate) fn makevertexmap(m: &mut Mesh, _b: &Behavior) {
 ///
 /// The C body temporarily turns on exact arithmetic (save/restore
 /// b->noexact), mirrored 1:1 through `b: &mut Behavior`.
-pub(crate) fn checkmesh(m: &mut Mesh, b: &mut Behavior) -> i32 {
+pub(crate) fn check_mesh(m: &mut Mesh, b: &mut Behavior) -> i32 {
     // Temporarily turn on exact arithmetic if it's off.
     let saveexact = b.noexact;
     b.noexact = false;
     let mut horrors = 0;
     // Run through the list of triangles, checking each one.
     let mut t = m.triangles.traversal();
-    while let Some(tri) = m.triangletraverse(&mut t) {
+    while let Some(tri) = m.traverse_triangle(&mut t) {
         // Check all three edges of the triangle.
         for orient in 0..3u8 {
             let triangleloop = Otri { tri, orient };
@@ -83,7 +84,7 @@ pub(crate) fn checkmesh(m: &mut Mesh, b: &mut Behavior) -> i32 {
                 // Only test for inversion once.
                 // Test if the triangle is flat or inverted.
                 let triapex = m.apex(triangleloop);
-                if tri_counterclockwise(
+                if counterclockwise(
                     m,
                     b,
                     vertex_coords(m, triorg),
@@ -135,14 +136,14 @@ pub(crate) fn checkmesh(m: &mut Mesh, b: &mut Behavior) -> i32 {
 /// each pair once) with a deterministic order; the horror count is
 /// unaffected either way, because the nonregular sign is the same from
 /// both sides of a shared edge.
-pub(crate) fn checkdelaunay(m: &mut Mesh, b: &mut Behavior) -> i32 {
+pub(crate) fn check_delaunay(m: &mut Mesh, b: &mut Behavior) -> i32 {
     // Temporarily turn on exact arithmetic if it's off.
     let saveexact = b.noexact;
     b.noexact = false;
     let mut horrors = 0;
     // Run through the list of triangles, checking each one.
     let mut t = m.triangles.traversal();
-    while let Some(tri) = m.triangletraverse(&mut t) {
+    while let Some(tri) = m.traverse_triangle(&mut t) {
         // Check all three edges of the triangle.
         for orient in 0..3u8 {
             let triangleloop = Otri { tri, orient };
@@ -156,7 +157,7 @@ pub(crate) fn checkdelaunay(m: &mut Mesh, b: &mut Behavior) -> i32 {
             //   each pair isn't tested twice).
             let infv = [m.infvertex1, m.infvertex2, m.infvertex3];
             let mut shouldbedelaunay = oppotri.tri != DUMMY_TRI
-                && !m.deadtri(oppotri.tri)
+                && !m.is_dead_tri(oppotri.tri)
                 && triangleloop.tri < oppotri.tri
                 && !infv.contains(&triorg)
                 && !infv.contains(&tridest)
@@ -165,7 +166,7 @@ pub(crate) fn checkdelaunay(m: &mut Mesh, b: &mut Behavior) -> i32 {
             if m.checksegments && shouldbedelaunay {
                 // If a subsegment separates the triangles, then the edge is
                 //   constrained, so no local Delaunay test should be done.
-                let opposubseg = m.tspivot(triangleloop);
+                let opposubseg = m.tri_subseg(triangleloop);
                 if opposubseg.ss != DUMMY_SUB {
                     shouldbedelaunay = false;
                 }
@@ -174,7 +175,7 @@ pub(crate) fn checkdelaunay(m: &mut Mesh, b: &mut Behavior) -> i32 {
             // like this.
             #[allow(clippy::collapsible_if)]
             if shouldbedelaunay {
-                if tri_nonregular(
+                if nonregular(
                     m,
                     b,
                     vertex_coords(m, triorg),
@@ -205,7 +206,7 @@ pub(crate) fn checkdelaunay(m: &mut Mesh, b: &mut Behavior) -> i32 {
 /// number, identical linkage order.
 ///
 /// `b` is unused in the C body too (kept for the exact C shape).
-pub(crate) fn enqueuebadtriang(m: &mut Mesh, _b: &Behavior, badtri: u32) {
+pub(crate) fn enqueue_bad_triangle_row(m: &mut Mesh, _b: &Behavior, badtri: u32) {
     // Determine the appropriate queue to put the bad triangle into.
     //   Recall that the key is the square of its shortest edge length.
     let key = m.bad_tri_key(badtri);
@@ -238,7 +239,7 @@ pub(crate) fn enqueuebadtriang(m: &mut Mesh, _b: &Behavior, badtri: u32) {
         exponent = 1023;
     }
     // `length' is approximately squareroot(2.0) to what exponent?
-    exponent = 2 * exponent + (length > SQUAREROOTTWO) as i32;
+    exponent = 2 * exponent + (length > SQUARE_ROOT_TWO) as i32;
     // `exponent' is now in the range 0...2047 for IEEE double precision.
     //   Choose a queue in the range 0...4095.  The shortest edges have the
     //   highest priority (queue 4095).
@@ -249,7 +250,7 @@ pub(crate) fn enqueuebadtriang(m: &mut Mesh, _b: &Behavior, badtri: u32) {
     };
 
     // Are we inserting into an empty queue?
-    if m.queuefront[queuenumber as usize] == NULL {
+    if m.queuefront[queuenumber as usize] == NULL_ROW {
         // Yes, we are inserting into an empty queue.
         //   Will this become the highest-priority queue?
         if queuenumber > m.firstnonemptyq {
@@ -260,7 +261,7 @@ pub(crate) fn enqueuebadtriang(m: &mut Mesh, _b: &Behavior, badtri: u32) {
             // No, this is not the highest-priority queue.
             //   Find the queue with next higher priority.
             let mut i: i32 = queuenumber + 1;
-            while m.queuefront[i as usize] == NULL {
+            while m.queuefront[i as usize] == NULL_ROW {
                 i += 1;
             }
             // Mark the newly nonempty queue as following a
@@ -278,14 +279,14 @@ pub(crate) fn enqueuebadtriang(m: &mut Mesh, _b: &Behavior, badtri: u32) {
     // Maintain a pointer to the last triangle of the queue.
     m.queuetail[queuenumber as usize] = badtri;
     // Newly enqueued bad triangle has no successor in the queue.
-    m.set_bad_tri_next(badtri, NULL);
+    m.set_bad_tri_next(badtri, NULL_ROW);
 }
 
 /// C: enqueuebadtri (triangle.c:1810-1823). Add a bad triangle to the end
 /// of a queue: allocate a badtriang row for the triangle, fill it
 /// (poortri, key, apex, org, dest, exactly C's write order), then pass it
 /// to enqueuebadtriang. OOM routes through the pool bridge.
-pub(crate) fn enqueuebadtri(
+pub(crate) fn enqueue_bad_triangle(
     m: &mut Mesh,
     b: &Behavior,
     enqtri: Otri,
@@ -296,12 +297,12 @@ pub(crate) fn enqueuebadtri(
 ) -> Result<(), Oom> {
     // Allocate space for the bad triangle.
     let newbad = m.bad_tri_alloc()?;
-    m.set_bad_tri_poortri(newbad, encode(enqtri));
+    m.set_bad_tri_poor_tri(newbad, encode(enqtri));
     m.set_bad_tri_key(newbad, minedge);
     m.set_bad_tri_apex(newbad, enqapex);
     m.set_bad_tri_org(newbad, enqorg);
     m.set_bad_tri_dest(newbad, enqdest);
-    enqueuebadtriang(m, b, newbad);
+    enqueue_bad_triangle_row(m, b, newbad);
     Ok(())
 }
 
@@ -309,7 +310,7 @@ pub(crate) fn enqueuebadtri(
 /// front of the highest-priority queue. The C NULL returns (no queues
 /// nonempty, the out-of-range guards, an empty front) mirror as None;
 /// the row id of the dequeued badtriang row otherwise.
-pub(crate) fn dequeuebadtriang(m: &mut Mesh) -> Option<u32> {
+pub(crate) fn dequeue_bad_triangle(m: &mut Mesh) -> Option<u32> {
     // If no queues are nonempty, return None.
     if m.firstnonemptyq < 0 {
         return None;
@@ -319,7 +320,7 @@ pub(crate) fn dequeuebadtriang(m: &mut Mesh) -> Option<u32> {
     }
     // Find the first triangle of the highest-priority queue.
     let result = m.queuefront[m.firstnonemptyq as usize];
-    if result == NULL {
+    if result == NULL_ROW {
         return None;
     }
     // Remove the triangle from the queue.
@@ -341,7 +342,7 @@ pub(crate) fn dequeuebadtriang(m: &mut Mesh) -> Option<u32> {
 ///
 /// The vertex arguments are the coordinate arrays the predicates use
 /// (C REAL* vertex values copied through the chokepoint, D1/D5).
-pub(crate) fn inlens(b: &Behavior, eorg: Vertex, edest: Vertex, eapex: Vertex) -> bool {
+pub(crate) fn in_lens(b: &Behavior, eorg: Vertex, edest: Vertex, eapex: Vertex) -> bool {
     let dotproduct =
         (eorg[0] - eapex[0]) * (edest[0] - eapex[0]) + (eorg[1] - eapex[1]) * (edest[1] - eapex[1]);
     if dotproduct < 0.0 {
@@ -371,14 +372,18 @@ pub(crate) fn inlens(b: &Behavior, eorg: Vertex, edest: Vertex, eapex: Vertex) -
 /// side mask (1 for the subsegment's own side, +2 for the other side),
 /// allocating a badsubseg row (via the pool bridge) when the mask and
 /// the nobisect gate admit it.
-pub(crate) fn checkseg4encroach(m: &mut Mesh, b: &Behavior, testsubseg: Osub) -> Result<i32, Oom> {
+pub(crate) fn check_seg_for_encroachment(
+    m: &mut Mesh,
+    b: &Behavior,
+    testsubseg: Osub,
+) -> Result<i32, Oom> {
     let mut encroached = 0;
     let mut sides = 0;
 
-    let eorg = m.sorg(testsubseg);
-    let edest = m.sdest(testsubseg);
+    let eorg = m.subseg_org(testsubseg);
+    let edest = m.subseg_dest(testsubseg);
     // Check one neighbor of the subsegment.
-    let neighbortri = m.stpivot(testsubseg);
+    let neighbortri = m.subseg_tri(testsubseg);
     // Does the neighbor exist, or is this a boundary edge?
     if neighbortri.tri != DUMMY_TRI {
         sides += 1;
@@ -386,7 +391,7 @@ pub(crate) fn checkseg4encroach(m: &mut Mesh, b: &Behavior, testsubseg: Osub) ->
         let eapex = m.apex(neighbortri);
         // Check whether the apex is in the diametral lens of the subsegment
         //   (the diametral circle if `conformdel' is set).
-        if inlens(
+        if in_lens(
             b,
             vertex_coords(m, eorg),
             vertex_coords(m, edest),
@@ -396,8 +401,8 @@ pub(crate) fn checkseg4encroach(m: &mut Mesh, b: &Behavior, testsubseg: Osub) ->
         }
     }
     // Check the other neighbor of the subsegment.
-    let testsym = testsubseg.ssym();
-    let neighbortri = m.stpivot(testsym);
+    let testsym = testsubseg.sym();
+    let neighbortri = m.subseg_tri(testsym);
     // Does the neighbor exist, or is this a boundary edge?
     if neighbortri.tri != DUMMY_TRI {
         sides += 1;
@@ -405,7 +410,7 @@ pub(crate) fn checkseg4encroach(m: &mut Mesh, b: &Behavior, testsubseg: Osub) ->
         let eapex = m.apex(neighbortri);
         // Check whether the apex is in the diametral lens of the subsegment
         //   (or the diametral circle, if `conformdel' is set).
-        if inlens(
+        if in_lens(
             b,
             vertex_coords(m, eorg),
             vertex_coords(m, edest),
@@ -420,11 +425,11 @@ pub(crate) fn checkseg4encroach(m: &mut Mesh, b: &Behavior, testsubseg: Osub) ->
         //   Be sure to get the orientation right.
         let encroachedseg = m.bad_subseg_alloc()?;
         if encroached == 1 {
-            m.set_bad_sub_seg_enc(encroachedseg, sencode(testsubseg));
+            m.set_bad_sub_seg_enc(encroachedseg, encode_subseg(testsubseg));
             m.set_bad_sub_seg_org(encroachedseg, eorg);
             m.set_bad_sub_seg_dest(encroachedseg, edest);
         } else {
-            m.set_bad_sub_seg_enc(encroachedseg, sencode(testsym));
+            m.set_bad_sub_seg_enc(encroachedseg, encode_subseg(testsym));
             m.set_bad_sub_seg_org(encroachedseg, edest);
             m.set_bad_sub_seg_dest(encroachedseg, eorg);
         }
@@ -445,7 +450,7 @@ pub(crate) fn checkseg4encroach(m: &mut Mesh, b: &Behavior, testsubseg: Osub) ->
 /// exactly here, with copied VertexSample values (x, y, marker) and the
 /// computed area; a true (= nonzero) return enqueues the triangle and
 /// returns, exactly like C.
-pub(crate) fn testtriangle(m: &mut Mesh, b: &Behavior, testtri: Otri) -> Result<(), Oom> {
+pub(crate) fn test_triangle(m: &mut Mesh, b: &Behavior, testtri: Otri) -> Result<(), Oom> {
     let torg = m.org(testtri);
     let tdest = m.dest(testtri);
     let tapex = m.apex(testtri);
@@ -508,7 +513,7 @@ pub(crate) fn testtriangle(m: &mut Mesh, b: &Behavior, testtri: Otri) -> Result<
         let area = 0.5 * (dxod * dyda - dyod * dxda);
         if b.fixedarea && (area > b.maxarea) {
             // Add this triangle to the list of bad triangles.
-            enqueuebadtri(m, b, testtri, minedge, tapex, torg, tdest)?;
+            enqueue_bad_triangle(m, b, testtri, minedge, tapex, torg, tdest)?;
             return Ok(());
         }
 
@@ -517,10 +522,10 @@ pub(crate) fn testtriangle(m: &mut Mesh, b: &Behavior, testtri: Otri) -> Result<
         // that is already gated on b->vararea; the slot read is pure,
         // so the port reads it once inside the same gate.)
         if b.vararea {
-            let areabound = m.tri_areabound(testtri.tri);
+            let areabound = m.tri_area_bound(testtri.tri);
             if (area > areabound) && (areabound > 0.0) {
                 // Add this triangle to the list of bad triangles.
-                enqueuebadtri(m, b, testtri, minedge, tapex, torg, tdest)?;
+                enqueue_bad_triangle(m, b, testtri, minedge, tapex, torg, tdest)?;
                 return Ok(());
             }
         }
@@ -550,7 +555,7 @@ pub(crate) fn testtriangle(m: &mut Mesh, b: &Behavior, testtri: Otri) -> Result<
                     .is_unsuitable(org_sample, dest_sample, apex_sample, area)
                 {
                     // Add this triangle to the list of bad triangles.
-                    enqueuebadtri(m, b, testtri, minedge, tapex, torg, tdest)?;
+                    enqueue_bad_triangle(m, b, testtri, minedge, tapex, torg, tdest)?;
                     return Ok(());
                 }
             }
@@ -596,45 +601,45 @@ pub(crate) fn testtriangle(m: &mut Mesh, b: &Behavior, testtri: Otri) -> Result<
         //   of the edge both lie in segment interiors, equidistant from
         //   the apex where the two segments meet.
         // First, check if both points lie in segment interiors.
-        if m.vx_type(base1) == SEGMENTVERTEX && m.vx_type(base2) == SEGMENTVERTEX {
+        if m.vx_type(base1) == SEGMENT_VERTEX && m.vx_type(base2) == SEGMENT_VERTEX {
             // Check if both points lie in a common segment.  If they do,
             //   the skinny triangle is enqueued to be split as usual.
-            let mut testsub = m.tspivot(tri1);
+            let mut testsub = m.tri_subseg(tri1);
             if testsub.ss == DUMMY_SUB {
                 let mut tri2 = tri1;
                 // No common segment.  Find a subsegment that contains
                 //   `torg'.
                 loop {
-                    m.oprevself(&mut tri1);
-                    testsub = m.tspivot(tri1);
+                    m.oprev_self(&mut tri1);
+                    testsub = m.tri_subseg(tri1);
                     if testsub.ss != DUMMY_SUB {
                         break;
                     }
                 }
                 // Find the endpoints of the containing segment.
-                let org1 = m.segorg(testsub);
-                let dest1 = m.segdest(testsub);
+                let org1 = m.segment_org(testsub);
+                let dest1 = m.segment_dest(testsub);
                 // Find a subsegment that contains `tdest'.
                 loop {
-                    m.dnextself(&mut tri2);
-                    testsub = m.tspivot(tri2);
+                    m.dnext_self(&mut tri2);
+                    testsub = m.tri_subseg(tri2);
                     if testsub.ss != DUMMY_SUB {
                         break;
                     }
                 }
                 // Find the endpoints of the containing segment.
-                let org2 = m.segorg(testsub);
-                let dest2 = m.segdest(testsub);
+                let org2 = m.segment_org(testsub);
+                let dest2 = m.segment_dest(testsub);
                 // Check if the two containing segments have an endpoint in common.
                 //   C compares the shared endpoint by coordinate equality
                 //   (REAL loads), mirrored exactly.
-                let mut joinvertex = NULL;
+                let mut joinvertex = NULL_ROW;
                 if m.vx_x(dest1) == m.vx_x(org2) && m.vx_y(dest1) == m.vx_y(org2) {
                     joinvertex = dest1;
                 } else if m.vx_x(org1) == m.vx_x(dest2) && m.vx_y(org1) == m.vx_y(dest2) {
                     joinvertex = org1;
                 }
-                if joinvertex != NULL {
+                if joinvertex != NULL_ROW {
                     // Compute the distance from the common endpoint (of the
                     //   two segments) to each of the endpoints of the shortest
                     //   edge.
@@ -654,7 +659,7 @@ pub(crate) fn testtriangle(m: &mut Mesh, b: &Behavior, testtri: Otri) -> Result<
         }
 
         // Add this triangle to the list of bad triangles.
-        enqueuebadtri(m, b, testtri, minedge, tapex, torg, tdest)?;
+        enqueue_bad_triangle(m, b, testtri, minedge, tapex, torg, tdest)?;
     }
     Ok(())
 }
@@ -704,7 +709,7 @@ pub(crate) fn quality_statistics(m: &mut Mesh, b: &Behavior, q: &mut Quality) {
     let mut acutebiggest = true;
 
     let mut t = m.triangles.traversal();
-    while let Some(tri) = m.triangletraverse(&mut t) {
+    while let Some(tri) = m.traverse_triangle(&mut t) {
         let triangleloop = Otri { tri, orient: 0 };
         let p = [
             vertex_coords(m, m.org(triangleloop)),
@@ -717,8 +722,8 @@ pub(crate) fn quality_statistics(m: &mut Mesh, b: &Behavior, q: &mut Quality) {
         let mut trilongest2 = 0.0f64;
 
         for i in 0..3 {
-            let j = PLUS1MOD3[i] as usize;
-            let k = MINUS1MOD3[i] as usize;
+            let j = PLUS_ONE_MOD_3[i] as usize;
+            let k = MINUS_ONE_MOD_3[i] as usize;
             dx[i] = p[j][0] - p[k][0];
             dy[i] = p[j][1] - p[k][1];
             edgelength[i] = dx[i] * dx[i] + dy[i] * dy[i];
@@ -735,7 +740,7 @@ pub(crate) fn quality_statistics(m: &mut Mesh, b: &Behavior, q: &mut Quality) {
 
         // C: triarea = tri_counterclockwise(m, b, p[0], p[1], p[2]) (the
         //   doubled area; the C histogram arithmetic works on that value).
-        let triarea = tri_counterclockwise(m, b, p[0], p[1], p[2]);
+        let triarea = counterclockwise(m, b, p[0], p[1], p[2]);
         if triarea < smallestarea {
             smallestarea = triarea;
         }
@@ -760,8 +765,8 @@ pub(crate) fn quality_statistics(m: &mut Mesh, b: &Behavior, q: &mut Quality) {
         q.aspect_table[aspectindex] += 1;
 
         for i in 0..3 {
-            let j = PLUS1MOD3[i] as usize;
-            let k = MINUS1MOD3[i] as usize;
+            let j = PLUS_ONE_MOD_3[i] as usize;
+            let k = MINUS_ONE_MOD_3[i] as usize;
             let dotproduct = dx[j] * dx[k] + dy[j] * dy[k];
             let cossquare = dotproduct * dotproduct / (edgelength[j] * edgelength[k]);
             // C: tendegree = 8; for (ii = 7; ii >= 0; ii--) { if
@@ -834,7 +839,7 @@ mod tests {
             ..Behavior::default_form()
         };
         b.minangle = minangle;
-        b.behavior_update();
+        b.update_derived_fields();
         b
     }
 
@@ -861,10 +866,10 @@ mod tests {
         let va = vxy(m, a.0, a.1);
         let vb = vxy(m, b.0, b.1);
         let vc = vxy(m, c.0, c.1);
-        let t = m.maketriangle(usesegments, false).expect("tri");
-        m.setorg(t, va);
-        m.setdest(t, vb);
-        m.setapex(t, vc);
+        let t = m.make_triangle(usesegments, false).expect("tri");
+        m.set_org(t, va);
+        m.set_dest(t, vb);
+        m.set_apex(t, vc);
         t
     }
 
@@ -893,7 +898,7 @@ mod tests {
         .iter()
         .enumerate()
         {
-            enqueuebadtri(&mut m, &b, t, *key, 0, 0, 0).expect("enqueue");
+            enqueue_bad_triangle(&mut m, &b, t, *key, 0, 0, 0).expect("enqueue");
             // the freshly allocated row (ids 1..=5; the pool has no
             // sentinel) is the new front of exactly the expected queue.
             assert_eq!(m.queuefront[*expected_qn], i as u32 + 1);
@@ -926,30 +931,30 @@ mod tests {
         let b = Behavior::default_form();
         let mut m = mesh(&b);
         let t = lone_tri(&mut m, false, (0.0, 0.0), (1.0, 0.0), (0.0, 1.0));
-        enqueuebadtri(&mut m, &b, t, 4.0, 3, 1, 2).expect("enqueue"); // r1
-        enqueuebadtri(&mut m, &b, t, 4.0, 6, 4, 5).expect("enqueue"); // r2, same queue
-        enqueuebadtri(&mut m, &b, t, 1.0, 9, 7, 8).expect("enqueue"); // r3, higher priority
+        enqueue_bad_triangle(&mut m, &b, t, 4.0, 3, 1, 2).expect("enqueue"); // r1
+        enqueue_bad_triangle(&mut m, &b, t, 4.0, 6, 4, 5).expect("enqueue"); // r2, same queue
+        enqueue_bad_triangle(&mut m, &b, t, 1.0, 9, 7, 8).expect("enqueue"); // r3, higher priority
         assert_eq!(m.badtriangles.live_count(), 3);
         // dequeue: r3 first (queue 2047 before 2044), then r2 was
         // appended after r1 in queue 2044: r1, then r2.
-        let d1 = dequeuebadtriang(&mut m).expect("row");
+        let d1 = dequeue_bad_triangle(&mut m).expect("row");
         assert_eq!(m.bad_tri_key(d1), 1.0);
         assert_eq!(m.bad_tri_apex(d1), 9);
         assert_eq!(m.bad_tri_org(d1), 7);
         assert_eq!(m.bad_tri_dest(d1), 8);
-        assert_eq!(m.bad_tri_poortri(d1), encode(t));
-        let d2 = dequeuebadtriang(&mut m).expect("row");
+        assert_eq!(m.bad_tri_poor_tri(d1), encode(t));
+        let d2 = dequeue_bad_triangle(&mut m).expect("row");
         assert_eq!(m.bad_tri_key(d2), 4.0);
         assert_eq!(m.bad_tri_org(d2), 1);
-        let d3 = dequeuebadtriang(&mut m).expect("row");
+        let d3 = dequeue_bad_triangle(&mut m).expect("row");
         assert_eq!(m.bad_tri_key(d3), 4.0);
         assert_eq!(m.bad_tri_org(d3), 4);
         // The queue drained: firstnonemptyq falls back through the
         // nextnonemptyq chain to -1.
         assert_eq!(m.firstnonemptyq, -1);
-        assert!(dequeuebadtriang(&mut m).is_none());
+        assert!(dequeue_bad_triangle(&mut m).is_none());
         // dequeued rows stay allocated (deallocation belongs to the
-        // algorithm/refine.rs drainers).
+        // algorithm/algorithm/refine.rs drainers).
         assert_eq!(m.badtriangles.live_count(), 3);
         assert_eq!(m.bad_tri_next(d2), d3, "the FIFO link survives the pop");
     }
@@ -963,24 +968,24 @@ mod tests {
         let t = lone_tri(&mut m, false, (0.0, 0.0), (1.0, 0.0), (0.0, 1.0));
         // queue 2047 (key 1.0), then the lower-priority queue 2044
         // (key 4.0): the second insert walks i upward to 2047.
-        enqueuebadtri(&mut m, &b, t, 1.0, 0, 0, 0).expect("enqueue");
+        enqueue_bad_triangle(&mut m, &b, t, 1.0, 0, 0, 0).expect("enqueue");
         let r_high = m.queuefront[2047];
-        enqueuebadtri(&mut m, &b, t, 4.0, 0, 0, 0).expect("enqueue");
+        enqueue_bad_triangle(&mut m, &b, t, 4.0, 0, 0, 0).expect("enqueue");
         let r_low = m.queuefront[2044];
         assert_eq!(m.firstnonemptyq, 2047);
         assert_eq!(m.nextnonemptyq[2047], 2044, "2047 points at 2044");
         assert_eq!(m.nextnonemptyq[2044], -1, "2044 ends the chain");
         // and one more between them: queue 2046 (key 2.0).
-        enqueuebadtri(&mut m, &b, t, 2.0, 0, 0, 0).expect("enqueue");
+        enqueue_bad_triangle(&mut m, &b, t, 2.0, 0, 0, 0).expect("enqueue");
         assert_eq!(m.nextnonemptyq[2047], 2046);
         assert_eq!(m.nextnonemptyq[2046], 2044);
         // the drain order follows the chain: 2047, 2046, 2044.
-        assert_eq!(dequeuebadtriang(&mut m), Some(r_high));
+        assert_eq!(dequeue_bad_triangle(&mut m), Some(r_high));
         assert_eq!(m.firstnonemptyq, 2046);
         let r_mid = m.queuefront[2046];
-        assert_eq!(dequeuebadtriang(&mut m), Some(r_mid));
+        assert_eq!(dequeue_bad_triangle(&mut m), Some(r_mid));
         assert_eq!(m.firstnonemptyq, 2044);
-        assert_eq!(dequeuebadtriang(&mut m), Some(r_low));
+        assert_eq!(dequeue_bad_triangle(&mut m), Some(r_low));
         assert_eq!(m.firstnonemptyq, -1);
     }
 
@@ -991,35 +996,35 @@ mod tests {
     /// Hand-checked lens cases on the subsegment (0,0)-(2,0): the angle
     /// threshold derives from cos(2*minangle), all margins >= 2%.
     #[test]
-    fn inlens_decides_by_dot_and_the_minangle_threshold() {
+    fn in_lens_decides_by_dot_and_the_minangle_threshold() {
         let mut b = behavior_q(20.0);
         let eorg = [0.0, 0.0, 0.0];
         let edest = [2.0, 0.0, 0.0];
         // apex (1, 0.1): dot = -0.99 < 0 and dot^2 = 0.9801 beats the
         // cos^2(40)*1.0201 = 0.5987 threshold => in the lens at 20 deg.
         let near = [1.0, 0.1, 0.0];
-        assert!(inlens(&b, eorg, edest, near));
+        assert!(in_lens(&b, eorg, edest, near));
         // apex (1, 10): dot = -1 + 100 = 99 > 0 => far outside, no lens.
         let far = [1.0, 10.0, 0.0];
-        assert!(!inlens(&b, eorg, edest, far));
+        assert!(!in_lens(&b, eorg, edest, far));
         // apex (1, 1.5): dot = -1 + 2.25 = 1.25 > 0 => outside.
         let high = [1.0, 1.5, 0.0];
-        assert!(!inlens(&b, eorg, edest, high));
+        assert!(!in_lens(&b, eorg, edest, high));
         // same near apex but a 1-degree lens: threshold
         // cos^2(2) * 1.0201 = 1.0189 > dot^2 = 0.9801 => outside.
         b.minangle = 1.0;
-        b.behavior_update();
-        assert!(!inlens(&b, eorg, edest, near));
+        b.update_derived_fields();
+        assert!(!in_lens(&b, eorg, edest, near));
         // a 45-degree lens: threshold (2*0.5-1)^2 = 0 => inside.
         b.minangle = 45.0;
-        b.behavior_update();
-        assert!(inlens(&b, eorg, edest, near));
+        b.update_derived_fields();
+        assert!(in_lens(&b, eorg, edest, near));
         // conformdel turns the test into the diametral circle: any
         // dot < 0 decides, so even the 1-degree behavior passes.
         let mut b1 = behavior_q(1.0);
         b1.conformdel = true;
-        b1.behavior_update();
-        assert!(inlens(&b1, eorg, edest, near));
+        b1.update_derived_fields();
+        assert!(in_lens(&b1, eorg, edest, near));
     }
 
     // ------------------------------------------------------------------
@@ -1036,14 +1041,14 @@ mod tests {
         let e = vxy(m, 2.0, 0.0);
         let c = vxy(m, above.0, above.1);
         let d = vxy(m, below.0, below.1);
-        let t1 = m.maketriangle(true, false).expect("tri");
-        m.setorg(t1, a);
-        m.setdest(t1, e);
-        m.setapex(t1, c);
-        let t2 = m.maketriangle(true, false).expect("tri");
-        m.setorg(t2, e);
-        m.setdest(t2, a);
-        m.setapex(t2, d);
+        let t1 = m.make_triangle(true, false).expect("tri");
+        m.set_org(t1, a);
+        m.set_dest(t1, e);
+        m.set_apex(t1, c);
+        let t2 = m.make_triangle(true, false).expect("tri");
+        m.set_org(t2, e);
+        m.set_dest(t2, a);
+        m.set_apex(t2, d);
         m.bond(
             Otri {
                 tri: t1.tri,
@@ -1058,8 +1063,8 @@ mod tests {
             tri: t1.tri,
             orient: 0,
         };
-        crate::algorithm::transform::insertsubseg(m, &b, shared, 0).expect("insertsubseg");
-        m.tspivot(shared)
+        crate::algorithm::transform::insert_subseg(m, &b, shared, 0).expect("insertsubseg");
+        m.tri_subseg(shared)
     }
 
     /// A behavior with minangle (through behavior_update's derived
@@ -1071,7 +1076,7 @@ mod tests {
     }
 
     #[test]
-    fn checkseg4encroach_reports_all_side_and_gate_outcomes() {
+    fn check_seg_for_encroachment_reports_all_side_and_gate_outcomes() {
         // Above-inside (1, 0.1) and below-clear (1, -10): encroached 1,
         // a badsubseg row lands with the subsegment's own orientation
         // (sencode(sub), sorg, sdest) exactly as C writes it.
@@ -1079,28 +1084,37 @@ mod tests {
         let mut m = mesh(&b);
         let sub = seg_fixture(&mut m, (1.0, 0.1), (1.0, -10.0));
         assert_eq!(m.badsubsegs.live_count(), 0);
-        assert_eq!(checkseg4encroach(&mut m, &b, sub).expect("check"), 1);
+        assert_eq!(
+            check_seg_for_encroachment(&mut m, &b, sub).expect("check"),
+            1
+        );
         assert_eq!(m.badsubsegs.live_count(), 1);
-        assert_eq!(m.bad_sub_seg_enc(1), sencode(sub));
-        assert_eq!(m.bad_sub_seg_org(1), m.sorg(sub));
-        assert_eq!(m.bad_sub_seg_dest(1), m.sdest(sub));
+        assert_eq!(m.bad_subseg_enc(1), encode_subseg(sub));
+        assert_eq!(m.bad_subseg_org(1), m.subseg_org(sub));
+        assert_eq!(m.bad_subseg_dest(1), m.subseg_dest(sub));
 
         // Both sides inside (1, 0.1) and (1, -0.1): encroached 3, the
         // row carries the flipped (ssym) orientation.
         let b = behavior_q(20.0);
         let mut m = mesh(&b);
         let sub = seg_fixture(&mut m, (1.0, 0.1), (1.0, -0.1));
-        assert_eq!(checkseg4encroach(&mut m, &b, sub).expect("check"), 3);
-        let testsym = sub.ssym();
-        assert_eq!(m.bad_sub_seg_enc(1), sencode(testsym));
-        assert_eq!(m.bad_sub_seg_org(1), m.sdest(sub), "org = edest");
-        assert_eq!(m.bad_sub_seg_dest(1), m.sorg(sub), "dest = eorg");
+        assert_eq!(
+            check_seg_for_encroachment(&mut m, &b, sub).expect("check"),
+            3
+        );
+        let testsym = sub.sym();
+        assert_eq!(m.bad_subseg_enc(1), encode_subseg(testsym));
+        assert_eq!(m.bad_subseg_org(1), m.subseg_dest(sub), "org = edest");
+        assert_eq!(m.bad_subseg_dest(1), m.subseg_org(sub), "dest = eorg");
 
         // Neither side inside: no encroachment, no row.
         let b = behavior_q(20.0);
         let mut m = mesh(&b);
         let sub = seg_fixture(&mut m, (10.0, 1.0), (1.0, -10.0));
-        assert_eq!(checkseg4encroach(&mut m, &b, sub).expect("check"), 0);
+        assert_eq!(
+            check_seg_for_encroachment(&mut m, &b, sub).expect("check"),
+            0
+        );
         assert_eq!(m.badsubsegs.live_count(), 0);
 
         // nobisect == 2: encroached is still reported, but the row is
@@ -1108,14 +1122,20 @@ mod tests {
         let b = behavior_y(20.0, 2);
         let mut m = mesh(&b);
         let sub = seg_fixture(&mut m, (1.0, 0.1), (1.0, -10.0));
-        assert_eq!(checkseg4encroach(&mut m, &b, sub).expect("check"), 1);
+        assert_eq!(
+            check_seg_for_encroachment(&mut m, &b, sub).expect("check"),
+            1
+        );
         assert_eq!(m.badsubsegs.live_count(), 0);
 
         // nobisect == 1 with both sides (sides == 2): the row lands.
         let b = behavior_y(20.0, 1);
         let mut m = mesh(&b);
         let sub = seg_fixture(&mut m, (1.0, 0.1), (1.0, -0.1));
-        assert_eq!(checkseg4encroach(&mut m, &b, sub).expect("check"), 3);
+        assert_eq!(
+            check_seg_for_encroachment(&mut m, &b, sub).expect("check"),
+            3
+        );
         assert_eq!(m.badsubsegs.live_count(), 1);
 
         // nobisect == 1 with a single side (sides == 1): gated off.
@@ -1128,11 +1148,11 @@ mod tests {
         let a = vxy(&mut m, 0.0, 0.0);
         let e = vxy(&mut m, 2.0, 0.0);
         let apex = vxy(&mut m, 1.0, 0.1);
-        let t = m.maketriangle(true, false).expect("tri");
-        m.setorg(t, a);
-        m.setdest(t, e);
-        m.setapex(t, apex);
-        crate::algorithm::transform::insertsubseg(
+        let t = m.make_triangle(true, false).expect("tri");
+        m.set_org(t, a);
+        m.set_dest(t, e);
+        m.set_apex(t, apex);
+        crate::algorithm::transform::insert_subseg(
             &mut m,
             &b,
             Otri {
@@ -1142,11 +1162,14 @@ mod tests {
             0,
         )
         .expect("insertsubseg");
-        let sub = m.tspivot(Otri {
+        let sub = m.tri_subseg(Otri {
             tri: t.tri,
             orient: 0,
         });
-        assert_eq!(checkseg4encroach(&mut m, &b, sub).expect("check"), 1);
+        assert_eq!(
+            check_seg_for_encroachment(&mut m, &b, sub).expect("check"),
+            1
+        );
         assert_eq!(m.badsubsegs.live_count(), 0);
     }
 
@@ -1154,7 +1177,7 @@ mod tests {
     /// returns the dummy triangle, sides stays 1, and the encroached
     /// mask is 1 with the subsegment's own orientation in the row.
     #[test]
-    fn checkseg4encroach_on_a_boundary_subsegment_counts_one_side() {
+    fn check_seg_for_encroachment_on_a_boundary_subsegment_counts_one_side() {
         let b = behavior_q(20.0);
         let mut m = mesh(&b);
         // A lone triangle (a, e, apex-inside) with a subsegment on the
@@ -1162,11 +1185,11 @@ mod tests {
         let a = vxy(&mut m, 0.0, 0.0);
         let e = vxy(&mut m, 2.0, 0.0);
         let apex = vxy(&mut m, 1.0, 0.1);
-        let t = m.maketriangle(true, false).expect("tri");
-        m.setorg(t, a);
-        m.setdest(t, e);
-        m.setapex(t, apex);
-        crate::algorithm::transform::insertsubseg(
+        let t = m.make_triangle(true, false).expect("tri");
+        m.set_org(t, a);
+        m.set_dest(t, e);
+        m.set_apex(t, apex);
+        crate::algorithm::transform::insert_subseg(
             &mut m,
             &b,
             Otri {
@@ -1176,15 +1199,18 @@ mod tests {
             0,
         )
         .expect("insertsubseg");
-        let sub = m.tspivot(Otri {
+        let sub = m.tri_subseg(Otri {
             tri: t.tri,
             orient: 0,
         });
-        assert_eq!(checkseg4encroach(&mut m, &b, sub).expect("check"), 1);
+        assert_eq!(
+            check_seg_for_encroachment(&mut m, &b, sub).expect("check"),
+            1
+        );
         assert_eq!(m.badsubsegs.live_count(), 1);
-        assert_eq!(m.bad_sub_seg_enc(1), sencode(sub));
-        assert_eq!(m.bad_sub_seg_org(1), m.sorg(sub));
-        assert_eq!(m.bad_sub_seg_dest(1), m.sdest(sub));
+        assert_eq!(m.bad_subseg_enc(1), encode_subseg(sub));
+        assert_eq!(m.bad_subseg_org(1), m.subseg_org(sub));
+        assert_eq!(m.bad_subseg_dest(1), m.subseg_dest(sub));
     }
 
     // ------------------------------------------------------------------
@@ -1192,7 +1218,7 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    fn testtriangle_invokes_the_unsuitable_callback_at_the_c_site() {
+    fn test_triangle_invokes_the_unsuitable_callback_at_the_c_site() {
         // A recording Unsuitable stub: pins the D9 passing semantics.
         // The Box<dyn Unsuitable> is opaque (D9: no downcast surface), so
         // the sink is an Rc the test holds next to the box.
@@ -1226,7 +1252,7 @@ mod tests {
         m.vx_set_mark(m.dest(t), 22);
         m.vx_set_mark(m.apex(t), 33);
         assert_eq!(m.badtriangles.live_count(), 0);
-        testtriangle(&mut m, &b, t).expect("test");
+        test_triangle(&mut m, &b, t).expect("test");
         // exactly one call, with the copied samples and the hand-derived
         // area: the triangle (0,0),(1,0),(0,1) has doubled area 1.0, so
         // the C `area' (half the doubled area) is 0.5.
@@ -1241,7 +1267,7 @@ mod tests {
         // true => enqueue exactly the C row: poortri, minedge (squared
         // shortest edge = 1.0), apex/org/dest ids.
         assert_eq!(m.badtriangles.live_count(), 1);
-        assert_eq!(m.bad_tri_poortri(1), encode(t));
+        assert_eq!(m.bad_tri_poor_tri(1), encode(t));
         assert_eq!(m.bad_tri_key(1), 1.0);
         assert_eq!(m.bad_tri_apex(1), m.apex(t));
         assert_eq!(m.bad_tri_org(1), m.org(t));
@@ -1249,7 +1275,7 @@ mod tests {
     }
 
     #[test]
-    fn testtriangle_skips_the_callback_when_usertest_is_off() {
+    fn test_triangle_skips_the_callback_when_usertest_is_off() {
         struct Recorder {
             calls: std::rc::Rc<std::cell::Cell<usize>>,
         }
@@ -1275,13 +1301,13 @@ mod tests {
         })));
         let mut m = mesh(&b);
         let t = lone_tri(&mut m, false, (0.0, 0.0), (1.0, 0.0), (0.0, 1.0));
-        testtriangle(&mut m, &b, t).expect("test");
+        test_triangle(&mut m, &b, t).expect("test");
         assert_eq!(m.badtriangles.live_count(), 0);
         assert_eq!(calls.get(), 0);
     }
 
     #[test]
-    fn testtriangle_enqueues_by_fixed_area_and_relaxes_below_it() {
+    fn test_triangle_enqueues_by_fixed_area_and_relaxes_below_it() {
         // fixedarea: above maxarea -> enqueue with the min-edge key;
         // below -> no enqueue (and the angle test passes on this shape).
         let mut b = behavior_q(20.0);
@@ -1291,7 +1317,7 @@ mod tests {
         let t = lone_tri(&mut m, false, (0.0, 0.0), (1.0, 0.0), (0.0, 1.0));
         // the halved area 0.5 > maxarea 0.1: enqueue, key = the squared
         // shortest edge 1.0.
-        testtriangle(&mut m, &b, t).expect("test");
+        test_triangle(&mut m, &b, t).expect("test");
         assert_eq!(m.badtriangles.live_count(), 1);
         assert_eq!(m.bad_tri_key(1), 1.0);
 
@@ -1302,12 +1328,12 @@ mod tests {
         b2.maxarea = 1.0;
         let mut m = mesh(&b2);
         let t = lone_tri(&mut m, false, (0.0, 0.0), (1.0, 0.0), (0.0, 1.0));
-        testtriangle(&mut m, &b2, t).expect("test");
+        test_triangle(&mut m, &b2, t).expect("test");
         assert_eq!(m.badtriangles.live_count(), 0);
     }
 
     #[test]
-    fn testtriangle_enqueues_skinny_triangles_by_min_angle() {
+    fn test_triangle_enqueues_skinny_triangles_by_min_angle() {
         // q20: the nearly-degenerate (0,0),(2,0),(1,0.1) has its
         // smallest-edge angle far below 20 degrees (hand-derived
         // cossquare 0.9901 > cos^2(20) = 0.883), so it enqueues;
@@ -1316,13 +1342,13 @@ mod tests {
         let b = behavior_q(20.0);
         let mut m = mesh(&b);
         let skinny = lone_tri(&mut m, false, (0.0, 0.0), (2.0, 0.0), (1.0, 0.1));
-        testtriangle(&mut m, &b, skinny).expect("test");
+        test_triangle(&mut m, &b, skinny).expect("test");
         assert_eq!(m.badtriangles.live_count(), 1);
         // minedge: the squared shortest edge: (1,0.1)-(0,0) length
         // squared = 1.01 (decisively below the other two).
         assert_eq!(m.bad_tri_key(1), 1.01);
         let good = lone_tri(&mut m, false, (0.0, 0.0), (1.0, 0.0), (0.0, 1.0));
-        testtriangle(&mut m, &b, good).expect("test");
+        test_triangle(&mut m, &b, good).expect("test");
         assert_eq!(m.badtriangles.live_count(), 1, "no second enqueue");
     }
 
@@ -1335,7 +1361,7 @@ mod tests {
     /// probes advanced the counterclockwise counter (the mirror of the
     /// C counter side effects inside the check loop).
     #[test]
-    fn checkmesh_and_checkdelaunay_pass_a_delaunay_mesh() {
+    fn check_mesh_and_check_delaunay_pass_a_delaunay_mesh() {
         let mut b = Behavior {
             poly: true,
             usesegments: true,
@@ -1350,28 +1376,28 @@ mod tests {
         assert_eq!(delaunay(&mut m, &b).expect("delaunay"), 4);
 
         let counterclock_before = m.counterclockcount;
-        assert_eq!(checkmesh(&mut m, &mut b), 0);
+        assert_eq!(check_mesh(&mut m, &mut b), 0);
         // the inversion test ran once per triangle through the exact
         // predicates
         assert!(m.counterclockcount > counterclock_before);
         let nonregular_before = m.incirclecount + m.hyperbolacount + m.orient3dcount;
-        assert_eq!(checkdelaunay(&mut m, &mut b), 0);
+        assert_eq!(check_delaunay(&mut m, &mut b), 0);
         assert!(m.incirclecount + m.hyperbolacount + m.orient3dcount > nonregular_before);
     }
 
     #[test]
-    fn checkmesh_counts_a_flat_inverted_triangle() {
+    fn check_mesh_counts_a_flat_inverted_triangle() {
         // The CW triangle (0,0),(1,0),(0,-1): inversion counted once at
         // orient 0; the unbonded edges are hull edges (sym = dummy), so
         // no other horrors.
         let mut b = Behavior::default_form();
         let mut m = mesh(&b);
         lone_tri(&mut m, false, (0.0, 0.0), (1.0, 0.0), (0.0, -1.0));
-        assert_eq!(checkmesh(&mut m, &mut b), 1);
+        assert_eq!(check_mesh(&mut m, &mut b), 1);
     }
 
     #[test]
-    fn checkmesh_counts_two_bonded_triangles_disagreeing_on_the_shared_edge() {
+    fn check_mesh_counts_two_bonded_triangles_disagreeing_on_the_shared_edge() {
         // t1 = (a, b, c); t3 = (d, a, e), both CCW, bonded at orient 0
         // (a hybrid edge: the bond is reciprocal, but the two sides
         // disagree on the shared vertices - t1's orient-0 edge is
@@ -1399,11 +1425,11 @@ mod tests {
                 orient: 0,
             },
         );
-        assert_eq!(checkmesh(&mut m, &mut b), 2);
+        assert_eq!(check_mesh(&mut m, &mut b), 2);
     }
 
     #[test]
-    fn checkdelaunay_counts_a_non_locally_delaunay_edge() {
+    fn check_delaunay_counts_a_non_locally_delaunay_edge() {
         // (a, b) shared by t1 = (a, b, c) and t2 = (b, a, d) with
         // d = (0.4, 0.4) strictly inside the circumcircle of abc
         // (center (0.5, 0.5), squared radius 0.5; |d - center|^2 =
@@ -1413,10 +1439,10 @@ mod tests {
         let mut m = mesh(&b);
         let t1 = lone_tri(&mut m, false, (0.0, 0.0), (1.0, 0.0), (0.0, 1.0));
         let x = vxy(&mut m, 0.4, 0.4);
-        let t2 = m.maketriangle(false, false).expect("tri");
-        m.setorg(t2, m.dest(t1));
-        m.setdest(t2, m.org(t1));
-        m.setapex(t2, x);
+        let t2 = m.make_triangle(false, false).expect("tri");
+        m.set_org(t2, m.dest(t1));
+        m.set_dest(t2, m.org(t1));
+        m.set_apex(t2, x);
         m.bond(
             Otri {
                 tri: t1.tri,
@@ -1427,16 +1453,16 @@ mod tests {
                 orient: 0,
             },
         );
-        assert_eq!(checkdelaunay(&mut m, &mut b), 1);
+        assert_eq!(check_delaunay(&mut m, &mut b), 1);
 
         let mut b = Behavior::default_form();
         let mut m = mesh(&b);
         let t1 = lone_tri(&mut m, false, (0.0, 0.0), (1.0, 0.0), (0.0, 1.0));
         let x = vxy(&mut m, 3.0, 3.0);
-        let t2 = m.maketriangle(false, false).expect("tri");
-        m.setorg(t2, m.dest(t1));
-        m.setdest(t2, m.org(t1));
-        m.setapex(t2, x);
+        let t2 = m.make_triangle(false, false).expect("tri");
+        m.set_org(t2, m.dest(t1));
+        m.set_dest(t2, m.org(t1));
+        m.set_apex(t2, x);
         m.bond(
             Otri {
                 tri: t1.tri,
@@ -1447,7 +1473,7 @@ mod tests {
                 orient: 0,
             },
         );
-        assert_eq!(checkdelaunay(&mut m, &mut b), 0);
+        assert_eq!(check_delaunay(&mut m, &mut b), 0);
     }
 
     // ------------------------------------------------------------------
@@ -1541,7 +1567,7 @@ mod tests {
     /// The vertex2tri contract still pins makevertexmap (PR #35): the
     /// landed row re-tested against the growing module.
     #[test]
-    fn makevertexmap_points_every_vertex_at_an_org_match_after_the_landing() {
+    fn make_vertex_map_points_every_vertex_at_an_org_match_after_the_landing() {
         let b = Behavior {
             poly: true,
             usesegments: true,
@@ -1554,7 +1580,7 @@ mod tests {
             m.set_vx_y(v, y);
         }
         assert_eq!(delaunay(&mut m, &b).expect("delaunay"), 4);
-        makevertexmap(&mut m, &b);
+        make_vertex_map(&mut m, &b);
         for v in 1..=4u32 {
             let word = m.vx_2tri(v);
             let tri = decode(word);

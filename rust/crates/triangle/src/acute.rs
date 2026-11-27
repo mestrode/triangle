@@ -16,7 +16,7 @@
 //! getWedgeIntersectionWithoutMaxAngle/getWedgeIntersectionWithMaxAngle,
 //! polygonAngles/testPolygonAngle/testTriangleAngle and
 //! minDistanceToNeigbor. Stage-1 acute C (#43) lands the
-//! findNewSPLocation family and lifts algorithm/refine.rs's D16 funnel marker:
+//! findNewSPLocation family and lifts algorithm/algorithm/refine.rs's D16 funnel marker:
 //! the dispatcher and its two variants consume the landed substrate,
 //! splittriangle calls the family live at triangle.c:7437, and the
 //! ahead-of-use dead_code allows of the substrate retire.
@@ -24,19 +24,19 @@
 //! Module-level C state mirrored here: compConst (acute.c:81, the "for
 //! comparing real numbers" epsilon); PI is C's triangle_config.h:159
 //! macro, mirrored as std::f64::consts::PI exactly like options.rs and
-//! algorithm/quality.rs.
+//! algorithm/algorithm/quality.rs.
 
 use std::f64::consts::PI; // C: #define PI (triangle_config.h:159)
 
-use crate::algorithm::locate::{preciselocate, LocateResult};
-use crate::algorithm::transform::deletevertex;
-use crate::mesh::handles::{Otri, DUMMY_TRI, NULL};
+use crate::algorithm::locate::{precise_locate, LocateResult};
+use crate::algorithm::transform::delete_vertex;
+use crate::mesh::handles::{Otri, DUMMY_TRI, NULL_ROW};
 use crate::mesh::pool::Oom;
-use crate::mesh::slots::FREEVERTEX;
+use crate::mesh::slots::FREE_VERTEX;
 use crate::mesh::util::vertex_coords;
 use crate::mesh::Mesh;
 use crate::options::Behavior;
-use crate::predicates::{tri_counterclockwise, tri_findcircumcenter};
+use crate::predicates::{counterclockwise, find_circumcenter};
 
 // -------------------------------------------------------------------
 // ACUTE MEMORY POOL (the acute.c:20 banner, the block acute.c:18-78)
@@ -189,7 +189,7 @@ impl AcutePool {
 /// garbage of C's mallocs is unobservable (D23, D24). The two C call
 /// sites are the wedge functions (acute.c:2276, 2522); the mirror
 /// calls this at the same statement positions.
-pub(crate) fn acutepool_resize(n: i32, p: &mut AcutePool) {
+pub(crate) fn acute_pool_resize(n: i32, p: &mut AcutePool) {
     // C: if (p->size < n) { (acute.c:46): the only-if-smaller guard.
     if p.size < n {
         // C: p->size = n; (acute.c:47)
@@ -219,7 +219,7 @@ pub(crate) fn acutepool_resize(n: i32, p: &mut AcutePool) {
 /// this PR, retiring the ahead-of-use state.
 #[allow(non_snake_case)] // C-parity: the C name verbatim (acute.c:81)
 #[allow(non_upper_case_globals)] // C-parity: the C name verbatim (acute.c:81)
-pub(crate) const compConst: f64 = 1.0e-80;
+pub(crate) const COMP_CONST: f64 = 1.0e-80;
 
 // -------------------------------------------------------------------
 // THE findNewSPLocation FAMILY (the "NEW STEINER POINT FUNCTION"
@@ -251,7 +251,7 @@ pub(crate) const compConst: f64 = 1.0e-80;
 // signature (acute.c:95-97)
 #[allow(clippy::float_cmp)] // C-parity: b->maxangle == 0.00000 verbatim
                             // (acute.c:99)
-pub(crate) fn findNewSPLocation(
+pub(crate) fn find_new_sp_location(
     m: &mut Mesh,
     b: &Behavior,
     torg: u32,
@@ -264,9 +264,18 @@ pub(crate) fn findNewSPLocation(
     // Based on using -U switch, call the corresponding function
     // (acute.c:98)
     if b.maxangle == 0.00000 {
-        findNewSPLocationWithoutMaxAngle(m, b, torg, tdest, tapex, circumcenter, true, badotri)
+        find_new_sp_location_without_max_angle(
+            m,
+            b,
+            torg,
+            tdest,
+            tapex,
+            circumcenter,
+            true,
+            badotri,
+        )
     } else {
-        findNewSPLocationWithMaxAngle(m, b, torg, tdest, tapex, circumcenter, true, badotri)
+        find_new_sp_location_with_max_angle(m, b, torg, tdest, tapex, circumcenter, true, badotri)
     }
 } // end of findNewSPLocation() (acute.c:105)
 
@@ -299,7 +308,7 @@ pub(crate) fn findNewSPLocation(
 #[allow(clippy::assign_op_pattern)] // C-parity: the vector, ax/ay
                                     // and inter accumulation stores keep C's x = x + y and x = x / y
                                     // shapes verbatim (acute.c:472-473, 527-531, 584-585, 643-647)
-pub(crate) fn findNewSPLocationWithoutMaxAngle(
+pub(crate) fn find_new_sp_location_without_max_angle(
     m: &mut Mesh,
     b: &Behavior,
     torg: u32,
@@ -461,7 +470,7 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
         /*   reasonably accurate) result, avoiding any possibility of   */
         /*   division by zero.                                          */
         denominator = 0.5
-            / tri_counterclockwise(
+            / counterclockwise(
                 m,
                 b,
                 vertex_coords(m, tdest),
@@ -487,7 +496,7 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
                        // longestShortestEdge.
                        // find the orientation of the triangle, basically shortest and
                        // longest edges (acute.c:221)
-    orientation = longestShortestEdge(aodist, dadist, dodist);
+    orientation = longest_shortest_edge(aodist, dadist, dodist);
     match orientation {
         123 => {
             // assign necessary information (acute.c:233)
@@ -636,7 +645,7 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
         if cosMaxAngle < 0.0 {
             // obtuse (acute.c:385-387)
             isObtuse = 1;
-        } else if (cosMaxAngle - 0.0).abs() <= compConst {
+        } else if (cosMaxAngle - 0.0).abs() <= COMP_CONST {
             // right triangle (largest angle is 90 degrees)
             // (acute.c:388-390)
             isObtuse = 1;
@@ -646,7 +655,7 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
         }
         // RELOCATION (LOCAL SMOOTHING): check for possible relocation
         // of one of triangle's points (acute.c:395-397)
-        relocated = doSmoothing(m, b, delotri, torg, tdest, tapex, &mut newloc);
+        relocated = do_smoothing(m, b, delotri, torg, tdest, tapex, &mut newloc);
         // if relocation is possible, delete that vertex and insert a
         // vertex at the new location (acute.c:398-399)
         if relocated > 0 {
@@ -657,19 +666,19 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
             match relocated {
                 1 => {
                     // C: deletevertex(m,b,&delotri); (acute.c:407)
-                    deletevertex(m, b, &mut delotri)?;
+                    delete_vertex(m, b, &mut delotri)?;
                 }
                 2 => {
                     // C: lnextself(delotri); deletevertex(m,b,&delotri);
                     // (acute.c:411-412)
-                    delotri.lnextself();
-                    deletevertex(m, b, &mut delotri)?;
+                    delotri.lnext_self();
+                    delete_vertex(m, b, &mut delotri)?;
                 }
                 3 => {
                     // C: lprevself(delotri); deletevertex(m,b,&delotri);
                     // (acute.c:416-417)
-                    delotri.lprevself();
-                    deletevertex(m, b, &mut delotri)?;
+                    delotri.lprev_self();
+                    delete_vertex(m, b, &mut delotri)?;
                 }
                 // C's switch has no default arm (acute.c:404-420);
                 // doSmoothing returns 0 or the flag values 1, 2, 3
@@ -727,7 +736,7 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
 
             // find the third point of the neighbor triangle
             // (acute.c:455-457)
-            neighborNotFound = getNeighborsVertex(
+            neighborNotFound = get_neighbors_vertex(
                 m,
                 badotri,
                 m.vx_x(middleAngleCorner),
@@ -750,7 +759,7 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
                 // now calculate neighbor's circumcenter which is the
                 // voronoi site (acute.c:466-467); C's dummy xi_tmp/
                 // eta_tmp out-pointers are the ignored tuple elements
-                let (nc_x, nc_y, _xi_tmp, _eta_tmp) = tri_findcircumcenter(
+                let (nc_x, nc_y, _xi_tmp, _eta_tmp) = find_circumcenter(
                     m,
                     b,
                     vertex_coords(m, neighborvertex_1),
@@ -771,7 +780,7 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
                 // by intersecting bisectors you will end up with the
                 // one you want to walk on; then this line and circle
                 // should be intersected (acute.c:476-479)
-                circleLineIntersection(
+                circle_line_intersection(
                     myCircumcenter[0],
                     myCircumcenter[1],
                     vector_x,
@@ -788,7 +797,7 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
                 yMidOfLongestEdge = (m.vx_y(middleAngleCorner) + m.vx_y(smallestAngleCorner)) / 2.0;
                 // we need to find correct intersection point, since
                 // line intersects circle twice (acute.c:484-486)
-                isCorrect = chooseCorrectPoint(
+                isCorrect = choose_correct_point(
                     xMidOfLongestEdge,
                     yMidOfLongestEdge,
                     p[3],
@@ -809,7 +818,7 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
                 // check if there is a Voronoi vertex between before
                 // intersection: check if the voronoi vertex is between
                 // the intersection and circumcenter (acute.c:495-498)
-                pointBetweenPoints(
+                point_between_points(
                     inter_x,
                     inter_y,
                     myCircumcenter[0],
@@ -825,8 +834,8 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
                     // if it is between circumcenter and intersection:
                     // if it returns 1.0 this means we have a voronoi
                     // vertex within feasible region (acute.c:502-504)
-                    if (voronoiOrInter[0] - 1.0).abs() <= compConst {
-                        if testTriangleAngle(
+                    if (voronoiOrInter[0] - 1.0).abs() <= COMP_CONST {
+                        if test_triangle_angle(
                             b,
                             m.vx_x(middleAngleCorner),
                             m.vx_y(middleAngleCorner),
@@ -850,7 +859,7 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
                         // there is no voronoi vertex between
                         // intersection point and circumcenter
                         // (acute.c:516-517)
-                        if testTriangleAngle(
+                        if test_triangle_angle(
                             b,
                             m.vx_x(largestAngleCorner),
                             m.vx_y(largestAngleCorner),
@@ -880,7 +889,7 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
                             // circumcenter (acute.c:529-531)
                             inter_x = inter_x + ax * pertConst * shortestEdgeDist.sqrt();
                             inter_y = inter_y + ay * pertConst * shortestEdgeDist.sqrt();
-                            if testTriangleAngle(
+                            if test_triangle_angle(
                                 b,
                                 m.vx_x(middleAngleCorner),
                                 m.vx_y(middleAngleCorner),
@@ -937,7 +946,7 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
 
             // DO THE SAME THING FOR THE OTHER DIRECTION: find the third
             // point of the neighbor triangle (acute.c:565-568)
-            neighborNotFound = getNeighborsVertex(
+            neighborNotFound = get_neighbors_vertex(
                 m,
                 badotri,
                 m.vx_x(largestAngleCorner),
@@ -959,7 +968,7 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
                 neighborvertex_3 = m.apex(neighborotri);
                 // now calculate neighbor's circumcenter which is the
                 // voronoi site (acute.c:577-578)
-                let (nc_x, nc_y, _xi_tmp, _eta_tmp) = tri_findcircumcenter(
+                let (nc_x, nc_y, _xi_tmp, _eta_tmp) = find_circumcenter(
                     m,
                     b,
                     vertex_coords(m, neighborvertex_1),
@@ -980,7 +989,7 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
                 // by intersecting bisectors you will end up with the
                 // one you want to walk on; then this line and circle
                 // should be intersected (acute.c:588-591)
-                circleLineIntersection(
+                circle_line_intersection(
                     myCircumcenter[0],
                     myCircumcenter[1],
                     vector_x,
@@ -999,7 +1008,7 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
                 // we need to find correct intersection point, since
                 // line intersects circle twice; this direction is
                 // always ACUTE (acute.c:597-600)
-                isCorrect = chooseCorrectPoint(
+                isCorrect = choose_correct_point(
                     xMidOfMiddleEdge,
                     yMidOfMiddleEdge,
                     p[3],
@@ -1021,7 +1030,7 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
                 // check if there is a Voronoi vertex between before
                 // intersection: check if the voronoi vertex is between
                 // the intersection and circumcenter (acute.c:610-613)
-                pointBetweenPoints(
+                point_between_points(
                     inter_x,
                     inter_y,
                     myCircumcenter[0],
@@ -1037,8 +1046,8 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
                     // if it is between circumcenter and intersection:
                     // if it returns 1.0 this means we have a voronoi
                     // vertex within feasible region (acute.c:617-619)
-                    if (voronoiOrInter[0] - 1.0).abs() <= compConst {
-                        if testTriangleAngle(
+                    if (voronoiOrInter[0] - 1.0).abs() <= COMP_CONST {
+                        if test_triangle_angle(
                             b,
                             m.vx_x(middleAngleCorner),
                             m.vx_y(middleAngleCorner),
@@ -1062,7 +1071,7 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
                         // there is no voronoi vertex between
                         // intersection point and circumcenter
                         // (acute.c:632-633)
-                        if testTriangleAngle(
+                        if test_triangle_angle(
                             b,
                             m.vx_x(middleAngleCorner),
                             m.vx_y(middleAngleCorner),
@@ -1092,7 +1101,7 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
                             // circumcenter (acute.c:645-647)
                             inter_x = inter_x + ax * pertConst * shortestEdgeDist.sqrt();
                             inter_y = inter_y + ay * pertConst * shortestEdgeDist.sqrt();
-                            if testTriangleAngle(
+                            if test_triangle_angle(
                                 b,
                                 m.vx_x(middleAngleCorner),
                                 m.vx_y(middleAngleCorner),
@@ -1227,7 +1236,7 @@ pub(crate) fn findNewSPLocationWithoutMaxAngle(
                                     // ax/ay and inter accumulation stores keep C's x = x + y and
                                     // x = x / y shapes verbatim (acute.c:1052, 1137-1138, 1220-1224,
                                     // 1295-1299, 1335-1339, 1402-1403, 1486-1490, 1557-1561, 1595-1599)
-pub(crate) fn findNewSPLocationWithMaxAngle(
+pub(crate) fn find_new_sp_location_with_max_angle(
     m: &mut Mesh,
     b: &Behavior,
     torg: u32,
@@ -1434,7 +1443,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
         /*   reasonably accurate) result, avoiding any possibility of   */
         /*   division by zero.                                          */
         denominator = 0.5
-            / tri_counterclockwise(
+            / counterclockwise(
                 m,
                 b,
                 vertex_coords(m, tdest),
@@ -1456,7 +1465,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
     delotri = badotri; // save for later (acute.c:836)
                        // FINDING THE ORIENTATION OF TRIANGLE: find the orientation of
                        // the triangle, basically shortest and longest edges (acute.c:843)
-    orientation = longestShortestEdge(aodist, dadist, dodist);
+    orientation = longest_shortest_edge(aodist, dadist, dodist);
     match orientation {
         123 => {
             // assign necessary information (acute.c:842)
@@ -1605,7 +1614,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
         if cosMaxAngle < 0.0 {
             // obtuse (acute.c:994-996)
             isObtuse = 1;
-        } else if (cosMaxAngle - 0.0).abs() <= compConst {
+        } else if (cosMaxAngle - 0.0).abs() <= COMP_CONST {
             // right triangle (largest angle is 90 degrees)
             // (acute.c:997-999)
             isObtuse = 1;
@@ -1615,7 +1624,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
         }
         // RELOCATION (LOCAL SMOOTHING): check for possible relocation
         // of one of triangle's points (acute.c:1004-1019)
-        relocated = doSmoothing(m, b, delotri, torg, tdest, tapex, &mut newloc);
+        relocated = do_smoothing(m, b, delotri, torg, tdest, tapex, &mut newloc);
         // if relocation is possible, delete that vertex and insert a
         // vertex at the new location (acute.c:1020-1021)
         if relocated > 0 {
@@ -1626,19 +1635,19 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
             match relocated {
                 1 => {
                     // C: deletevertex(m,b,&delotri); (acute.c:1029)
-                    deletevertex(m, b, &mut delotri)?;
+                    delete_vertex(m, b, &mut delotri)?;
                 }
                 2 => {
                     // C: lnextself(delotri); deletevertex(m,b,&delotri);
                     // (acute.c:1033-1034)
-                    delotri.lnextself();
-                    deletevertex(m, b, &mut delotri)?;
+                    delotri.lnext_self();
+                    delete_vertex(m, b, &mut delotri)?;
                 }
                 3 => {
                     // C: lprevself(delotri); deletevertex(m,b,&delotri);
                     // (acute.c:1038-1039)
-                    delotri.lprevself();
-                    deletevertex(m, b, &mut delotri)?;
+                    delotri.lprev_self();
+                    delete_vertex(m, b, &mut delotri)?;
                 }
                 // C's switch has no default arm (acute.c:1026-1042);
                 // doSmoothing returns 0 or the flag values 1, 2, 3
@@ -1710,7 +1719,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
 
             // find the third point of the neighbor triangle
             // (acute.c:1084-1085)
-            neighborNotFound_first = getNeighborsVertex(
+            neighborNotFound_first = get_neighbors_vertex(
                 m,
                 badotri,
                 m.vx_x(middleAngleCorner),
@@ -1765,7 +1774,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
             // are two possibilities; weather it is obtuse/acute the one
             // closer to the minimum angle corner is the first direction
             // (acute.c:1107-1109)
-            isCorrect = chooseCorrectPoint(
+            isCorrect = choose_correct_point(
                 x_2,
                 y_2,
                 m.vx_x(middleAngleCorner),
@@ -1799,7 +1808,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                 // now calculate neighbor's circumcenter which is the
                 // voronoi site (acute.c:1130-1131); C's dummy xi_tmp/
                 // eta_tmp out-pointers are the ignored tuple elements
-                let (nc_x, nc_y, _xi_tmp, _eta_tmp) = tri_findcircumcenter(
+                let (nc_x, nc_y, _xi_tmp, _eta_tmp) = find_circumcenter(
                     m,
                     b,
                     vertex_coords(m, neighborvertex_1),
@@ -1820,7 +1829,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                 // by intersecting bisectors you will end up with the
                 // one you want to walk on; then this line and circle
                 // should be intersected (acute.c:1139-1142)
-                circleLineIntersection(
+                circle_line_intersection(
                     myCircumcenter[0],
                     myCircumcenter[1],
                     vector_x,
@@ -1832,7 +1841,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                 );
                 // we need to find correct intersection point, since
                 // line intersects circle twice (acute.c:1143-1145)
-                isCorrect = chooseCorrectPoint(
+                isCorrect = choose_correct_point(
                     xMidOfLongestEdge,
                     yMidOfLongestEdge,
                     p[3],
@@ -1867,7 +1876,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                 // now calculate the intersection of two lines: lines
                 // are given with a point and a vector respectively
                 // (acute.c:1165)
-                lineLineIntersection(
+                line_line_intersection(
                     myCircumcenter[0],
                     myCircumcenter[1],
                     vector_x,
@@ -1889,7 +1898,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                 // check if there is a Voronoi vertex between before
                 // intersection: check if the voronoi vertex is between
                 // the intersection and circumcenter (acute.c:1179-1182)
-                pointBetweenPoints(
+                point_between_points(
                     inter_x,
                     inter_y,
                     myCircumcenter[0],
@@ -1905,11 +1914,11 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                     // if it is between circumcenter and intersection:
                     // if it returns 1.0 this means we have a voronoi
                     // vertex within feasible region (acute.c:1186-1188)
-                    if (voronoiOrInter[0] - 1.0).abs() <= compConst {
+                    if (voronoiOrInter[0] - 1.0).abs() <= COMP_CONST {
                         // now check if the line intersection is
                         // between circumcenter and voronoi
                         // (acute.c:1189-1191)
-                        pointBetweenPoints(
+                        point_between_points(
                             voronoiOrInter[2],
                             voronoiOrInter[3],
                             myCircumcenter[0],
@@ -1921,7 +1930,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                         // now check if we can go further by picking the
                         // slab line and petal intersection
                         // (acute.c:1192)
-                        if (line_result[0] - 1.0).abs() <= compConst && line_p[0] > 0.0 {
+                        if (line_result[0] - 1.0).abs() <= COMP_CONST && line_p[0] > 0.0 {
                             // calculate the distance to the smallest
                             // angle corner; check if we create a bad
                             // triangle or not (acute.c:1193-1203)
@@ -1934,7 +1943,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                                         * (m.vx_x(smallestAngleCorner) - line_inter_x)
                                         + (m.vx_y(smallestAngleCorner) - line_inter_y)
                                             * (m.vx_y(smallestAngleCorner) - line_inter_y)))
-                                && testTriangleAngle(
+                                && test_triangle_angle(
                                     b,
                                     m.vx_x(middleAngleCorner),
                                     m.vx_y(middleAngleCorner),
@@ -1943,13 +1952,13 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                                     petal_slab_inter_x_first,
                                     petal_slab_inter_y_first,
                                 ) != 0
-                                && minDistanceToNeigbor(
+                                && min_distance_to_neighbor(
                                     m,
                                     b,
                                     petal_slab_inter_x_first,
                                     petal_slab_inter_y_first,
                                     &mut neighborotri,
-                                )? > minDistanceToNeigbor(
+                                )? > min_distance_to_neighbor(
                                     m,
                                     b,
                                     line_inter_x,
@@ -1966,7 +1975,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                             } else {
                                 // slab intersection point is further
                                 // away (acute.c:1210-1211)
-                                if testTriangleAngle(
+                                if test_triangle_angle(
                                     b,
                                     m.vx_x(middleAngleCorner),
                                     m.vx_y(middleAngleCorner),
@@ -2001,7 +2010,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                                         line_inter_x + ax * pertConst * shortestEdgeDist.sqrt();
                                     line_inter_y =
                                         line_inter_y + ay * pertConst * shortestEdgeDist.sqrt();
-                                    if testTriangleAngle(
+                                    if test_triangle_angle(
                                         b,
                                         m.vx_x(middleAngleCorner),
                                         m.vx_y(middleAngleCorner),
@@ -2035,7 +2044,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                         } else {
                             // NOW APPLY A BREADTH-FIRST SEARCH ON THE
                             // VORONOI (acute.c:1248-1263)
-                            if testTriangleAngle(
+                            if test_triangle_angle(
                                 b,
                                 m.vx_x(middleAngleCorner),
                                 m.vx_y(middleAngleCorner),
@@ -2056,7 +2065,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                         // there is no voronoi vertex between
                         // intersection point and circumcenter
                         // (acute.c:1266-1269)
-                        pointBetweenPoints(
+                        point_between_points(
                             inter_x,
                             inter_y,
                             myCircumcenter[0],
@@ -2068,7 +2077,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                         // check if we can go further by picking the
                         // slab line and petal intersection
                         // (acute.c:1270)
-                        if (line_result[0] - 1.0).abs() <= compConst && line_p[0] > 0.0 {
+                        if (line_result[0] - 1.0).abs() <= COMP_CONST && line_p[0] > 0.0 {
                             // calculate the distance to the smallest
                             // angle corner; check if we create a bad
                             // triangle or not (acute.c:1271-1280)
@@ -2081,7 +2090,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                                         * (m.vx_x(smallestAngleCorner) - line_inter_x)
                                         + (m.vx_y(smallestAngleCorner) - line_inter_y)
                                             * (m.vx_y(smallestAngleCorner) - line_inter_y)))
-                                && testTriangleAngle(
+                                && test_triangle_angle(
                                     b,
                                     m.vx_x(middleAngleCorner),
                                     m.vx_y(middleAngleCorner),
@@ -2090,13 +2099,13 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                                     petal_slab_inter_x_first,
                                     petal_slab_inter_y_first,
                                 ) != 0
-                                && minDistanceToNeigbor(
+                                && min_distance_to_neighbor(
                                     m,
                                     b,
                                     petal_slab_inter_x_first,
                                     petal_slab_inter_y_first,
                                     &mut neighborotri,
-                                )? > minDistanceToNeigbor(
+                                )? > min_distance_to_neighbor(
                                     m,
                                     b,
                                     line_inter_x,
@@ -2113,7 +2122,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                             } else {
                                 // slab intersection point is further
                                 // away (acute.c:1285-1286)
-                                if testTriangleAngle(
+                                if test_triangle_angle(
                                     b,
                                     m.vx_x(largestAngleCorner),
                                     m.vx_y(largestAngleCorner),
@@ -2148,7 +2157,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                                         line_inter_x + ax * pertConst * shortestEdgeDist.sqrt();
                                     line_inter_y =
                                         line_inter_y + ay * pertConst * shortestEdgeDist.sqrt();
-                                    if testTriangleAngle(
+                                    if test_triangle_angle(
                                         b,
                                         m.vx_x(middleAngleCorner),
                                         m.vx_y(middleAngleCorner),
@@ -2181,7 +2190,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                             }
                         } else {
                             // (acute.c:1322-1324)
-                            if testTriangleAngle(
+                            if test_triangle_angle(
                                 b,
                                 m.vx_x(largestAngleCorner),
                                 m.vx_y(largestAngleCorner),
@@ -2211,7 +2220,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                                 // the circumcenter (acute.c:1338-1339)
                                 inter_x = inter_x + ax * pertConst * shortestEdgeDist.sqrt();
                                 inter_y = inter_y + ay * pertConst * shortestEdgeDist.sqrt();
-                                if testTriangleAngle(
+                                if test_triangle_angle(
                                     b,
                                     m.vx_x(middleAngleCorner),
                                     m.vx_y(middleAngleCorner),
@@ -2269,7 +2278,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
 
             // DO THE SAME THING FOR THE OTHER DIRECTION: find the third
             // point of the neighbor triangle (acute.c:1378-1381)
-            neighborNotFound_second = getNeighborsVertex(
+            neighborNotFound_second = get_neighbors_vertex(
                 m,
                 badotri,
                 m.vx_x(largestAngleCorner),
@@ -2296,7 +2305,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                 neighborvertex_3 = m.apex(neighborotri);
                 // now calculate neighbor's circumcenter which is the
                 // voronoi site (acute.c:1394-1395)
-                let (nc_x, nc_y, _xi_tmp, _eta_tmp) = tri_findcircumcenter(
+                let (nc_x, nc_y, _xi_tmp, _eta_tmp) = find_circumcenter(
                     m,
                     b,
                     vertex_coords(m, neighborvertex_1),
@@ -2317,7 +2326,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                 // by intersecting bisectors you will end up with the
                 // one you want to walk on; then this line and circle
                 // should be intersected (acute.c:1404-1408)
-                circleLineIntersection(
+                circle_line_intersection(
                     myCircumcenter[0],
                     myCircumcenter[1],
                     vector_x,
@@ -2330,7 +2339,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                 // we need to find correct intersection point, since
                 // line intersects circle twice; this direction is
                 // always ACUTE (acute.c:1409-1413)
-                isCorrect = chooseCorrectPoint(
+                isCorrect = choose_correct_point(
                     xMidOfMiddleEdge,
                     yMidOfMiddleEdge,
                     p[3],
@@ -2365,7 +2374,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                 // now calculate the intersection of two lines: lines
                 // are given with a point and a vector respectively
                 // (acute.c:1434)
-                lineLineIntersection(
+                line_line_intersection(
                     myCircumcenter[0],
                     myCircumcenter[1],
                     vector_x,
@@ -2387,7 +2396,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                 // check if there is a Voronoi vertex between before
                 // intersection: check if the voronoi vertex is between
                 // the intersection and circumcenter (acute.c:1447-1450)
-                pointBetweenPoints(
+                point_between_points(
                     inter_x,
                     inter_y,
                     myCircumcenter[0],
@@ -2403,11 +2412,11 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                     // if it is between circumcenter and intersection:
                     // if it returns 1.0 this means we have a voronoi
                     // vertex within feasible region (acute.c:1453-1455)
-                    if (voronoiOrInter[0] - 1.0).abs() <= compConst {
+                    if (voronoiOrInter[0] - 1.0).abs() <= COMP_CONST {
                         // now check if the line intersection is
                         // between circumcenter and voronoi
                         // (acute.c:1457-1458)
-                        pointBetweenPoints(
+                        point_between_points(
                             voronoiOrInter[2],
                             voronoiOrInter[3],
                             myCircumcenter[0],
@@ -2419,7 +2428,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                         // now check if we can go further by picking the
                         // slab line and petal intersection
                         // (acute.c:1459)
-                        if (line_result[0] - 1.0).abs() <= compConst && line_p[0] > 0.0 {
+                        if (line_result[0] - 1.0).abs() <= COMP_CONST && line_p[0] > 0.0 {
                             // calculate the distance to the smallest
                             // angle corner; check if we create a bad
                             // triangle or not (acute.c:1460-1470)
@@ -2432,7 +2441,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                                         * (m.vx_x(smallestAngleCorner) - line_inter_x)
                                         + (m.vx_y(smallestAngleCorner) - line_inter_y)
                                             * (m.vx_y(smallestAngleCorner) - line_inter_y)))
-                                && testTriangleAngle(
+                                && test_triangle_angle(
                                     b,
                                     m.vx_x(middleAngleCorner),
                                     m.vx_y(middleAngleCorner),
@@ -2441,13 +2450,13 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                                     petal_slab_inter_x_second,
                                     petal_slab_inter_y_second,
                                 ) != 0
-                                && minDistanceToNeigbor(
+                                && min_distance_to_neighbor(
                                     m,
                                     b,
                                     petal_slab_inter_x_second,
                                     petal_slab_inter_y_second,
                                     &mut neighborotri,
-                                )? > minDistanceToNeigbor(
+                                )? > min_distance_to_neighbor(
                                     m,
                                     b,
                                     line_inter_x,
@@ -2464,7 +2473,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                             } else {
                                 // slab intersection point is further
                                 // away (acute.c:1477)
-                                if testTriangleAngle(
+                                if test_triangle_angle(
                                     b,
                                     m.vx_x(middleAngleCorner),
                                     m.vx_y(middleAngleCorner),
@@ -2499,7 +2508,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                                         line_inter_x + ax * pertConst * shortestEdgeDist.sqrt();
                                     line_inter_y =
                                         line_inter_y + ay * pertConst * shortestEdgeDist.sqrt();
-                                    if testTriangleAngle(
+                                    if test_triangle_angle(
                                         b,
                                         m.vx_x(middleAngleCorner),
                                         m.vx_y(middleAngleCorner),
@@ -2533,7 +2542,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                         } else {
                             // NOW APPLY A BREADTH-FIRST SEARCH ON THE
                             // VORONOI (acute.c:1513-1526)
-                            if testTriangleAngle(
+                            if test_triangle_angle(
                                 b,
                                 m.vx_x(middleAngleCorner),
                                 m.vx_y(middleAngleCorner),
@@ -2554,7 +2563,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                         // there is no voronoi vertex between
                         // intersection point and circumcenter
                         // (acute.c:1528-1531)
-                        pointBetweenPoints(
+                        point_between_points(
                             inter_x,
                             inter_y,
                             myCircumcenter[0],
@@ -2566,7 +2575,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                         // check if we can go further by picking the
                         // slab line and petal intersection
                         // (acute.c:1532)
-                        if (line_result[0] - 1.0).abs() <= compConst && line_p[0] > 0.0 {
+                        if (line_result[0] - 1.0).abs() <= COMP_CONST && line_p[0] > 0.0 {
                             // calculate the distance to the smallest
                             // angle corner; check if we create a bad
                             // triangle or not (acute.c:1533-1542)
@@ -2579,7 +2588,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                                         * (m.vx_x(smallestAngleCorner) - line_inter_x)
                                         + (m.vx_y(smallestAngleCorner) - line_inter_y)
                                             * (m.vx_y(smallestAngleCorner) - line_inter_y)))
-                                && testTriangleAngle(
+                                && test_triangle_angle(
                                     b,
                                     m.vx_x(middleAngleCorner),
                                     m.vx_y(middleAngleCorner),
@@ -2588,13 +2597,13 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                                     petal_slab_inter_x_second,
                                     petal_slab_inter_y_second,
                                 ) != 0
-                                && minDistanceToNeigbor(
+                                && min_distance_to_neighbor(
                                     m,
                                     b,
                                     petal_slab_inter_x_second,
                                     petal_slab_inter_y_second,
                                     &mut neighborotri,
-                                )? > minDistanceToNeigbor(
+                                )? > min_distance_to_neighbor(
                                     m,
                                     b,
                                     line_inter_x,
@@ -2611,7 +2620,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                             } else {
                                 // slab intersection point is further
                                 // away (acute.c:1548)
-                                if testTriangleAngle(
+                                if test_triangle_angle(
                                     b,
                                     m.vx_x(largestAngleCorner),
                                     m.vx_y(largestAngleCorner),
@@ -2646,7 +2655,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                                         line_inter_x + ax * pertConst * shortestEdgeDist.sqrt();
                                     line_inter_y =
                                         line_inter_y + ay * pertConst * shortestEdgeDist.sqrt();
-                                    if testTriangleAngle(
+                                    if test_triangle_angle(
                                         b,
                                         m.vx_x(middleAngleCorner),
                                         m.vx_y(middleAngleCorner),
@@ -2682,7 +2691,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                             // corner first here, where the first
                             // direction's counterpart tests the
                             // largest corner first (acute.c:1324)
-                            if testTriangleAngle(
+                            if test_triangle_angle(
                                 b,
                                 m.vx_x(middleAngleCorner),
                                 m.vx_y(middleAngleCorner),
@@ -2712,7 +2721,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
                                 // the circumcenter (acute.c:1600-1601)
                                 inter_x = inter_x + ax * pertConst * shortestEdgeDist.sqrt();
                                 inter_y = inter_y + ay * pertConst * shortestEdgeDist.sqrt();
-                                if testTriangleAngle(
+                                if test_triangle_angle(
                                     b,
                                     m.vx_x(middleAngleCorner),
                                     m.vx_y(middleAngleCorner),
@@ -2961,7 +2970,7 @@ pub(crate) fn findNewSPLocationWithMaxAngle(
 /// The only C call sites sit in the findNewSPLocation family (acute.c:
 /// 221 and 843), landed with stage-1 acute C (#43).
 #[allow(non_snake_case)] // C-parity: the C name verbatim (acute.c:1816)
-pub(crate) fn longestShortestEdge(aodist: f64, dadist: f64, dodist: f64) -> i32 {
+pub(crate) fn longest_shortest_edge(aodist: f64, dadist: f64, dodist: f64) -> i32 {
     // C: int max = 0, min = 0, mid = 0,minMidMax; (acute.c:1818). The
     // = 0 initializers of max/min/mid are dead stores (every branch
     // assigns all three before the first read) and are dropped (D19).
@@ -3030,7 +3039,7 @@ pub(crate) fn longestShortestEdge(aodist: f64, dadist: f64, dodist: f64) -> i32 
 // signature (acute.c:1858-1863)
 #[allow(clippy::float_cmp)] // C-parity: b->maxangle == 0.0 verbatim
                             // (acute.c:1909, 1949, 1990)
-pub(crate) fn doSmoothing(
+pub(crate) fn do_smoothing(
     m: &mut Mesh,
     b: &Behavior,
     badotri: Otri,
@@ -3077,12 +3086,12 @@ pub(crate) fn doSmoothing(
     let result = 'smoothing: {
         /*********************** TRY TO RELOCATE POINT "p" *************************/
         // get the surrounding points of p, so this gives us the triangles
-        numpoints_p = getStarPoints(m, badotri, torg, tdest, tapex, 1, &mut points_p);
+        numpoints_p = get_star_points(m, badotri, torg, tdest, tapex, 1, &mut points_p);
         // INTERSECTION OF PETALS
         // first check whether the star angles are appropriate for relocation
-        if numpoints_p != 0 && polygonAngles(b, numpoints_p, &points_p) == 0 {
+        if numpoints_p != 0 && polygon_angles(b, numpoints_p, &points_p) == 0 {
             if b.maxangle == 0.0 {
-                newLocFound = getWedgeIntersectionWithoutMaxAngle(
+                newLocFound = get_wedge_intersection_without_max_angle(
                     &mut pool,
                     b,
                     numpoints_p,
@@ -3090,11 +3099,16 @@ pub(crate) fn doSmoothing(
                     newloc,
                 );
             } else {
-                newLocFound =
-                    getWedgeIntersectionWithMaxAngle(&mut pool, b, numpoints_p, &points_p, newloc);
+                newLocFound = get_wedge_intersection_with_max_angle(
+                    &mut pool,
+                    b,
+                    numpoints_p,
+                    &points_p,
+                    newloc,
+                );
             }
             // make sure the relocated point is a free vertex
-            if newLocFound != 0 && m.vx_type(torg) == FREEVERTEX {
+            if newLocFound != 0 && m.vx_type(torg) == FREE_VERTEX {
                 possibilities[0] = newloc[0]; // something found
                 possibilities[1] = newloc[1];
                 num_pos += 1; // increase the number of possibilities
@@ -3104,12 +3118,12 @@ pub(crate) fn doSmoothing(
 
         /*********************** TRY TO RELOCATE POINT "q" *************************/
         // get the surrounding points of q, so this gives us the triangles
-        numpoints_q = getStarPoints(m, badotri, torg, tdest, tapex, 2, &mut points_q);
+        numpoints_q = get_star_points(m, badotri, torg, tdest, tapex, 2, &mut points_q);
         // INTERSECTION OF PETALS
         // first check whether the star angles are appropriate for relocation
-        if numpoints_q != 0 && polygonAngles(b, numpoints_q, &points_q) == 0 {
+        if numpoints_q != 0 && polygon_angles(b, numpoints_q, &points_q) == 0 {
             if b.maxangle == 0.0 {
-                newLocFound = getWedgeIntersectionWithoutMaxAngle(
+                newLocFound = get_wedge_intersection_without_max_angle(
                     &mut pool,
                     b,
                     numpoints_q,
@@ -3117,11 +3131,16 @@ pub(crate) fn doSmoothing(
                     newloc,
                 );
             } else {
-                newLocFound =
-                    getWedgeIntersectionWithMaxAngle(&mut pool, b, numpoints_q, &points_q, newloc);
+                newLocFound = get_wedge_intersection_with_max_angle(
+                    &mut pool,
+                    b,
+                    numpoints_q,
+                    &points_q,
+                    newloc,
+                );
             }
             // make sure the relocated point is a free vertex
-            if newLocFound != 0 && m.vx_type(tdest) == FREEVERTEX {
+            if newLocFound != 0 && m.vx_type(tdest) == FREE_VERTEX {
                 possibilities[2] = newloc[0]; // something found
                 possibilities[3] = newloc[1];
                 num_pos += 1; // increase the number of possibilities
@@ -3132,12 +3151,12 @@ pub(crate) fn doSmoothing(
         /*********************** TRY TO RELOCATE POINT "q" *************************/
         // get the surrounding points of r, so this gives us the triangles
         // (C's third banner repeats "q" verbatim, acute.c:1966)
-        numpoints_r = getStarPoints(m, badotri, torg, tdest, tapex, 3, &mut points_r);
+        numpoints_r = get_star_points(m, badotri, torg, tdest, tapex, 3, &mut points_r);
         // INTERSECTION OF PETALS
         // first check whether the star angles are appropriate for relocation
-        if numpoints_r != 0 && polygonAngles(b, numpoints_r, &points_r) == 0 {
+        if numpoints_r != 0 && polygon_angles(b, numpoints_r, &points_r) == 0 {
             if b.maxangle == 0.0 {
-                newLocFound = getWedgeIntersectionWithoutMaxAngle(
+                newLocFound = get_wedge_intersection_without_max_angle(
                     &mut pool,
                     b,
                     numpoints_r,
@@ -3145,11 +3164,16 @@ pub(crate) fn doSmoothing(
                     newloc,
                 );
             } else {
-                newLocFound =
-                    getWedgeIntersectionWithMaxAngle(&mut pool, b, numpoints_r, &points_r, newloc);
+                newLocFound = get_wedge_intersection_with_max_angle(
+                    &mut pool,
+                    b,
+                    numpoints_r,
+                    &points_r,
+                    newloc,
+                );
             }
             // make sure the relocated point is a free vertex
-            if newLocFound != 0 && m.vx_type(tapex) == FREEVERTEX {
+            if newLocFound != 0 && m.vx_type(tapex) == FREE_VERTEX {
                 possibilities[4] = newloc[0]; // something found
                 possibilities[5] = newloc[1];
                 num_pos += 1; // increase the number of possibilities
@@ -3213,7 +3237,7 @@ pub(crate) fn doSmoothing(
 #[allow(clippy::needless_late_init)] // C-parity: struct otri tempotri
                                      // (acute.c:2048) is declared in C's block and assigned at
                                      // acute.c:2082 (tempotri = badotri)
-pub(crate) fn getStarPoints(
+pub(crate) fn get_star_points(
     m: &Mesh,
     badotri: Otri,
     p: u32,
@@ -3296,7 +3320,7 @@ pub(crate) fn getStarPoints(
     // C: do{ ... }while( !( ... ) ); (acute.c:2091-2110)
     loop {
         // find the neighbor's third point where it is incident to given edge
-        if getNeighborsVertex(
+        if get_neighbors_vertex(
             m,
             tempotri,
             first_x,
@@ -3324,8 +3348,8 @@ pub(crate) fn getStarPoints(
         // C: }while( !( (fabs(returnPoint[0] - third_x) <= compConst)  &&
         //     (fabs(returnPoint[1] - third_y) <= compConst) ) );
         // (acute.c:2109-2110)
-        if !((returnPoint[0] - third_x).abs() <= compConst
-            && (returnPoint[1] - third_y).abs() <= compConst)
+        if !((returnPoint[0] - third_x).abs() <= COMP_CONST
+            && (returnPoint[1] - third_y).abs() <= COMP_CONST)
         {
             continue;
         }
@@ -3353,7 +3377,7 @@ pub(crate) fn getStarPoints(
 // signature (acute.c:2121-2124)
 #[allow(clippy::float_cmp)] // C-parity: the degenerate-triangle
                             // coordinate equality tests verbatim (acute.c:2152-2154)
-pub(crate) fn getNeighborsVertex(
+pub(crate) fn get_neighbors_vertex(
     m: &Mesh,
     badotri: Otri,
     first_x: f64,
@@ -3381,9 +3405,9 @@ pub(crate) fn getNeighborsVertex(
     // (a nonzero flag pair implies the vertices were read in the same
     // orientation iteration, acute.c:2147-2149), so the NULL is never
     // dereferenced, exactly as in C.
-    let mut neighborvertex_1 = NULL;
-    let mut neighborvertex_2 = NULL;
-    let mut neighborvertex_3 = NULL;
+    let mut neighborvertex_1 = NULL_ROW;
+    let mut neighborvertex_2 = NULL_ROW;
+    let mut neighborvertex_3 = NULL_ROW;
 
     // used for finding neighbor triangle
     // C: int firstVertexMatched = 0, secondVertexMatched = 0;
@@ -3423,31 +3447,31 @@ pub(crate) fn getNeighborsVertex(
             } else {
                 // begin searching for the correct neighbor triangle
                 firstVertexMatched = 0;
-                if (first_x - m.vx_x(neighborvertex_1)).abs() < compConst
-                    && (first_y - m.vx_y(neighborvertex_1)).abs() < compConst
+                if (first_x - m.vx_x(neighborvertex_1)).abs() < COMP_CONST
+                    && (first_y - m.vx_y(neighborvertex_1)).abs() < COMP_CONST
                 {
                     firstVertexMatched = 11; // neighbor's 1st vertex is matched to first vertex
-                } else if (first_x - m.vx_x(neighborvertex_2)).abs() < compConst
-                    && (first_y - m.vx_y(neighborvertex_2)).abs() < compConst
+                } else if (first_x - m.vx_x(neighborvertex_2)).abs() < COMP_CONST
+                    && (first_y - m.vx_y(neighborvertex_2)).abs() < COMP_CONST
                 {
                     firstVertexMatched = 12; // neighbor's 2nd vertex is matched to first vertex
-                } else if (first_x - m.vx_x(neighborvertex_3)).abs() < compConst
-                    && (first_y - m.vx_y(neighborvertex_3)).abs() < compConst
+                } else if (first_x - m.vx_x(neighborvertex_3)).abs() < COMP_CONST
+                    && (first_y - m.vx_y(neighborvertex_3)).abs() < COMP_CONST
                 {
                     firstVertexMatched = 13; // neighbor's 3rd vertex is matched to first vertex
                 }
 
                 secondVertexMatched = 0;
-                if (second_x - m.vx_x(neighborvertex_1)).abs() < compConst
-                    && (second_y - m.vx_y(neighborvertex_1)).abs() < compConst
+                if (second_x - m.vx_x(neighborvertex_1)).abs() < COMP_CONST
+                    && (second_y - m.vx_y(neighborvertex_1)).abs() < COMP_CONST
                 {
                     secondVertexMatched = 21; // neighbor's 1st vertex is matched to second vertex
-                } else if (second_x - m.vx_x(neighborvertex_2)).abs() < compConst
-                    && (second_y - m.vx_y(neighborvertex_2)).abs() < compConst
+                } else if (second_x - m.vx_x(neighborvertex_2)).abs() < COMP_CONST
+                    && (second_y - m.vx_y(neighborvertex_2)).abs() < COMP_CONST
                 {
                     secondVertexMatched = 22; // neighbor's 2nd vertex is matched to second vertex
-                } else if (second_x - m.vx_x(neighborvertex_3)).abs() < compConst
-                    && (second_y - m.vx_y(neighborvertex_3)).abs() < compConst
+                } else if (second_x - m.vx_x(neighborvertex_3)).abs() < COMP_CONST
+                    && (second_y - m.vx_y(neighborvertex_3)).abs() < COMP_CONST
                 {
                     secondVertexMatched = 23; // neighbor's 3rd vertex is matched to second vertex
                 }
@@ -3545,7 +3569,7 @@ pub(crate) fn getNeighborsVertex(
 #[allow(clippy::float_cmp)] // C-parity: b->goodangle == 1.0 verbatim
                             // (acute.c:2292) and the p1[0] == 1.0 intersection flag test
                             // (acute.c:2394)
-pub(crate) fn getWedgeIntersectionWithoutMaxAngle(
+pub(crate) fn get_wedge_intersection_without_max_angle(
     p: &mut AcutePool,
     b: &Behavior,
     numpoints: i32,
@@ -3600,7 +3624,7 @@ pub(crate) fn getWedgeIntersectionWithoutMaxAngle(
     let petalradiusconstant: f64;
 
     // C: acutepool_resize(numpoints, m->acute_mem); (acute.c:2276)
-    acutepool_resize(numpoints, p);
+    acute_pool_resize(numpoints, p);
 
     // C: petalx = m->acute_mem->petalx; ... initialConvexPoly =
     // m->acute_mem->initialpoly; (acute.c:2278-2282): the disjoint
@@ -3740,7 +3764,7 @@ pub(crate) fn getWedgeIntersectionWithoutMaxAngle(
             // line1 & line2: p1
             // C: lineLineIntersection(x0, y0, x_1, y_1, x1, y1, x_2, y_2, p1);
             // (acute.c:2393)
-            lineLineIntersection(x0, y0, x_1, y_1, x1, y1, x_2, y_2, &mut p1);
+            line_line_intersection(x0, y0, x_1, y_1, x1, y1, x_2, y_2, &mut p1);
             if p1[0] == 1.0 {
                 // #0
                 initialConvexPoly[0] = p1[1];
@@ -3784,7 +3808,7 @@ pub(crate) fn getWedgeIntersectionWithoutMaxAngle(
         i = 1;
         num = 8;
         for j in (0..32).step_by(4) {
-            numpolypoints = halfPlaneIntersection(
+            numpolypoints = half_plane_intersection(
                 num,
                 initialConvexPoly,
                 wedges[(32 * s + j) as usize],
@@ -3801,7 +3825,7 @@ pub(crate) fn getWedgeIntersectionWithoutMaxAngle(
         count += 1;
         while count < numpoints - 1 {
             for j in (0..32).step_by(4) {
-                numpolypoints = halfPlaneIntersection(
+                numpolypoints = half_plane_intersection(
                     num,
                     initialConvexPoly,
                     wedges[(32 * (i + s * flag) + j) as usize],
@@ -3820,7 +3844,7 @@ pub(crate) fn getWedgeIntersectionWithoutMaxAngle(
             count += 1;
         }
         // IF THERE IS A FEASIBLE INTERSECTION POLYGON, FIND ITS CENTROID AS THE NEW LOCATION
-        findPolyCentroid(numpolypoints, initialConvexPoly, newloc);
+        find_poly_centroid(numpolypoints, initialConvexPoly, newloc);
 
         if b.fixedarea {
             // C's fixedarea arm is entirely commented out (the
@@ -3860,7 +3884,7 @@ pub(crate) fn getWedgeIntersectionWithoutMaxAngle(
 // identical continue arms verbatim (acute.c:2802-2807, 2823-2828)
 #[allow(clippy::assign_op_pattern)] // C-parity: the newloc stores keep
                                     // C's x = x + y shape verbatim (acute.c:2870-2876)
-pub(crate) fn getWedgeIntersectionWithMaxAngle(
+pub(crate) fn get_wedge_intersection_with_max_angle(
     p: &mut AcutePool,
     b: &Behavior,
     numpoints: i32,
@@ -3939,7 +3963,7 @@ pub(crate) fn getWedgeIntersectionWithMaxAngle(
     let petalradiusconstant: f64;
 
     // C: acutepool_resize(numpoints, m->acute_mem); (acute.c:2522)
-    acutepool_resize(numpoints, p);
+    acute_pool_resize(numpoints, p);
 
     // C: petalx = m->acute_mem->petalx; ... initialConvexPoly =
     // m->acute_mem->initialpoly; (acute.c:2524-2528)
@@ -4172,10 +4196,10 @@ pub(crate) fn getWedgeIntersectionWithMaxAngle(
             match howManyPoints {
                 4 => {
                     // line1 & line2 & line3 & line4
-                    lineLineIntersection(x0, y0, x_1, y_1, x1, y1, x_2, y_2, &mut p1);
-                    lineLineIntersection(x0, y0, x_1, y_1, x1, y1, x_5, y_5, &mut p2);
-                    lineLineIntersection(x0, y0, x_6, y_6, x1, y1, x_5, y_5, &mut p3);
-                    lineLineIntersection(x0, y0, x_6, y_6, x1, y1, x_2, y_2, &mut p4);
+                    line_line_intersection(x0, y0, x_1, y_1, x1, y1, x_2, y_2, &mut p1);
+                    line_line_intersection(x0, y0, x_1, y_1, x1, y1, x_5, y_5, &mut p2);
+                    line_line_intersection(x0, y0, x_6, y_6, x1, y1, x_5, y_5, &mut p3);
+                    line_line_intersection(x0, y0, x_6, y_6, x1, y1, x_2, y_2, &mut p4);
                     if p1[0] == 1.0 && p2[0] == 1.0 && p3[0] == 1.0 && p4[0] == 1.0 {
                         // #0
                         initialConvexPoly[0] = p1[1];
@@ -4193,9 +4217,9 @@ pub(crate) fn getWedgeIntersectionWithMaxAngle(
                 }
                 6 => {
                     // line1 & line2 & line3
-                    lineLineIntersection(x0, y0, x_1, y_1, x1, y1, x_2, y_2, &mut p1);
-                    lineLineIntersection(x0, y0, x_1, y_1, x1, y1, x_5, y_5, &mut p2);
-                    lineLineIntersection(x0, y0, x_6, y_6, x1, y1, x_2, y_2, &mut p3);
+                    line_line_intersection(x0, y0, x_1, y_1, x1, y1, x_2, y_2, &mut p1);
+                    line_line_intersection(x0, y0, x_1, y_1, x1, y1, x_5, y_5, &mut p2);
+                    line_line_intersection(x0, y0, x_6, y_6, x1, y1, x_2, y_2, &mut p3);
                     if p1[0] == 1.0 && p2[0] == 1.0 && p3[0] == 1.0 {
                         // #0
                         initialConvexPoly[0] = p1[1];
@@ -4219,9 +4243,9 @@ pub(crate) fn getWedgeIntersectionWithMaxAngle(
                 }
                 8 => {
                     // line1 & line2: p1
-                    lineLineIntersection(x0, y0, x_1, y_1, x1, y1, x_2, y_2, &mut p1);
-                    lineLineIntersection(x0, y0, x_1, y_1, x1, y1, x_5, y_5, &mut p2);
-                    lineLineIntersection(x0, y0, x_6, y_6, x1, y1, x_2, y_2, &mut p3);
+                    line_line_intersection(x0, y0, x_1, y_1, x1, y1, x_2, y_2, &mut p1);
+                    line_line_intersection(x0, y0, x_1, y_1, x1, y1, x_5, y_5, &mut p2);
+                    line_line_intersection(x0, y0, x_6, y_6, x1, y1, x_2, y_2, &mut p3);
                     if p1[0] == 1.0 && p2[0] == 1.0 && p3[0] == 1.0 {
                         // #0
                         initialConvexPoly[0] = p1[1];
@@ -4251,9 +4275,9 @@ pub(crate) fn getWedgeIntersectionWithMaxAngle(
                 }
                 10 => {
                     // line1 & line2: p1
-                    lineLineIntersection(x0, y0, x_1, y_1, x1, y1, x_2, y_2, &mut p1);
-                    lineLineIntersection(x0, y0, x_1, y_1, x1, y1, x_5, y_5, &mut p2);
-                    lineLineIntersection(x0, y0, x_6, y_6, x1, y1, x_2, y_2, &mut p3);
+                    line_line_intersection(x0, y0, x_1, y_1, x1, y1, x_2, y_2, &mut p1);
+                    line_line_intersection(x0, y0, x_1, y_1, x1, y1, x_5, y_5, &mut p2);
+                    line_line_intersection(x0, y0, x_6, y_6, x1, y1, x_2, y_2, &mut p3);
                     if p1[0] == 1.0 && p2[0] == 1.0 && p3[0] == 1.0 {
                         // #0
                         initialConvexPoly[0] = p1[1];
@@ -4318,7 +4342,7 @@ pub(crate) fn getWedgeIntersectionWithMaxAngle(
             } else if howManyPoints == 8 && (j == 16 || j == 32) {
                 continue;
             }
-            numpolypoints = halfPlaneIntersection(
+            numpolypoints = half_plane_intersection(
                 num,
                 initialConvexPoly,
                 wedges[(40 * s + j) as usize],
@@ -4345,7 +4369,7 @@ pub(crate) fn getWedgeIntersectionWithMaxAngle(
                 } else if howManyPoints == 8 && (j == 16 || j == 32) {
                     continue;
                 }
-                numpolypoints = halfPlaneIntersection(
+                numpolypoints = half_plane_intersection(
                     num,
                     initialConvexPoly,
                     wedges[(40 * (i + s * flag) + j) as usize],
@@ -4364,13 +4388,13 @@ pub(crate) fn getWedgeIntersectionWithMaxAngle(
             count += 1;
         }
         // IF THERE IS A FEASIBLE INTERSECTION POLYGON, FIND ITS CENTROID AS THE NEW LOCATION
-        findPolyCentroid(numpolypoints, initialConvexPoly, newloc);
+        find_poly_centroid(numpolypoints, initialConvexPoly, newloc);
 
         // C: if(b->maxangle != 0.0){ ... }else{ ... } (acute.c:2846-2902)
         if b.maxangle != 0.0 {
             numBadTriangle = 0;
             for j in (0..numpoints * 2 - 2).step_by(2) {
-                if testTriangleAngle(
+                if test_triangle_angle(
                     b,
                     newloc[0],
                     newloc[1],
@@ -4383,7 +4407,7 @@ pub(crate) fn getWedgeIntersectionWithMaxAngle(
                     numBadTriangle += 1;
                 }
             }
-            if testTriangleAngle(
+            if test_triangle_angle(
                 b,
                 newloc[0],
                 newloc[1],
@@ -4431,7 +4455,7 @@ pub(crate) fn getWedgeIntersectionWithMaxAngle(
                     }
                     numBadTriangle = 0;
                     for j in (0..numpoints * 2 - 2).step_by(2) {
-                        if testTriangleAngle(
+                        if test_triangle_angle(
                             b,
                             newloc[0],
                             newloc[1],
@@ -4444,7 +4468,7 @@ pub(crate) fn getWedgeIntersectionWithMaxAngle(
                             numBadTriangle += 1;
                         }
                     }
-                    if testTriangleAngle(
+                    if test_triangle_angle(
                         b,
                         newloc[0],
                         newloc[1],
@@ -4477,10 +4501,10 @@ pub(crate) fn getWedgeIntersectionWithMaxAngle(
 /// testPolygonAngle; returns 1 as soon as one corner fails, 0 when
 /// all angles are valid.
 #[allow(non_snake_case)] // C-parity: the C name verbatim (acute.c:2918)
-pub(crate) fn polygonAngles(b: &Behavior, numpoints: i32, points: &[f64]) -> i32 {
+pub(crate) fn polygon_angles(b: &Behavior, numpoints: i32, points: &[f64]) -> i32 {
     for i in 0..numpoints {
         if i == numpoints - 1 {
-            if testPolygonAngle(
+            if test_polygon_angle(
                 b,
                 points[(i * 2) as usize],
                 points[(i * 2 + 1) as usize],
@@ -4493,7 +4517,7 @@ pub(crate) fn polygonAngles(b: &Behavior, numpoints: i32, points: &[f64]) -> i32
                 return 1; // one of the inner angles is less than required
             }
         } else if i == numpoints - 2 {
-            if testPolygonAngle(
+            if test_polygon_angle(
                 b,
                 points[(i * 2) as usize],
                 points[(i * 2 + 1) as usize],
@@ -4506,7 +4530,7 @@ pub(crate) fn polygonAngles(b: &Behavior, numpoints: i32, points: &[f64]) -> i32
                 return 1; // one of the inner angles is less than required
             }
         } else {
-            if testPolygonAngle(
+            if test_polygon_angle(
                 b,
                 points[(i * 2) as usize],
                 points[(i * 2 + 1) as usize],
@@ -4535,7 +4559,7 @@ pub(crate) fn polygonAngles(b: &Behavior, numpoints: i32, points: &[f64]) -> i32
 // signature (acute.c:2944-2948)
 #[allow(clippy::needless_late_init)] // C-parity: the declaration block
                                      // (acute.c:2950-2953) keeps the declaration-then-assignment shape
-pub(crate) fn testPolygonAngle(
+pub(crate) fn test_polygon_angle(
     b: &Behavior,
     x1: f64,
     y1: f64,
@@ -4599,7 +4623,7 @@ pub(crate) fn testPolygonAngle(
 #[allow(clippy::if_same_then_else)] // C-parity: C keeps the two distinct
                                     // degenerate branches (coincident, acute.c:3005-3006; parallel,
                                     // acute.c:3009-3010); merging them would change statement identity
-pub(crate) fn lineLineIntersection(
+pub(crate) fn line_line_intersection(
     x1: f64,
     y1: f64,
     x2: f64,
@@ -4630,13 +4654,13 @@ pub(crate) fn lineLineIntersection(
     u_b = (x2 - x1) * (y1 - y3) - (y2 - y1) * (x1 - x3);
     // if denominator and numerator equal to zero, lines are coincident
     // (acute.c:3004)
-    if (denom - 0.0).abs() < compConst
-        && ((u_b - 0.0).abs() < compConst && (u_a - 0.0).abs() < compConst)
+    if (denom - 0.0).abs() < COMP_CONST
+        && ((u_b - 0.0).abs() < COMP_CONST && (u_a - 0.0).abs() < COMP_CONST)
     {
         p[0] = 0.0;
     }
     // if denominator equals to zero, lines are parallel (acute.c:3008)
-    else if (denom - 0.0).abs() < compConst {
+    else if (denom - 0.0).abs() < COMP_CONST {
         p[0] = 0.0;
     } else {
         p[0] = 1.0;
@@ -4665,7 +4689,7 @@ pub(crate) fn lineLineIntersection(
 #[allow(clippy::needless_late_init)] // C-parity: C's declaration block
                                      // (acute.c:3034-3041) keeps its
                                      // declaration-then-assignment shape
-pub(crate) fn halfPlaneIntersection(
+pub(crate) fn half_plane_intersection(
     numvertices: i32,
     convexPoly: &mut [f64],
     x1: f64,
@@ -4695,7 +4719,7 @@ pub(crate) fn halfPlaneIntersection(
 
     dx = x2 - x1;
     dy = y2 - y1;
-    numpolys = splitConvexPolygon(numvertices, convexPoly, x1, y1, x2, y2, &mut polys);
+    numpolys = split_convex_polygon(numvertices, convexPoly, x1, y1, x2, y2, &mut polys);
     if numpolys == 3 {
         count = numvertices;
     } else {
@@ -4757,7 +4781,7 @@ pub(crate) fn halfPlaneIntersection(
                                      // per-branch numpolys assignment
                                      // (acute.c:3232/3235) keep their
                                      // declaration-then-assignment shape
-pub(crate) fn splitConvexPolygon(
+pub(crate) fn split_convex_polygon(
     numvertices: i32,
     convexPoly: &[f64],
     x1: f64,
@@ -4798,11 +4822,11 @@ pub(crate) fn splitConvexPolygon(
     // printf block, acute.c:3227-3230) and are dropped (D22).
     #[allow(non_upper_case_globals)] // C-parity: the C local's name
                                      // verbatim (acute.c:3112)
-    const compConst: f64 = 0.000000000001;
+    const COMP_CONST: f64 = 0.000000000001;
     // intersect all edges of poly with line (acute.c:3115)
     for i in (0..2 * numvertices).step_by(2) {
         let j: i32 = if i + 2 >= 2 * numvertices { 0 } else { i + 2 };
-        lineLineSegmentIntersection(
+        line_line_segment_intersection(
             x1,
             y1,
             x2,
@@ -4814,7 +4838,7 @@ pub(crate) fn splitConvexPolygon(
             &mut p,
         );
         // if this edge does not intersect with line (acute.c:3119)
-        if (p[0] - 0.0).abs() <= compConst {
+        if (p[0] - 0.0).abs() <= COMP_CONST {
             // add p[j] to the proper polygon (acute.c:3122)
             if state == 1 {
                 poly2counter += 1;
@@ -4827,7 +4851,7 @@ pub(crate) fn splitConvexPolygon(
             }
         }
         // ... or if the intersection is the whole edge (acute.c:3135)
-        else if (p[0] - 2.0).abs() <= compConst {
+        else if (p[0] - 2.0).abs() <= COMP_CONST {
             // then we can not reach state 1 and 2 (acute.c:3138)
             poly1counter += 1;
             polys[0][2 * poly1counter as usize - 1] = convexPoly[j as usize];
@@ -4837,8 +4861,8 @@ pub(crate) fn splitConvexPolygon(
         else {
             // if the point is the second vertex of the edge
             // (acute.c:3149)
-            if (p[1] - convexPoly[j as usize]).abs() <= compConst
-                && (p[2] - convexPoly[j as usize + 1]).abs() <= compConst
+            if (p[1] - convexPoly[j as usize]).abs() <= COMP_CONST
+                && (p[2] - convexPoly[j as usize + 1]).abs() <= COMP_CONST
             {
                 if state == 1 {
                     poly2counter += 1;
@@ -4856,7 +4880,7 @@ pub(crate) fn splitConvexPolygon(
                     // or the line only touches the polygon
                     // (acute.c:3168-3169)
                     if i + 4 < 2 * numvertices {
-                        let s1 = linePointLocation(
+                        let s1 = line_point_location(
                             x1,
                             y1,
                             x2,
@@ -4864,7 +4888,7 @@ pub(crate) fn splitConvexPolygon(
                             convexPoly[i as usize],
                             convexPoly[i as usize + 1],
                         );
-                        let s2 = linePointLocation(
+                        let s2 = line_point_location(
                             x1,
                             y1,
                             x2,
@@ -4887,8 +4911,8 @@ pub(crate) fn splitConvexPolygon(
             }
             // ... if the point is not the other vertex of the edge
             // (acute.c:3187)
-            else if !((p[1] - convexPoly[i as usize]).abs() <= compConst
-                && (p[2] - convexPoly[i as usize + 1]).abs() <= compConst)
+            else if !((p[1] - convexPoly[i as usize]).abs() <= COMP_CONST
+                && (p[2] - convexPoly[i as usize + 1]).abs() <= COMP_CONST)
             {
                 poly1counter += 1;
                 polys[0][2 * poly1counter as usize - 1] = p[1];
@@ -4955,13 +4979,13 @@ pub(crate) fn splitConvexPolygon(
 // verbatim (acute.c:3257)
 #[allow(clippy::needless_late_init)] // C-parity: REAL z; (acute.c:3256)
                                      // keeps C's declaration shape
-pub(crate) fn linePointLocation(x1: f64, y1: f64, x2: f64, y2: f64, x: f64, y: f64) -> i32 {
+pub(crate) fn line_point_location(x1: f64, y1: f64, x2: f64, y2: f64, x: f64, y: f64) -> i32 {
     let z: f64;
     if ((y2 - y1) / (x2 - x1)).atan() * 180.0 / PI == 90.0 {
         if (x1 - x).abs() <= 0.00000000001 {
             return 0;
         }
-    } else if (y1 + (((y2 - y1) * (x - x1)) / (x2 - x1)) - y).abs() <= compConst {
+    } else if (y1 + (((y2 - y1) * (x - x1)) / (x2 - x1)) - y).abs() <= COMP_CONST {
         return 0;
     }
     // third component of the 3 dimensional product (acute.c:3264)
@@ -4992,7 +5016,7 @@ pub(crate) fn linePointLocation(x1: f64, y1: f64, x2: f64, y2: f64, x: f64, y: f
 #[allow(clippy::needless_late_init)] // C-parity: the REAL declaration
                                      // block (acute.c:3294) keeps C's
                                      // declaration-then-assignment shape
-pub(crate) fn lineLineSegmentIntersection(
+pub(crate) fn line_line_segment_intersection(
     x1: f64,
     y1: f64,
     x2: f64,
@@ -5022,14 +5046,14 @@ pub(crate) fn lineLineSegmentIntersection(
     // constant name), shadowing the crate constant the same way.
     #[allow(non_upper_case_globals)] // C-parity: the C local's name
                                      // verbatim (acute.c:3295)
-    const compConst: f64 = 0.0000000000001;
+    const COMP_CONST: f64 = 0.0000000000001;
     // calculate denominator first (acute.c:3296)
     denom = (y4 - y3) * (x2 - x1) - (x4 - x3) * (y2 - y1);
     u_a = (x4 - x3) * (y1 - y3) - (y4 - y3) * (x1 - x3);
     u_b = (x2 - x1) * (y1 - y3) - (y2 - y1) * (x1 - x3);
 
-    if (denom - 0.0).abs() < compConst {
-        if (u_b - 0.0).abs() < compConst && (u_a - 0.0).abs() < compConst {
+    if (denom - 0.0).abs() < COMP_CONST {
+        if (u_b - 0.0).abs() < COMP_CONST && (u_a - 0.0).abs() < COMP_CONST {
             p[0] = 2.0; // if denominator and numerator equal to zero, lines are coincident
         } else {
             p[0] = 0.0; // if denominator equals to zero, lines are parallel
@@ -5038,7 +5062,7 @@ pub(crate) fn lineLineSegmentIntersection(
         u_b /= denom;
         u_a /= denom;
         // check if it is on the line segment (acute.c:3315)
-        if u_b < -compConst || u_b > 1.0 + compConst {
+        if u_b < -COMP_CONST || u_b > 1.0 + COMP_CONST {
             p[0] = 0.0;
         } else {
             p[0] = 1.0;
@@ -5055,7 +5079,7 @@ pub(crate) fn lineLineSegmentIntersection(
 /// The C call sites sit in the getWedgeIntersection family (acute.c:
 /// 2448 and 2844), landed with this PR (stage-1 acute B).
 #[allow(non_snake_case)] // C-parity: the C name verbatim (acute.c:3330)
-pub(crate) fn findPolyCentroid(numpoints: i32, points: &[f64], centroid: &mut [f64]) {
+pub(crate) fn find_poly_centroid(numpoints: i32, points: &[f64], centroid: &mut [f64]) {
     centroid[0] = 0.0;
     centroid[1] = 0.0;
 
@@ -5087,7 +5111,7 @@ pub(crate) fn findPolyCentroid(numpoints: i32, points: &[f64], centroid: &mut [f
 // declaration-then-assignment shape
 #[allow(clippy::neg_cmp_op_on_partial_ord)] // C-parity: the negated
                                             // fabs(...) < compConst test verbatim (acute.c:3387)
-pub(crate) fn circleLineIntersection(
+pub(crate) fn circle_line_intersection(
     x1: f64,
     y1: f64,
     x2: f64,
@@ -5120,14 +5144,14 @@ pub(crate) fn circleLineIntersection(
     if i < 0.0 {
         // no intersection (acute.c:3375)
         p[0] = 0.0;
-    } else if (i - 0.0).abs() < compConst {
+    } else if (i - 0.0).abs() < COMP_CONST {
         // one intersection (acute.c:3379)
         p[0] = 1.0;
 
         mu = -b / (2.0 * a);
         p[1] = x1 + mu * (x2 - x1);
         p[2] = y1 + mu * (y2 - y1);
-    } else if i > 0.0 && !((a - 0.0).abs() < compConst) {
+    } else if i > 0.0 && !((a - 0.0).abs() < COMP_CONST) {
         // two intersections (acute.c:3388)
         p[0] = 2.0;
         // first intersection (acute.c:3390)
@@ -5157,7 +5181,7 @@ pub(crate) fn circleLineIntersection(
 #[allow(clippy::needless_late_init)] // C-parity: C's declaration block
                                      // (acute.c:3424-3425) keeps its
                                      // declaration-then-assignment shape
-pub(crate) fn chooseCorrectPoint(
+pub(crate) fn choose_correct_point(
     x1: f64,
     y1: f64,
     x2: f64,
@@ -5215,7 +5239,7 @@ pub(crate) fn chooseCorrectPoint(
 /// 612, 1181, 1191, 1269, 1449, 1458, 1531), landed with
 /// stage-1 acute C (#43).
 #[allow(non_snake_case)] // C-parity: the C name verbatim (acute.c:3458)
-pub(crate) fn pointBetweenPoints(
+pub(crate) fn point_between_points(
     x1: f64,
     y1: f64,
     x2: f64,
@@ -5254,7 +5278,7 @@ pub(crate) fn pointBetweenPoints(
 /// C: testTriangleAngle (acute.c:3493-3577). Given three coordinates,
 /// test the triangle against both quality bounds: the squared cosine
 /// of the smallest angle against b->goodangle (C's testtriangle
-/// shape, the same goodangle the algorithm/quality.rs lens reads) and, when a
+/// shape, the same goodangle the algorithm/algorithm/quality.rs lens reads) and, when a
 /// maximum angle is set (b->maxangle != 0.00, acute.c:3572), the
 /// cosine of the largest angle against b->maxgoodangle; returns 1 for
 /// a bad triangle, 0 for a good one. C's minedge/maxedge stores
@@ -5271,7 +5295,7 @@ pub(crate) fn pointBetweenPoints(
 // (acute.c:3499-3505) keeps the declaration-then-assignment shape
 #[allow(clippy::float_cmp)] // C-parity: b->maxangle != 0.00 verbatim
                             // (acute.c:3572)
-pub(crate) fn testTriangleAngle(
+pub(crate) fn test_triangle_angle(
     b: &Behavior,
     x1: f64,
     y1: f64,
@@ -5398,7 +5422,7 @@ pub(crate) fn testTriangleAngle(
 // collinearity test (acute.c:3624)
 #[allow(clippy::needless_return)] // C-parity: the return arms verbatim
                                   // (return 0.0 at acute.c:3640, the d1/d2/d3 returns of acute.c:3651-3657)
-pub(crate) fn minDistanceToNeigbor(
+pub(crate) fn min_distance_to_neighbor(
     m: &mut Mesh,
     b: &Behavior,
     newlocX: f64,
@@ -5440,7 +5464,7 @@ pub(crate) fn minDistanceToNeigbor(
     } else if m.vx_x(tdest) == newlocX && m.vx_y(tdest) == newlocY {
         // C: lnextself(*searchtri); (acute.c:3612): the caller's handle
         // is rotated, exactly as C mutates through its otri pointer.
-        searchtri.lnextself();
+        searchtri.lnext_self();
         // C: intersect =  ONVERTEX; (acute.c:3613)
         intersect = LocateResult::OnVertex;
         // C: otricopy(*searchtri, horiz); (acute.c:3614)
@@ -5449,8 +5473,8 @@ pub(crate) fn minDistanceToNeigbor(
         /* Orient `searchtri' to fit the preconditions of calling preciselocate(). */
         // C: ahead = tri_counterclockwise(m, b, torg, tdest, newvertex); (acute.c:3617).
         // C's vertex pointers map to coordinate rows through vertex_coords,
-        // the algorithm/delaunay.rs convention for the predicates' REAL* vertices.
-        let ahead = tri_counterclockwise(
+        // the algorithm/algorithm/delaunay.rs convention for the predicates' REAL* vertices.
+        let ahead = counterclockwise(
             m,
             b,
             vertex_coords(m, torg),
@@ -5461,10 +5485,10 @@ pub(crate) fn minDistanceToNeigbor(
             /* Turn around so that `searchpoint' is to the left of the */
             /*   edge specified by `searchtri'.                        */
             // C: symself(*searchtri); otricopy(*searchtri, horiz); (acute.c:3621-3622)
-            m.symself(searchtri);
+            m.sym_self(searchtri);
             horiz = *searchtri;
             // C: intersect = preciselocate(m, b, newvertex, &horiz, 0); (acute.c:3623)
-            intersect = preciselocate(m, b, (newlocX, newlocY), &mut horiz, false);
+            intersect = precise_locate(m, b, (newlocX, newlocY), &mut horiz, false);
         } else if ahead == 0.0 {
             /* Check if `searchpoint' is between `torg' and `tdest'. */
             // C: if (((torg[0] < newvertex[0]) == (newvertex[0] < tdest[0])) &&
@@ -5485,7 +5509,7 @@ pub(crate) fn minDistanceToNeigbor(
             // C: otricopy(*searchtri, horiz); (acute.c:3633)
             horiz = *searchtri;
             // C: intersect = preciselocate(m, b, newvertex, &horiz, 0); (acute.c:3634)
-            intersect = preciselocate(m, b, (newlocX, newlocY), &mut horiz, false);
+            intersect = precise_locate(m, b, (newlocX, newlocY), &mut horiz, false);
         }
     }
     // C: if(intersect == ONVERTEX || intersect == OUTSIDE){ ... }else{ ... }
@@ -5539,12 +5563,12 @@ mod tests {
         // hand-derived from the C branch tree (acute.c:1819-1846):
         // the code packs min, mid, max of the 123/213/312 side of C's
         // orientation banner (acute.c:1804-1815).
-        assert_eq!(longestShortestEdge(1.0, 2.0, 3.0), 123);
-        assert_eq!(longestShortestEdge(1.0, 3.0, 2.0), 132);
-        assert_eq!(longestShortestEdge(2.0, 1.0, 3.0), 213);
-        assert_eq!(longestShortestEdge(3.0, 1.0, 2.0), 231);
-        assert_eq!(longestShortestEdge(2.0, 3.0, 1.0), 312);
-        assert_eq!(longestShortestEdge(3.0, 2.0, 1.0), 321);
+        assert_eq!(longest_shortest_edge(1.0, 2.0, 3.0), 123);
+        assert_eq!(longest_shortest_edge(1.0, 3.0, 2.0), 132);
+        assert_eq!(longest_shortest_edge(2.0, 1.0, 3.0), 213);
+        assert_eq!(longest_shortest_edge(3.0, 1.0, 2.0), 231);
+        assert_eq!(longest_shortest_edge(2.0, 3.0, 1.0), 312);
+        assert_eq!(longest_shortest_edge(3.0, 2.0, 1.0), 321);
     }
 
     #[test]
@@ -5552,9 +5576,9 @@ mod tests {
         // Ties take C's strict-comparison arms: aodist == dadist falls to
         // the third arm (min = 2), dodist == dadist blocks the first
         // arm's second conjunct.
-        assert_eq!(longestShortestEdge(1.0, 1.0, 2.0), 213);
-        assert_eq!(longestShortestEdge(2.0, 2.0, 1.0), 321);
-        assert_eq!(longestShortestEdge(3.0, 1.0, 2.0), 231);
+        assert_eq!(longest_shortest_edge(1.0, 1.0, 2.0), 213);
+        assert_eq!(longest_shortest_edge(2.0, 2.0, 1.0), 321);
+        assert_eq!(longest_shortest_edge(3.0, 1.0, 2.0), 231);
     }
 
     #[test]
@@ -5562,15 +5586,15 @@ mod tests {
         let mut p = [f64::NAN; 3];
         // The coordinate axes cross at the origin, in both argument
         // orders.
-        lineLineIntersection(0.0, 0.0, 1.0, 0.0, 0.0, -1.0, 0.0, 1.0, &mut p);
+        line_line_intersection(0.0, 0.0, 1.0, 0.0, 0.0, -1.0, 0.0, 1.0, &mut p);
         assert_eq!(p, [1.0, 0.0, 0.0]);
-        lineLineIntersection(0.0, -1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, &mut p);
+        line_line_intersection(0.0, -1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, &mut p);
         assert_eq!(p, [1.0, 0.0, 0.0]);
         // The diagonals of the square [0,2]^2 cross at (1,1), in both
         // argument orders.
-        lineLineIntersection(0.0, 0.0, 2.0, 2.0, 0.0, 2.0, 2.0, 0.0, &mut p);
+        line_line_intersection(0.0, 0.0, 2.0, 2.0, 0.0, 2.0, 2.0, 0.0, &mut p);
         assert_eq!(p, [1.0, 1.0, 1.0]);
-        lineLineIntersection(0.0, 2.0, 2.0, 0.0, 0.0, 0.0, 2.0, 2.0, &mut p);
+        line_line_intersection(0.0, 2.0, 2.0, 0.0, 0.0, 0.0, 2.0, 2.0, &mut p);
         assert_eq!(p, [1.0, 1.0, 1.0]);
     }
 
@@ -5578,11 +5602,11 @@ mod tests {
     fn line_line_intersection_parallel_and_collinear() {
         let mut p = [f64::NAN; 3];
         // Parallel: denominator vanishes, the numerators do not.
-        lineLineIntersection(0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, &mut p);
+        line_line_intersection(0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, &mut p);
         assert_eq!(p[0], 0.0);
         // Collinear (coincident lines): denominator and both numerators
         // vanish.
-        lineLineIntersection(0.0, 0.0, 1.0, 0.0, 2.0, 0.0, 3.0, 0.0, &mut p);
+        line_line_intersection(0.0, 0.0, 1.0, 0.0, 2.0, 0.0, 3.0, 0.0, &mut p);
         assert_eq!(p[0], 0.0);
     }
 
@@ -5592,7 +5616,7 @@ mod tests {
         // half (0.5,0),(0.5,1),(0,1),(0,0) is written back (hand-traced
         // through splitConvexPolygon's state machine).
         let mut poly = [0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0];
-        let count = halfPlaneIntersection(4, &mut poly, 0.5, -1.0, 0.5, 1.0);
+        let count = half_plane_intersection(4, &mut poly, 0.5, -1.0, 0.5, 1.0);
         assert_eq!(count, 4);
         assert_eq!(poly, [0.5, 0.0, 0.5, 1.0, 0.0, 1.0, 0.0, 0.0]);
     }
@@ -5603,7 +5627,7 @@ mod tests {
         // left side is now x > 0.5, so the right half
         // (0.5,0),(1,0),(1,1),(0.5,1) is kept.
         let mut poly = [0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0];
-        let count = halfPlaneIntersection(4, &mut poly, 0.5, 1.0, 0.5, -1.0);
+        let count = half_plane_intersection(4, &mut poly, 0.5, 1.0, 0.5, -1.0);
         assert_eq!(count, 4);
         assert_eq!(poly, [0.5, 0.0, 1.0, 0.0, 1.0, 1.0, 0.5, 1.0]);
     }
@@ -5616,7 +5640,7 @@ mod tests {
         // side test inside splitConvexPolygon, acute.c:3171-3172); the
         // upper-left triangle (1,1),(0,1),(0,0) is kept.
         let mut poly = [0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0];
-        let count = halfPlaneIntersection(4, &mut poly, 0.0, 0.0, 1.0, 1.0);
+        let count = half_plane_intersection(4, &mut poly, 0.0, 0.0, 1.0, 1.0);
         assert_eq!(count, 3);
         // Only the first 3 vertices are written back; the tail keeps the
         // square's last vertex pair.
@@ -5629,7 +5653,7 @@ mod tests {
         // piece lies on or right of the line, nothing is kept and
         // convexPoly is untouched.
         let mut poly = [0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0];
-        let count = halfPlaneIntersection(4, &mut poly, 0.0, -1.0, 0.0, 1.0);
+        let count = half_plane_intersection(4, &mut poly, 0.0, -1.0, 0.0, 1.0);
         assert_eq!(count, 0);
         assert_eq!(poly, [0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0]);
     }
@@ -5642,7 +5666,7 @@ mod tests {
         // right half, with the vertex counts in slot 0 (hand-traced).
         let poly = [0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0];
         let mut polys = [[f64::NAN; 100]; 2];
-        let numpolys = splitConvexPolygon(4, &poly, 0.5, -1.0, 0.5, 1.0, &mut polys);
+        let numpolys = split_convex_polygon(4, &poly, 0.5, -1.0, 0.5, 1.0, &mut polys);
         assert_eq!(numpolys, 2);
         assert_eq!(polys[0][0], 4.0);
         assert_eq!(polys[0][1..9], [0.5, 0.0, 0.5, 1.0, 0.0, 1.0, 0.0, 0.0]);
@@ -5658,7 +5682,7 @@ mod tests {
         // (the whole square), numpolys = 1, poly2 empty.
         let poly = [0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0];
         let mut polys = [[f64::NAN; 100]; 2];
-        let numpolys = splitConvexPolygon(4, &poly, 0.0, -1.0, 0.0, 1.0, &mut polys);
+        let numpolys = split_convex_polygon(4, &poly, 0.0, -1.0, 0.0, 1.0, &mut polys);
         assert_eq!(numpolys, 1);
         assert_eq!(polys[0][0], 4.0);
         assert_eq!(polys[0][1..9], [1.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 0.0]);
@@ -5669,16 +5693,16 @@ mod tests {
     fn line_point_location_classifies_sides_and_on_line() {
         // Horizontal line (0,0)-(1,0): above is the left side (1), below
         // the right side (2), on the line 0.
-        assert_eq!(linePointLocation(0.0, 0.0, 1.0, 0.0, 0.0, 1.0), 1);
-        assert_eq!(linePointLocation(0.0, 0.0, 1.0, 0.0, 0.0, -1.0), 2);
-        assert_eq!(linePointLocation(0.0, 0.0, 1.0, 0.0, 0.5, 0.0), 0);
+        assert_eq!(line_point_location(0.0, 0.0, 1.0, 0.0, 0.0, 1.0), 1);
+        assert_eq!(line_point_location(0.0, 0.0, 1.0, 0.0, 0.0, -1.0), 2);
+        assert_eq!(line_point_location(0.0, 0.0, 1.0, 0.0, 0.5, 0.0), 0);
         // Vertical line (0,0)-(0,1) (the atan arm's vertical case):
         // right of the direction (up) is the right side (2), left is 1,
         // on the line 0. Whichever arm catches the point, both converge
         // on the same classification.
-        assert_eq!(linePointLocation(0.0, 0.0, 0.0, 1.0, 1.0, 0.0), 2);
-        assert_eq!(linePointLocation(0.0, 0.0, 0.0, 1.0, -1.0, 0.0), 1);
-        assert_eq!(linePointLocation(0.0, 0.0, 0.0, 1.0, 0.0, 0.5), 0);
+        assert_eq!(line_point_location(0.0, 0.0, 0.0, 1.0, 1.0, 0.0), 2);
+        assert_eq!(line_point_location(0.0, 0.0, 0.0, 1.0, -1.0, 0.0), 1);
+        assert_eq!(line_point_location(0.0, 0.0, 0.0, 1.0, 0.0, 0.5), 0);
     }
 
     #[test]
@@ -5686,9 +5710,9 @@ mod tests {
         let mut p = [f64::NAN; 3];
         // The vertical line x = 0 crosses the segment (-1,0)-(1,0) at
         // (0,0); both segment directions pin the same crossing point.
-        lineLineSegmentIntersection(0.0, -1.0, 0.0, 1.0, -1.0, 0.0, 1.0, 0.0, &mut p);
+        line_line_segment_intersection(0.0, -1.0, 0.0, 1.0, -1.0, 0.0, 1.0, 0.0, &mut p);
         assert_eq!(p, [1.0, 0.0, 0.0]);
-        lineLineSegmentIntersection(0.0, -1.0, 0.0, 1.0, 1.0, 0.0, -1.0, 0.0, &mut p);
+        line_line_segment_intersection(0.0, -1.0, 0.0, 1.0, 1.0, 0.0, -1.0, 0.0, &mut p);
         assert_eq!(p, [1.0, 0.0, 0.0]);
     }
 
@@ -5696,13 +5720,13 @@ mod tests {
     fn line_line_segment_intersection_off_segment_parallel_collinear() {
         let mut p = [f64::NAN; 3];
         // The crossing with the line lies beyond the segment: p[0] = 0.
-        lineLineSegmentIntersection(0.0, -1.0, 0.0, 1.0, 1.0, 0.0, 2.0, 0.0, &mut p);
+        line_line_segment_intersection(0.0, -1.0, 0.0, 1.0, 1.0, 0.0, 2.0, 0.0, &mut p);
         assert_eq!(p[0], 0.0);
         // Parallel, distinct: p[0] = 0.
-        lineLineSegmentIntersection(0.0, -1.0, 0.0, 1.0, 1.0, -1.0, 1.0, 1.0, &mut p);
+        line_line_segment_intersection(0.0, -1.0, 0.0, 1.0, 1.0, -1.0, 1.0, 1.0, &mut p);
         assert_eq!(p[0], 0.0);
         // Collinear: the whole-edge case, p[0] = 2.
-        lineLineSegmentIntersection(0.0, -1.0, 0.0, 1.0, 0.0, 2.0, 0.0, 5.0, &mut p);
+        line_line_segment_intersection(0.0, -1.0, 0.0, 1.0, 0.0, 2.0, 0.0, 5.0, &mut p);
         assert_eq!(p[0], 2.0);
     }
 
@@ -5710,10 +5734,10 @@ mod tests {
     fn find_poly_centroid_of_triangle_and_single_point() {
         let mut centroid = [f64::NAN; 2];
         // The centroid of (0,0), (4,0), (2,6) is the mean (2,2).
-        findPolyCentroid(3, &[0.0, 0.0, 4.0, 0.0, 2.0, 6.0], &mut centroid);
+        find_poly_centroid(3, &[0.0, 0.0, 4.0, 0.0, 2.0, 6.0], &mut centroid);
         assert_eq!(centroid, [2.0, 2.0]);
         // A single point is its own centroid.
-        findPolyCentroid(1, &[3.0, 4.0], &mut centroid);
+        find_poly_centroid(1, &[3.0, 4.0], &mut centroid);
         assert_eq!(centroid, [3.0, 4.0]);
     }
 
@@ -5723,9 +5747,9 @@ mod tests {
         // The line y = 0 through the circle (center origin, r = 2) cuts
         // it at (2,0) and (-2,0); the reversed line direction swaps the
         // order of the two points.
-        circleLineIntersection(-1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 2.0, &mut p);
+        circle_line_intersection(-1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 2.0, &mut p);
         assert_eq!(p, [2.0, 2.0, 0.0, -2.0, 0.0]);
-        circleLineIntersection(1.0, 0.0, -1.0, 0.0, 0.0, 0.0, 2.0, &mut p);
+        circle_line_intersection(1.0, 0.0, -1.0, 0.0, 0.0, 0.0, 2.0, &mut p);
         assert_eq!(p, [2.0, -2.0, 0.0, 2.0, 0.0]);
     }
 
@@ -5734,12 +5758,12 @@ mod tests {
         let mut p = [f64::NAN; 5];
         // The tangent line y = 2 touches the circle (origin, r = 2) in
         // exactly one point: p[0] = 1, the tangent point (0,2).
-        circleLineIntersection(0.0, 2.0, 1.0, 2.0, 0.0, 0.0, 2.0, &mut p);
+        circle_line_intersection(0.0, 2.0, 1.0, 2.0, 0.0, 0.0, 2.0, &mut p);
         assert_eq!(p[0], 1.0);
         assert_eq!(p[1], 0.0);
         assert_eq!(p[2], 2.0);
         // The line y = 3 misses the circle: p[0] = 0.
-        circleLineIntersection(0.0, 3.0, 1.0, 3.0, 0.0, 0.0, 2.0, &mut p);
+        circle_line_intersection(0.0, 3.0, 1.0, 3.0, 0.0, 0.0, 2.0, &mut p);
         assert_eq!(p[0], 0.0);
     }
 
@@ -5748,12 +5772,12 @@ mod tests {
         // d1 (intersection to circumcenter) = 4, d2 (intersection to
         // bisector point) = 1: the obtuse case wants d2 >= d1 (rejects),
         // the non-obtuse case wants d2 < d1 (accepts).
-        assert_eq!(chooseCorrectPoint(0.0, 0.0, 1.0, 0.0, 3.0, 0.0, 1), 0);
-        assert_eq!(chooseCorrectPoint(0.0, 0.0, 1.0, 0.0, 3.0, 0.0, 0), 1);
+        assert_eq!(choose_correct_point(0.0, 0.0, 1.0, 0.0, 3.0, 0.0, 1), 0);
+        assert_eq!(choose_correct_point(0.0, 0.0, 1.0, 0.0, 3.0, 0.0, 0), 1);
         // d1 = 0.25 < d2 = 1: the obtuse case accepts, the non-obtuse
         // case rejects.
-        assert_eq!(chooseCorrectPoint(0.0, 0.0, 1.0, 0.0, 0.5, 0.0, 1), 1);
-        assert_eq!(chooseCorrectPoint(0.0, 0.0, 1.0, 0.0, 0.5, 0.0, 0), 0);
+        assert_eq!(choose_correct_point(0.0, 0.0, 1.0, 0.0, 0.5, 0.0, 1), 1);
+        assert_eq!(choose_correct_point(0.0, 0.0, 1.0, 0.0, 0.5, 0.0, 0), 0);
     }
 
     #[test]
@@ -5762,15 +5786,15 @@ mod tests {
         // (4,0) lies between the intersection (0,0) and the circumcenter
         // (10,0): p[0] = 1, p[1] = 36 (the squared distance to the
         // circumcenter), p[2], p[3] the point itself.
-        pointBetweenPoints(0.0, 0.0, 10.0, 0.0, 4.0, 0.0, &mut p);
+        point_between_points(0.0, 0.0, 10.0, 0.0, 4.0, 0.0, &mut p);
         assert_eq!(p, [1.0, 36.0, 4.0, 0.0]);
         // (-20,0) lies beyond the circumcenter: not between, zeros.
-        pointBetweenPoints(0.0, 0.0, 10.0, 0.0, -20.0, 0.0, &mut p);
+        point_between_points(0.0, 0.0, 10.0, 0.0, -20.0, 0.0, &mut p);
         assert_eq!(p, [0.0, 0.0, 0.0, 0.0]);
         // The boundary: the point on the intersection itself has equal
         // squared distances (100); C's comparison is strict, so it is
         // not between.
-        pointBetweenPoints(0.0, 0.0, 10.0, 0.0, 0.0, 0.0, &mut p);
+        point_between_points(0.0, 0.0, 10.0, 0.0, 0.0, 0.0, &mut p);
         assert_eq!(p, [0.0, 0.0, 0.0, 0.0]);
     }
 
@@ -5781,10 +5805,10 @@ mod tests {
     // relocation, all pinned by construction (hand-derived geometry,
     // exact f64 arithmetic on exactly representable inputs), never by
     // running the C oracle. The fixtures go through the landed
-    // mesh-local layer exactly like the algorithm/refine.rs tests.
+    // mesh-local layer exactly like the algorithm/algorithm/refine.rs tests.
     // -----------------------------------------------------------------
 
-    /// -q MINANGLE through behavior_update, exactly like algorithm/refine.rs's
+    /// -q MINANGLE through behavior_update, exactly like algorithm/algorithm/refine.rs's
     /// fixture helper; the goodangle the angle gates read.
     fn behavior_q(minangle: f64) -> Behavior {
         let mut b = Behavior {
@@ -5792,7 +5816,7 @@ mod tests {
             ..Behavior::default_form()
         };
         b.minangle = minangle;
-        b.behavior_update();
+        b.update_derived_fields();
         b
     }
 
@@ -5805,7 +5829,7 @@ mod tests {
         };
         b.minangle = minangle;
         b.maxangle = maxangle;
-        b.behavior_update();
+        b.update_derived_fields();
         b
     }
 
@@ -5823,7 +5847,7 @@ mod tests {
 
     /// A CCW fan of triangles around a center vertex with the given
     /// ring, triangle i = (center, ring[i], ring[i+1 mod k]), bonded
-    /// around the center with the algorithm/refine.rs fixture's opposite-
+    /// around the center with the algorithm/algorithm/refine.rs fixture's opposite-
     /// direction convention: bond(T_i @orient 2, T_{i+1} @orient 0).
     /// The ring edges stay unbonded (hull), exactly like C's border.
     fn star_fan(
@@ -5837,11 +5861,11 @@ mod tests {
         let mut tris = Vec::new();
         for i in 0..k {
             let t = m
-                .maketriangle(m.tri_shape.usesegments, false)
+                .make_triangle(m.tri_shape.usesegments, false)
                 .expect("tri alloc");
-            m.setorg(t, c);
-            m.setdest(t, r[i]);
-            m.setapex(t, r[(i + 1) % k]);
+            m.set_org(t, c);
+            m.set_dest(t, r[i]);
+            m.set_apex(t, r[(i + 1) % k]);
             tris.push(t);
         }
         for i in 0..k {
@@ -5861,7 +5885,7 @@ mod tests {
     }
 
     /// A triangle (pa, pb, pc) CCW at orient 0, unbonded (hull edges),
-    /// like algorithm/refine.rs's lone_tri.
+    /// like algorithm/algorithm/refine.rs's lone_tri.
     fn lone_tri(
         m: &mut Mesh,
         pa: (f64, f64),
@@ -5872,16 +5896,16 @@ mod tests {
         let b = vxy(m, pb.0, pb.1);
         let c = vxy(m, pc.0, pc.1);
         let t = m
-            .maketriangle(m.tri_shape.usesegments, false)
+            .make_triangle(m.tri_shape.usesegments, false)
             .expect("tri alloc");
-        m.setorg(t, a);
-        m.setdest(t, b);
-        m.setapex(t, c);
+        m.set_org(t, a);
+        m.set_dest(t, b);
+        m.set_apex(t, c);
         (t, a, b, c)
     }
 
     #[test]
-    fn acutepool_init_capacities_match_c() {
+    fn acute_pool_init_capacities_match_c() {
         // C acutepool_init(20) (acute.c:27-40) at the enforcequality
         // call site (triangle.c:7538): 500 for initialpoly and the
         // three point buffers, 2n for the petal buffers, 2n*20+40 for
@@ -5904,19 +5928,19 @@ mod tests {
     }
 
     #[test]
-    fn acutepool_resize_only_if_smaller() {
+    fn acute_pool_resize_only_if_smaller() {
         // C's only-if-smaller guard (acute.c:46-47): a smaller or equal
         // n is a no-op, a bigger n grows exactly the four
         // size-dependent buffers (acute.c:50-60), the 500-sized
         // buffers stay untouched.
         let mut p = AcutePool::new(20);
-        acutepool_resize(10, &mut p);
+        acute_pool_resize(10, &mut p);
         assert_eq!(p.size, 20);
         assert_eq!(p.petalx.len(), 40);
         assert_eq!(p.wedges.len(), 2 * 20 * 20 + 40);
-        acutepool_resize(20, &mut p);
+        acute_pool_resize(20, &mut p);
         assert_eq!(p.size, 20);
-        acutepool_resize(21, &mut p);
+        acute_pool_resize(21, &mut p);
         assert_eq!(p.size, 21);
         assert_eq!(p.petalx.len(), 42);
         assert_eq!(p.petaly.len(), 42);
@@ -5927,7 +5951,7 @@ mod tests {
         assert_eq!(p.points_q.len(), 500);
         assert_eq!(p.points_r.len(), 500);
         // re-guard after growth: a smaller n is again a no-op
-        acutepool_resize(15, &mut p);
+        acute_pool_resize(15, &mut p);
         assert_eq!(p.size, 21);
         assert_eq!(p.petalx.len(), 42);
     }
@@ -5938,14 +5962,14 @@ mod tests {
         // 2*minangle = 40 (-q20): all valid (acute.c:2916 banner).
         let b = behavior_q(20.0);
         let square = [1.0, 0.0, 0.0, 1.0, -1.0, 0.0, 0.0, -1.0];
-        assert_eq!(polygonAngles(&b, 4, &square), 0);
+        assert_eq!(polygon_angles(&b, 4, &square), 0);
         // A needle polygon: the corner at (2,0) between (0,0) and
         // (1, 0.05) is roughly 0.114 degrees, far below 40: bad.
         let needle = [0.0, 0.0, 2.0, 0.0, 1.0, 0.05];
-        assert_eq!(polygonAngles(&b, 3, &needle), 1);
+        assert_eq!(polygon_angles(&b, 3, &needle), 1);
         // The wrap-around triples (i == numpoints-1, numpoints-2) read
         // the same needle polygon's other corners: also bad there.
-        assert_eq!(polygonAngles(&b, 3, &needle), 1);
+        assert_eq!(polygon_angles(&b, 3, &needle), 1);
     }
 
     #[test]
@@ -5953,11 +5977,11 @@ mod tests {
         let b = behavior_q(20.0);
         // A right-angle corner at the middle vertex (2,0)... the
         // middle vertex is (x2,y2): 90 degrees is good.
-        assert_eq!(testPolygonAngle(&b, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0), 0);
+        assert_eq!(test_polygon_angle(&b, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0), 0);
         // A needle corner at the middle vertex (1,0): the angle
         // between (0,0) and (0.5, 0.001) is roughly 0.114 degrees,
         // below 2*minangle = 40: bad.
-        assert_eq!(testPolygonAngle(&b, 0.0, 0.0, 1.0, 0.0, 0.5, 0.001), 1);
+        assert_eq!(test_polygon_angle(&b, 0.0, 0.0, 1.0, 0.0, 0.5, 0.001), 1);
         // Exactly the boundary shape is out of reach for exact f64
         // inputs, so the pair above pins both branches.
     }
@@ -5970,19 +5994,19 @@ mod tests {
         // good under -q20 (no maxangle set).
         let b = behavior_q(20.0);
         assert_eq!(
-            testTriangleAngle(&b, 0.0, 0.0, 1.0, 0.0, 0.5, 0.8660254037844386),
+            test_triangle_angle(&b, 0.0, 0.0, 1.0, 0.0, 0.5, 0.8660254037844386),
             0
         );
         // A skinny triangle: the smallest angle's squared cosine
         // exceeds goodangle: bad.
-        assert_eq!(testTriangleAngle(&b, 0.0, 0.0, 1.0, 0.0, 0.5, 0.01), 1);
+        assert_eq!(test_triangle_angle(&b, 0.0, 0.0, 1.0, 0.0, 0.5, 0.01), 1);
         // -q20 -u120: an isosceles triangle with base angles 25
         // (0.5*tan(25) high) passes the min gate (cos^2 25 < cos^2 20)
         // but its 130-degree apex violates the max gate
         // (cos 130 < cos 120): bad.
         let bu = behavior_q_u(20.0, 120.0);
         assert_eq!(
-            testTriangleAngle(
+            test_triangle_angle(
                 &bu,
                 0.0,
                 0.0,
@@ -5997,7 +6021,7 @@ mod tests {
         // fails (cos^2 25 > cos^2 25... equal is good; use -q30).
         let b30 = behavior_q(30.0);
         assert_eq!(
-            testTriangleAngle(
+            test_triangle_angle(
                 &b30,
                 0.0,
                 0.0,
@@ -6011,7 +6035,7 @@ mod tests {
         // The equilateral triangle is good under -q20 -u120 too
         // (max 60 < 120).
         assert_eq!(
-            testTriangleAngle(&bu, 0.0, 0.0, 1.0, 0.0, 0.5, 0.8660254037844386),
+            test_triangle_angle(&bu, 0.0, 0.0, 1.0, 0.0, 0.5, 0.8660254037844386),
             0
         );
     }
@@ -6031,7 +6055,7 @@ mod tests {
             &[(1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0)],
         );
         let mut points = [0.0f64; 500];
-        let n = getStarPoints(
+        let n = get_star_points(
             &m,
             tris[0],
             c,
@@ -6045,7 +6069,7 @@ mod tests {
         // whichPoint = 2 walks the star of tdest (r0): a ring vertex on
         // the hull whose ring edge (r0, r1) is unbonded: the walk dies
         // at the second step and reports 0 (the border case).
-        let n2 = getStarPoints(
+        let n2 = get_star_points(
             &m,
             tris[0],
             c,
@@ -6057,7 +6081,7 @@ mod tests {
         assert_eq!(n2, 0);
         // whichPoint = 3 (tapex r1) dies immediately: the pair
         // (r1, r0) spans the unbonded hull edge.
-        let n3 = getStarPoints(
+        let n3 = get_star_points(
             &m,
             tris[0],
             c,
@@ -6078,7 +6102,7 @@ mod tests {
         let mut m = mesh(&b);
         let (t, va, vb, vc) = lone_tri(&mut m, (0.0, 0.0), (2.0, 0.0), (1.0, 2.0));
         let mut points = [0.0f64; 500];
-        assert_eq!(getStarPoints(&m, t, va, vb, vc, 1, &mut points), 0);
+        assert_eq!(get_star_points(&m, t, va, vb, vc, 1, &mut points), 0);
     }
 
     #[test]
@@ -6102,7 +6126,7 @@ mod tests {
         let r1v = m.apex(tris[0]);
         let r1 = (m.vx_x(r1v), m.vx_y(r1v));
         assert_eq!(
-            getNeighborsVertex(&m, tris[0], cc.0, cc.1, r1.0, r1.1, &mut third, &mut neigh),
+            get_neighbors_vertex(&m, tris[0], cc.0, cc.1, r1.0, r1.1, &mut third, &mut neigh),
             0
         );
         assert_eq!(third, [-1.0, 0.0]);
@@ -6117,7 +6141,7 @@ mod tests {
         let r0v = m.dest(tris[0]);
         let r0 = (m.vx_x(r0v), m.vx_y(r0v));
         assert_eq!(
-            getNeighborsVertex(&m, tris[0], r0.0, r0.1, r1.0, r1.1, &mut third, &mut neigh),
+            get_neighbors_vertex(&m, tris[0], r0.0, r0.1, r1.0, r1.1, &mut third, &mut neigh),
             1
         );
         assert_eq!(neigh.tri, tris[1].tri);
@@ -6135,7 +6159,7 @@ mod tests {
         let square = [1.0, 0.0, 0.0, 1.0, -1.0, 0.0, 0.0, -1.0];
         let mut newloc = [0.0f64; 2];
         assert_eq!(
-            getWedgeIntersectionWithoutMaxAngle(&mut pool, &b, 4, &square, &mut newloc),
+            get_wedge_intersection_without_max_angle(&mut pool, &b, 4, &square, &mut newloc),
             1
         );
         // The centroid lies inside the ring (the feasible region is a
@@ -6157,7 +6181,7 @@ mod tests {
         let square = [1.0, 0.0, 0.0, 1.0, -1.0, 0.0, 0.0, -1.0];
         let mut newloc = [0.0f64; 2];
         assert_eq!(
-            getWedgeIntersectionWithoutMaxAngle(&mut pool, &b, 4, &square, &mut newloc),
+            get_wedge_intersection_without_max_angle(&mut pool, &b, 4, &square, &mut newloc),
             0
         );
     }
@@ -6173,7 +6197,7 @@ mod tests {
         let square = [1.0, 0.0, 0.0, 1.0, -1.0, 0.0, 0.0, -1.0];
         let mut newloc = [0.0f64; 2];
         assert_eq!(
-            getWedgeIntersectionWithoutMaxAngle(&mut pool, &b, 4, &square, &mut newloc),
+            get_wedge_intersection_without_max_angle(&mut pool, &b, 4, &square, &mut newloc),
             0
         );
     }
@@ -6200,7 +6224,7 @@ mod tests {
         ];
         let mut newloc = [0.0f64; 2];
         assert_eq!(
-            getWedgeIntersectionWithMaxAngle(&mut pool, &b, 6, &hexagon, &mut newloc),
+            get_wedge_intersection_with_max_angle(&mut pool, &b, 6, &hexagon, &mut newloc),
             1
         );
         assert!(newloc[0].abs() < 1.0 && newloc[1].abs() < 1.0);
@@ -6226,7 +6250,7 @@ mod tests {
         ];
         let mut newloc = [0.0f64; 2];
         assert_eq!(
-            getWedgeIntersectionWithMaxAngle(&mut pool, &b, 6, &hexagon, &mut newloc),
+            get_wedge_intersection_with_max_angle(&mut pool, &b, 6, &hexagon, &mut newloc),
             1
         );
         assert!(newloc[0].abs() < 1.0 && newloc[1].abs() < 1.0);
@@ -6244,20 +6268,20 @@ mod tests {
         // (2,0).
         let mut st = t;
         assert_eq!(
-            minDistanceToNeigbor(&mut m, &b, 1.0, 0.5, &mut st).expect("min distance"),
+            min_distance_to_neighbor(&mut m, &b, 1.0, 0.5, &mut st).expect("min distance"),
             1.25
         );
         // On the org vertex: 0.0 (the ONVERTEX arm).
         let mut st = t;
         assert_eq!(
-            minDistanceToNeigbor(&mut m, &b, 0.0, 0.0, &mut st).expect("min distance"),
+            min_distance_to_neighbor(&mut m, &b, 0.0, 0.0, &mut st).expect("min distance"),
             0.0
         );
         // On the dest vertex: the lnextself branch rotates the caller's
         // handle (acute.c:3612) before returning 0.0.
         let mut st = t;
         assert_eq!(
-            minDistanceToNeigbor(&mut m, &b, 2.0, 0.0, &mut st).expect("min distance"),
+            min_distance_to_neighbor(&mut m, &b, 2.0, 0.0, &mut st).expect("min distance"),
             0.0
         );
         assert_eq!(st.orient, 1);
@@ -6265,14 +6289,14 @@ mod tests {
         // either endpoint.
         let mut st = t;
         assert_eq!(
-            minDistanceToNeigbor(&mut m, &b, 1.0, 0.0, &mut st).expect("min distance"),
+            min_distance_to_neighbor(&mut m, &b, 1.0, 0.0, &mut st).expect("min distance"),
             1.0
         );
         // Outside the mesh: the walk crosses the hull rim and
         // preciselocate reports OUTSIDE: 0.0.
         let mut st = t;
         assert_eq!(
-            minDistanceToNeigbor(&mut m, &b, -1.0, 1.0, &mut st).expect("min distance"),
+            min_distance_to_neighbor(&mut m, &b, -1.0, 1.0, &mut st).expect("min distance"),
             0.0
         );
         // Collinear with the (0,0)-(2,0) edge but not between: C
@@ -6282,7 +6306,7 @@ mod tests {
         // squared distance 1.0 to (2,0).
         let mut st = t;
         assert_eq!(
-            minDistanceToNeigbor(&mut m, &b, 3.0, 0.0, &mut st).expect("min distance"),
+            min_distance_to_neighbor(&mut m, &b, 3.0, 0.0, &mut st).expect("min distance"),
             1.0
         );
     }
@@ -6304,14 +6328,14 @@ mod tests {
             (0.0, 0.0),
             &[(1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0)],
         );
-        m.vx_set_type(c, crate::mesh::slots::FREEVERTEX);
-        assert_eq!(m.vx_type(c), crate::mesh::slots::FREEVERTEX);
+        m.vx_set_type(c, crate::mesh::slots::FREE_VERTEX);
+        assert_eq!(m.vx_type(c), crate::mesh::slots::FREE_VERTEX);
         let torg = c;
         let tdest = m.dest(tris[0]);
         let tapex = m.apex(tris[0]);
         let mut newloc = [0.0f64; 2];
         assert_eq!(
-            doSmoothing(&mut m, &b, tris[0], torg, tdest, tapex, &mut newloc),
+            do_smoothing(&mut m, &b, tris[0], torg, tdest, tapex, &mut newloc),
             1
         );
         // The suggested relocation is the feasible-region centroid:
@@ -6325,10 +6349,10 @@ mod tests {
         assert_eq!(m.acute_mem.points_r.len(), 500);
         // A non-free center cannot be relocated: the flag never sets
         // and doSmoothing reports 0 (the FREEVERTEX gate).
-        m.vx_set_type(c, crate::mesh::slots::SEGMENTVERTEX);
+        m.vx_set_type(c, crate::mesh::slots::SEGMENT_VERTEX);
         let mut newloc2 = [0.0f64; 2];
         assert_eq!(
-            doSmoothing(&mut m, &b, tris[0], torg, tdest, tapex, &mut newloc2),
+            do_smoothing(&mut m, &b, tris[0], torg, tdest, tapex, &mut newloc2),
             0
         );
     }
@@ -6345,21 +6369,21 @@ mod tests {
             let mut m = mesh(b);
             let (t, torg, tdest, tapex) = lone_tri(&mut m, (0.0, 0.0), (2.0, 0.0), (1.0, 0.1));
             let cc = vxy(&mut m, 99.0, 99.0);
-            findNewSPLocation(&mut m, b, torg, tdest, tapex, cc, true, t)
+            find_new_sp_location(&mut m, b, torg, tdest, tapex, cc, true, t)
                 .expect("findNewSPLocation")
         }
         fn run_without(b: &Behavior) -> (f64, f64) {
             let mut m = mesh(b);
             let (t, torg, tdest, tapex) = lone_tri(&mut m, (0.0, 0.0), (2.0, 0.0), (1.0, 0.1));
             let cc = vxy(&mut m, 99.0, 99.0);
-            findNewSPLocationWithoutMaxAngle(&mut m, b, torg, tdest, tapex, cc, true, t)
+            find_new_sp_location_without_max_angle(&mut m, b, torg, tdest, tapex, cc, true, t)
                 .expect("findNewSPLocationWithoutMaxAngle")
         }
         fn run_with(b: &Behavior) -> (f64, f64) {
             let mut m = mesh(b);
             let (t, torg, tdest, tapex) = lone_tri(&mut m, (0.0, 0.0), (2.0, 0.0), (1.0, 0.1));
             let cc = vxy(&mut m, 99.0, 99.0);
-            findNewSPLocationWithMaxAngle(&mut m, b, torg, tdest, tapex, cc, true, t)
+            find_new_sp_location_with_max_angle(&mut m, b, torg, tdest, tapex, cc, true, t)
                 .expect("findNewSPLocationWithMaxAngle")
         }
         let b_q = behavior_q(20.0);
@@ -6393,7 +6417,7 @@ mod tests {
         let mut m = mesh(&b);
         let (t, torg, tdest, tapex) = lone_tri(&mut m, (0.0, 0.0), (2.0, 0.0), (1.0, 0.1));
         let cc = vxy(&mut m, 99.0, 99.0);
-        let (xi, eta) = findNewSPLocation(&mut m, &b, torg, tdest, tapex, cc, true, t)
+        let (xi, eta) = find_new_sp_location(&mut m, &b, torg, tdest, tapex, cc, true, t)
             .expect("findNewSPLocation");
         assert!((m.vx_x(cc) - 1.2306141135681588).abs() <= 1e-12);
         assert!((m.vx_y(cc) + 2.6438588643184127).abs() <= 1e-12);
@@ -6414,7 +6438,7 @@ mod tests {
         let mut m = mesh(&b);
         let (t, torg, tdest, tapex) = lone_tri(&mut m, (0.0, 0.0), (2.0, 0.0), (1.0, 0.1));
         let cc = vxy(&mut m, 99.0, 99.0);
-        let (xi, eta) = findNewSPLocation(&mut m, &b, torg, tdest, tapex, cc, true, t)
+        let (xi, eta) = find_new_sp_location(&mut m, &b, torg, tdest, tapex, cc, true, t)
             .expect("findNewSPLocation");
         assert!((m.vx_x(cc) - 1.2306141135681588).abs() <= 1e-12);
         assert!((m.vx_y(cc) + 2.6438588643184127).abs() <= 1e-12);
@@ -6444,10 +6468,10 @@ mod tests {
         let mut m = mesh(&b);
         let (t, torg, tdest, tapex) = lone_tri(&mut m, (0.0, 0.0), (1.0, 0.0), (0.0, 1.2));
         for v in [torg, tdest, tapex] {
-            m.vx_set_type(v, crate::mesh::slots::SEGMENTVERTEX);
+            m.vx_set_type(v, crate::mesh::slots::SEGMENT_VERTEX);
         }
         let cc = vxy(&mut m, 99.0, 99.0);
-        let (xi, eta) = findNewSPLocation(&mut m, &b, torg, tdest, tapex, cc, true, t)
+        let (xi, eta) = find_new_sp_location(&mut m, &b, torg, tdest, tapex, cc, true, t)
             .expect("findNewSPLocation");
         assert!((m.vx_x(cc) - 0.5).abs() <= 1e-12);
         assert!((m.vx_y(cc) - 0.6).abs() <= 1e-12);
@@ -6474,26 +6498,26 @@ mod tests {
         // The twin: doSmoothing's newloc for the free center.
         let mut m0 = mesh(&b);
         let (c0, _r0, tris0) = star_fan(&mut m0, (0.0, 0.0), &ring);
-        m0.vx_set_type(c0, crate::mesh::slots::FREEVERTEX);
+        m0.vx_set_type(c0, crate::mesh::slots::FREE_VERTEX);
         let tdest0 = m0.dest(tris0[0]);
         let tapex0 = m0.apex(tris0[0]);
         let mut newloc = [0.0f64; 2];
         assert_eq!(
-            doSmoothing(&mut m0, &b, tris0[0], c0, tdest0, tapex0, &mut newloc),
+            do_smoothing(&mut m0, &b, tris0[0], c0, tdest0, tapex0, &mut newloc),
             1
         );
         // The dispatcher call on the identical fixture: maxangle is
         // set, so the With variant runs, relocates, and deletes.
         let mut m = mesh(&b);
         let (c, _r, tris) = star_fan(&mut m, (0.0, 0.0), &ring);
-        m.vx_set_type(c, crate::mesh::slots::FREEVERTEX);
+        m.vx_set_type(c, crate::mesh::slots::FREE_VERTEX);
         let cc = vxy(&mut m, 99.0, 99.0);
         let tdest = m.dest(tris[0]);
         let tapex = m.apex(tris[0]);
-        let (xi, eta) = findNewSPLocation(&mut m, &b, c, tdest, tapex, cc, true, tris[0])
+        let (xi, eta) = find_new_sp_location(&mut m, &b, c, tdest, tapex, cc, true, tris[0])
             .expect("findNewSPLocation");
         // The center is gone: the relocated branch's deletevertex.
-        assert_eq!(m.vx_type(c), crate::mesh::slots::DEADVERTEX);
+        assert_eq!(m.vx_type(c), crate::mesh::slots::DEAD_VERTEX);
         // Degree-4 deletion retriangulates the diamond into two
         // triangles (the 45-45-90 halves pass -q20 -u120, so the
         // quality flank of deletevertex adds no Steiner).

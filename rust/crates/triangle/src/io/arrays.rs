@@ -8,7 +8,7 @@
 //! the public MeshOutput types and feed Mesh::output
 //! (triangle_mesh_copy, landed in api.rs).
 //! quality_statistics once closed the C section (triangle.c:8143); it
-//! moved to algorithm/quality.rs for cohesion with its only caller
+//! moved to algorithm/algorithm/quality.rs for cohesion with its only caller
 //! (docs/function-mapping.md).
 //!
 //! Input seam (ADR 0004 section 5.2): C's flat `REAL *pointlist`,
@@ -61,7 +61,7 @@ use crate::error::Error;
 use crate::input::Point2;
 use crate::mesh::handles::{Osub, Otri, DUMMY_SUB, DUMMY_TRI};
 use crate::mesh::pool::Oom;
-use crate::mesh::slots::{INPUTVERTEX, UNDEADVERTEX};
+use crate::mesh::slots::{INPUT_VERTEX, UNDEAD_VERTEX};
 use crate::mesh::Mesh;
 use crate::options::Behavior;
 use std::cmp::Ordering;
@@ -84,7 +84,7 @@ use std::cmp::Ordering;
 // by index verbatim; C's coordindex++ pair is absorbed by the Point2
 // records (two REALs per point, the module's input seam).
 #[allow(clippy::needless_range_loop)]
-pub(crate) fn transfernodes(
+pub(crate) fn transfer_nodes(
     m: &mut Mesh,
     b: &mut Behavior,
     pointlist: &[Point2],
@@ -104,10 +104,10 @@ pub(crate) fn transfernodes(
         b.weighted = 0;
     }
 
-    m.initializevertexpool(b.poly).map_err(Error::from)?;
+    m.init_vertex_pool(b.poly).map_err(Error::from)?;
     // The pool geometry already ran eagerly in Mesh::new over the same
     // input counters (the ADR 0003 section 4 convention, the same one
-    // algorithm/delaunay.rs cites at its initializetrisubpools site), and no
+    // algorithm/algorithm/delaunay.rs cites at its initializetrisubpools site), and no
     // vertex row exists on any transfernodes call path yet, so this
     // C-site call re-creates an identical empty pool: no allocation,
     // id, reuse, or traversal state exists that could observe it.
@@ -134,7 +134,7 @@ pub(crate) fn transfernodes(
             // If no markers are specified, they default to zero.
             m.vx_set_mark(vertexloop, 0);
         }
-        m.vx_set_type(vertexloop, INPUTVERTEX);
+        m.vx_set_type(vertexloop, INPUT_VERTEX);
         // Determine the smallest and largest x and y coordinates.
         if i == 0 {
             m.xmin = x;
@@ -177,7 +177,7 @@ pub(crate) fn transfernodes(
 /// indexed marker store pmlist[vertexnumber - firstnumber]
 /// (triangle.c:7820) is the push in the same traversal order (the
 /// marker list counts only the output vertices).
-pub(crate) fn writenodes(
+pub(crate) fn write_nodes(
     m: &mut Mesh,
     b: &Behavior,
     pointlist: &mut Vec<Point2>,
@@ -213,9 +213,9 @@ pub(crate) fn writenodes(
     // C: traversalinit + the vertexnumber walk (triangle.c:7806-7808).
     let mut vertexnumber = b.firstnumber;
     let mut t = m.vertices.traversal();
-    while let Some(vertexloop) = m.vertextraverse(&mut t) {
+    while let Some(vertexloop) = m.traverse_vertex(&mut t) {
         // C: the jettison gate (triangle.c:7810).
-        if !b.jettison || m.vx_type(vertexloop) != UNDEADVERTEX {
+        if !b.jettison || m.vx_type(vertexloop) != UNDEAD_VERTEX {
             // X and y coordinates (triangle.c:7811-7813).
             pointlist.push(Point2 {
                 x: m.vx_x(vertexloop),
@@ -259,12 +259,12 @@ pub(crate) fn writenodes(
                     // out); the io/mod.rs file writer will inline the
                     // numbering exactly like C's file_writenodes
                     // (triangle_io.c:64-65).
-pub(crate) fn numbernodes(m: &mut Mesh, b: &Behavior) {
+pub(crate) fn number_nodes(m: &mut Mesh, b: &Behavior) {
     let mut vertexnumber = b.firstnumber;
     let mut t = m.vertices.traversal();
-    while let Some(vertexloop) = m.vertextraverse(&mut t) {
+    while let Some(vertexloop) = m.traverse_vertex(&mut t) {
         m.vx_set_mark(vertexloop, vertexnumber);
-        if !b.jettison || m.vx_type(vertexloop) != UNDEADVERTEX {
+        if !b.jettison || m.vx_type(vertexloop) != UNDEAD_VERTEX {
             vertexnumber += 1;
         }
     }
@@ -283,7 +283,7 @@ pub(crate) fn numbernodes(m: &mut Mesh, b: &Behavior) {
 /// exact reserves over the (order + 1) * (order + 2) / 2 corners, and
 /// C's elementnumber cursor (triangle.c:7896, 7923) is absorbed by
 /// the push order.
-pub(crate) fn writeelements(
+pub(crate) fn write_elements(
     m: &mut Mesh,
     b: &Behavior,
     trianglelist: &mut Vec<i32>,
@@ -305,7 +305,7 @@ pub(crate) fn writeelements(
 
     // C: traversalinit + triangleloop.orient = 0 (triangle.c:7893-7895).
     let mut t = m.triangles.traversal();
-    while let Some(tri) = m.triangletraverse(&mut t) {
+    while let Some(tri) = m.traverse_triangle(&mut t) {
         let triangleloop = Otri { tri, orient: 0 };
         let p1 = m.org(triangleloop);
         let p2 = m.dest(triangleloop);
@@ -353,7 +353,7 @@ pub(crate) fn writeelements(
 /// (triangle.c:7943-7952) are the exact reserves, and the indexed
 /// marker store smlist[subsegnumber - firstnumber] (triangle.c:7969)
 /// is the push in the same traversal order.
-pub(crate) fn writepoly(
+pub(crate) fn write_poly(
     m: &mut Mesh,
     b: &Behavior,
     segmentlist: &mut Vec<[i32; 2]>,
@@ -374,10 +374,10 @@ pub(crate) fn writepoly(
 
     // C: traversalinit + subsegloop.ssorient = 0 (triangle.c:7957-7959).
     let mut t = m.subsegs.traversal();
-    while let Some(ss) = m.subsegtraverse(&mut t) {
-        let subsegloop = Osub { ss, ssorient: 0 };
-        let endpoint1 = m.sorg(subsegloop);
-        let endpoint2 = m.sdest(subsegloop);
+    while let Some(ss) = m.traverse_subseg(&mut t) {
+        let subsegloop = Osub { ss, orient: 0 };
+        let endpoint1 = m.subseg_org(subsegloop);
+        let endpoint2 = m.subseg_dest(subsegloop);
         // Copy indices of the segment's two endpoints
         // (triangle.c:7964-7966).
         segmentlist.push([m.vx_mark(endpoint1), m.vx_mark(endpoint2)]);
@@ -399,7 +399,7 @@ pub(crate) fn writepoly(
 /// subsegment's boundary marker (zero without one) under
 /// usesegments, and the hull flag itself otherwise (triangle.c:
 /// 8026-8039).
-pub(crate) fn writeedges(
+pub(crate) fn write_edges(
     m: &mut Mesh,
     b: &Behavior,
     edgelist: &mut Vec<[i32; 2]>,
@@ -422,7 +422,7 @@ pub(crate) fn writeedges(
     // the indexed marker store emlist[edgenumber - firstnumber]
     // (triangle.c:8033-8038) is the push in emission order.
     let mut t = m.triangles.traversal();
-    while let Some(tri) = m.triangletraverse(&mut t) {
+    while let Some(tri) = m.traverse_triangle(&mut t) {
         for orient in 0..3u8 {
             let triangleloop = Otri { tri, orient };
             let trisym = m.sym(triangleloop);
@@ -451,7 +451,7 @@ pub(crate) fn writeedges(
                     // there's no subsegment, the boundary marker is
                     // zero (the C comment, triangle.c:8028-8029).
                     if b.usesegments {
-                        let checkmark = m.tspivot(triangleloop);
+                        let checkmark = m.tri_subseg(triangleloop);
                         if checkmark.ss == DUMMY_SUB {
                             edgemarkerlist.push(0);
                         } else {
@@ -486,7 +486,7 @@ pub(crate) fn writeedges(
 /// never restores the dummy's slot (the restore loop walks only the
 /// traversed triangles), so the port leaves the sentinel's overlay
 /// at -1 exactly like C.
-pub(crate) fn writeneighbors(
+pub(crate) fn write_neighbors(
     m: &mut Mesh,
     b: &Behavior,
     neighborlist: &mut Vec<i32>,
@@ -519,7 +519,7 @@ pub(crate) fn writeneighbors(
     // store at 8089).
     let mut elementnumber = b.firstnumber;
     let mut t = m.triangles.traversal();
-    while let Some(tri) = m.triangletraverse(&mut t) {
+    while let Some(tri) = m.traverse_triangle(&mut t) {
         subsegs.push(m.tri_int(tri, numberindex));
         m.set_tri_int(tri, numberindex, elementnumber);
         elementnumber += 1;
@@ -532,7 +532,7 @@ pub(crate) fn writeneighbors(
     // orient 1, neighbor2 from orient 2, neighbor3 from orient 0; C's
     // elementnumber cursor (8099, 8116) is absorbed by the push order.
     let mut t = m.triangles.traversal();
-    while let Some(tri) = m.triangletraverse(&mut t) {
+    while let Some(tri) = m.traverse_triangle(&mut t) {
         let trisym = m.sym(Otri { tri, orient: 1 });
         let neighbor1 = m.tri_int(trisym.tri, numberindex);
         let trisym = m.sym(Otri { tri, orient: 2 });
@@ -549,7 +549,7 @@ pub(crate) fn writeneighbors(
     // store at 8126).
     let mut index = 0usize;
     let mut t = m.triangles.traversal();
-    while let Some(tri) = m.triangletraverse(&mut t) {
+    while let Some(tri) = m.traverse_triangle(&mut t) {
         m.set_tri_int(tri, numberindex, subsegs[index]);
         index += 1;
     }
@@ -605,20 +605,20 @@ mod tests {
         let mut b = behavior();
         let mut m = core_mesh(&b, 3, 1);
         let (points, attrs, markers) = three_points();
-        transfernodes(&mut m, &mut b, &points, &attrs, Some(&markers), 3, 1).expect("load");
+        transfer_nodes(&mut m, &mut b, &points, &attrs, Some(&markers), 3, 1).expect("load");
         assert_eq!(m.invertices, 3);
         assert_eq!(m.mesh_dim, 2);
         assert_eq!(m.nextras, 1);
         let mut t = m.vertices.traversal();
         for (k, point) in points.iter().enumerate() {
-            let v = m.vertextraverse(&mut t).expect("three rows");
+            let v = m.traverse_vertex(&mut t).expect("three rows");
             assert_eq!(m.vx_x(v), point.x);
             assert_eq!(m.vx_y(v), point.y);
             assert_eq!(m.vx_real(v, 2), attrs[k]);
             assert_eq!(m.vx_mark(v), markers[k]);
-            assert_eq!(m.vx_type(v), INPUTVERTEX);
+            assert_eq!(m.vx_type(v), INPUT_VERTEX);
         }
-        assert!(m.vertextraverse(&mut t).is_none());
+        assert!(m.traverse_vertex(&mut t).is_none());
         assert_eq!(m.xmin, -1.0);
         assert_eq!(m.xmax, 4.0);
         assert_eq!(m.ymin, -2.0);
@@ -634,12 +634,12 @@ mod tests {
         let mut b = behavior();
         let mut m = core_mesh(&b, 3, 0);
         let (points, _attrs, _markers) = three_points();
-        transfernodes(&mut m, &mut b, &points, &[], None, 3, 0).expect("load");
+        transfer_nodes(&mut m, &mut b, &points, &[], None, 3, 0).expect("load");
         assert_eq!(m.nextras, 0);
         let mut t = m.vertices.traversal();
-        while let Some(v) = m.vertextraverse(&mut t) {
+        while let Some(v) = m.traverse_vertex(&mut t) {
             assert_eq!(m.vx_mark(v), 0);
-            assert_eq!(m.vx_type(v), INPUTVERTEX);
+            assert_eq!(m.vx_type(v), INPUT_VERTEX);
         }
     }
 
@@ -653,7 +653,7 @@ mod tests {
         let mut b = weighted_behavior();
         let mut m = core_mesh(&b, 2, 0);
         let points = [Point2 { x: 0.0, y: 0.0 }, Point2 { x: 1.0, y: 0.0 }];
-        let err = transfernodes(&mut m, &mut b, &points, &[], Some(&[1, 2]), 2, 0)
+        let err = transfer_nodes(&mut m, &mut b, &points, &[], Some(&[1, 2]), 2, 0)
             .expect_err("fewer than three points must fail");
         // The raising site keeps the funnel arm's exact payload.
         assert!(matches!(err, Error::Input(ref msg) if msg == "invalid input (TRI_INPUT)"));
@@ -673,13 +673,13 @@ mod tests {
         let mut b = weighted_behavior();
         let mut m = core_mesh(&b, 3, 0);
         let (points, _attrs, _markers) = three_points();
-        transfernodes(&mut m, &mut b, &points, &[], None, 3, 0).expect("load");
+        transfer_nodes(&mut m, &mut b, &points, &[], None, 3, 0).expect("load");
         assert_eq!(b.weighted, 0);
 
         let mut b = weighted_behavior();
         let mut m = core_mesh(&b, 3, 1);
         let (points, attrs, _markers) = three_points();
-        transfernodes(&mut m, &mut b, &points, &attrs, None, 3, 1).expect("load");
+        transfer_nodes(&mut m, &mut b, &points, &attrs, None, 3, 1).expect("load");
         assert_eq!(b.weighted, 1);
     }
 
@@ -692,7 +692,7 @@ mod tests {
         opts.validate().expect("validate")
     }
 
-    /// The two-triangle unit square of the algorithm/refine.rs highorder
+    /// The two-triangle unit square of the algorithm/algorithm/refine.rs highorder
     /// fixture: t1 (a, e, c) bonded to t2 (a, c, d) across t1's
     /// orient-2 edge (the diagonal a-c); the vertices are the pool
     /// rows 1..=4 in traversal order, the triangles the rows 2 and 3
@@ -711,14 +711,14 @@ mod tests {
         let d = m.vx_alloc().expect("vx");
         m.set_vx_x(d, 0.0);
         m.set_vx_y(d, 1.0);
-        let t1 = m.maketriangle(b.usesegments, b.vararea).expect("tri");
-        m.setorg(t1, a);
-        m.setdest(t1, e);
-        m.setapex(t1, c);
-        let t2 = m.maketriangle(b.usesegments, b.vararea).expect("tri");
-        m.setorg(t2, a);
-        m.setdest(t2, c);
-        m.setapex(t2, d);
+        let t1 = m.make_triangle(b.usesegments, b.vararea).expect("tri");
+        m.set_org(t1, a);
+        m.set_dest(t1, e);
+        m.set_apex(t1, c);
+        let t2 = m.make_triangle(b.usesegments, b.vararea).expect("tri");
+        m.set_org(t2, a);
+        m.set_dest(t2, c);
+        m.set_apex(t2, d);
         m.bond(
             Otri {
                 tri: t1.tri,
@@ -733,7 +733,7 @@ mod tests {
     }
 
     #[test]
-    fn writenodes_marshals_and_numbers_over_the_marks() {
+    fn write_nodes_marshals_and_numbers_over_the_marks() {
         // The writenodes walk (triangle.c:7806-7827) over a
         // transfernodes load: the points come back in traversal
         // order with their attributes and markers, and the numbering
@@ -742,11 +742,11 @@ mod tests {
         let mut b = behavior();
         let mut m = core_mesh(&b, 3, 1);
         let (points, attrs, markers) = three_points();
-        transfernodes(&mut m, &mut b, &points, &attrs, Some(&markers), 3, 1).expect("load");
+        transfer_nodes(&mut m, &mut b, &points, &attrs, Some(&markers), 3, 1).expect("load");
         let mut plist: Vec<Point2> = Vec::new();
         let mut palist: Vec<f64> = Vec::new();
         let mut pmlist: Vec<i32> = Vec::new();
-        writenodes(&mut m, &b, &mut plist, &mut palist, &mut pmlist).expect("writenodes");
+        write_nodes(&mut m, &b, &mut plist, &mut palist, &mut pmlist).expect("writenodes");
         assert_eq!(plist, points.to_vec());
         assert_eq!(palist, attrs.to_vec());
         // the ORIGINAL markers leave in the list...
@@ -755,7 +755,7 @@ mod tests {
         // banner's memory trick, triangle.c:7763-7764).
         let mut number = 1;
         let mut t = m.vertices.traversal();
-        while let Some(v) = m.vertextraverse(&mut t) {
+        while let Some(v) = m.traverse_vertex(&mut t) {
             assert_eq!(m.vx_mark(v), number);
             number += 1;
         }
@@ -766,8 +766,8 @@ mod tests {
         });
         let mut m = core_mesh(&b, 3, 0);
         let (points, _attrs, _markers) = three_points();
-        transfernodes(&mut m, &mut b, &points, &[], None, 3, 0).expect("load");
-        writenodes(
+        transfer_nodes(&mut m, &mut b, &points, &[], None, 3, 0).expect("load");
+        write_nodes(
             &mut m,
             &b,
             &mut Vec::new(),
@@ -776,11 +776,11 @@ mod tests {
         )
         .expect("writenodes");
         let mut t = m.vertices.traversal();
-        assert_eq!(m.vx_mark(m.vertextraverse(&mut t).expect("vx")), 0);
+        assert_eq!(m.vx_mark(m.traverse_vertex(&mut t).expect("vx")), 0);
     }
 
     #[test]
-    fn writenodes_without_markers_still_numbers() {
+    fn write_nodes_without_markers_still_numbers() {
         // The !nobound gate (triangle.c:7818-7821): no marker list is
         // written, and the numbering store (7823) stays outside the
         // gate.
@@ -789,20 +789,20 @@ mod tests {
         });
         let mut m = core_mesh(&b, 3, 1);
         let (points, attrs, _markers) = three_points();
-        transfernodes(&mut m, &mut b, &points, &attrs, None, 3, 1).expect("load");
+        transfer_nodes(&mut m, &mut b, &points, &attrs, None, 3, 1).expect("load");
         let mut plist: Vec<Point2> = Vec::new();
         let mut palist: Vec<f64> = Vec::new();
         let mut pmlist: Vec<i32> = Vec::new();
-        writenodes(&mut m, &b, &mut plist, &mut palist, &mut pmlist).expect("writenodes");
+        write_nodes(&mut m, &b, &mut plist, &mut palist, &mut pmlist).expect("writenodes");
         assert_eq!(plist, points.to_vec());
         assert_eq!(palist, attrs.to_vec());
         assert!(pmlist.is_empty());
         let mut t = m.vertices.traversal();
-        assert_eq!(m.vx_mark(m.vertextraverse(&mut t).expect("vx")), 1);
+        assert_eq!(m.vx_mark(m.traverse_vertex(&mut t).expect("vx")), 1);
     }
 
     #[test]
-    fn writenodes_jettison_skips_the_undead() {
+    fn write_nodes_jettison_skips_the_undead() {
         // The jettison gate (triangle.c:7810): an UNDEADVERTEX row is
         // skipped in the output and keeps its old marker (no number
         // lands on it), and the numbering of the later vertices runs
@@ -812,19 +812,19 @@ mod tests {
         });
         let mut m = core_mesh(&b, 3, 0);
         let (points, _attrs, _markers) = three_points();
-        transfernodes(&mut m, &mut b, &points, &[], None, 3, 0).expect("load");
+        transfer_nodes(&mut m, &mut b, &points, &[], None, 3, 0).expect("load");
         let mut t = m.vertices.traversal();
-        let v1 = m.vertextraverse(&mut t).expect("vx");
-        let v2 = m.vertextraverse(&mut t).expect("vx");
-        let v3 = m.vertextraverse(&mut t).expect("vx");
+        let v1 = m.traverse_vertex(&mut t).expect("vx");
+        let v2 = m.traverse_vertex(&mut t).expect("vx");
+        let v3 = m.traverse_vertex(&mut t).expect("vx");
         // the graveyard row the way divconqdelaunay leaves it (type
         // UNDEADVERTEX; m->undeads is the C counter shape)
-        m.vx_set_type(v2, UNDEADVERTEX);
+        m.vx_set_type(v2, UNDEAD_VERTEX);
         m.undeads = 1;
         let mut plist: Vec<Point2> = Vec::new();
         let mut palist: Vec<f64> = Vec::new();
         let mut pmlist: Vec<i32> = Vec::new();
-        writenodes(&mut m, &b, &mut plist, &mut palist, &mut pmlist).expect("writenodes");
+        write_nodes(&mut m, &b, &mut plist, &mut palist, &mut pmlist).expect("writenodes");
         assert_eq!(plist, vec![points[0], points[2]]);
         assert_eq!(pmlist, vec![0, 0]);
         // v1 is numbered 1, the undead keeps the default 0 mark, v3 is
@@ -835,7 +835,7 @@ mod tests {
     }
 
     #[test]
-    fn numbernodes_numbers_all_and_advances_past_the_living() {
+    fn number_nodes_numbers_all_and_advances_past_the_living() {
         // C numbernodes (triangle.c:7845-7854): every vertex gets a
         // marker equal to its number, the undead included, while the
         // number advances only past non-undead rows under jettison
@@ -845,14 +845,14 @@ mod tests {
         });
         let mut m = core_mesh(&b, 3, 0);
         let (points, _attrs, _markers) = three_points();
-        transfernodes(&mut m, &mut b, &points, &[], None, 3, 0).expect("load");
+        transfer_nodes(&mut m, &mut b, &points, &[], None, 3, 0).expect("load");
         let mut t = m.vertices.traversal();
-        let v1 = m.vertextraverse(&mut t).expect("vx");
-        let v2 = m.vertextraverse(&mut t).expect("vx");
-        let v3 = m.vertextraverse(&mut t).expect("vx");
-        m.vx_set_type(v2, UNDEADVERTEX);
+        let v1 = m.traverse_vertex(&mut t).expect("vx");
+        let v2 = m.traverse_vertex(&mut t).expect("vx");
+        let v3 = m.traverse_vertex(&mut t).expect("vx");
+        m.vx_set_type(v2, UNDEAD_VERTEX);
         m.undeads = 1;
-        numbernodes(&mut m, &b);
+        number_nodes(&mut m, &b);
         assert_eq!(m.vx_mark(v1), 1);
         // the undead row is numbered with the current number (the
         // number v1's advance left) and does not advance it, so v3
@@ -863,7 +863,7 @@ mod tests {
     }
 
     #[test]
-    fn writeelements_records_the_corner_numbers() {
+    fn write_elements_records_the_corner_numbers() {
         // C writeelements (triangle.c:7893-7924) over the
         // two-triangle square, numbered by numbernodes: the corners
         // are the vertex numbers in org/dest/apex order, and the
@@ -875,16 +875,16 @@ mod tests {
         m.set_tri_attribute(t1, 1, 8.0);
         m.set_tri_attribute(t2, 0, 9.0);
         m.set_tri_attribute(t2, 1, 10.0);
-        numbernodes(&mut m, &b);
+        number_nodes(&mut m, &b);
         let mut tlist: Vec<i32> = Vec::new();
         let mut talist: Vec<f64> = Vec::new();
-        writeelements(&mut m, &b, &mut tlist, &mut talist).expect("writeelements");
+        write_elements(&mut m, &b, &mut tlist, &mut talist).expect("writeelements");
         assert_eq!(tlist, vec![1, 2, 3, 1, 3, 4]);
         assert_eq!(talist, vec![7.0, 8.0, 9.0, 10.0]);
     }
 
     #[test]
-    fn writeelements_above_order_one_adds_the_mid_edge_nodes() {
+    fn write_elements_above_order_one_adds_the_mid_edge_nodes() {
         // C writeelements' order-2 branch (triangle.c:7906-7915):
         // after highorder records the mid-edge nodes, the six corners
         // are p1, p2, p3, mid1 (highorderindex + 1), mid2
@@ -894,11 +894,11 @@ mod tests {
             o.element_order(2);
         });
         let (mut m, _t1, _t2, _v) = square_two_triangles(&b, 0);
-        crate::algorithm::refine::highorder(&mut m, &b).expect("highorder");
-        numbernodes(&mut m, &b);
+        crate::algorithm::refine::high_order(&mut m, &b).expect("highorder");
+        number_nodes(&mut m, &b);
         let mut tlist: Vec<i32> = Vec::new();
         let mut talist: Vec<f64> = Vec::new();
-        writeelements(&mut m, &b, &mut tlist, &mut talist).expect("writeelements");
+        write_elements(&mut m, &b, &mut tlist, &mut talist).expect("writeelements");
         // the five mid-edge nodes are pool rows 5..=9 in creation
         // order (t1's edges 0, 1, 2 then t2's edges 1, 2; the
         // interior edge's node is created once, from t1), so the
@@ -908,7 +908,7 @@ mod tests {
     }
 
     #[test]
-    fn writepoly_records_endpoint_numbers_and_markers() {
+    fn write_poly_records_endpoint_numbers_and_markers() {
         // C writepoly (triangle.c:7957-7974) over two hand-made
         // subsegments on the square's vertices (numbered by
         // numbernodes): the endpoint pairs are the vertexmark numbers
@@ -920,18 +920,18 @@ mod tests {
         });
         let (mut m, _t1, _t2, v) = square_two_triangles(&b, 0);
         let [a, e, c, _d] = v;
-        let s1 = m.makesubseg().expect("subseg");
-        m.setsorg(s1, a);
-        m.setsdest(s1, e);
+        let s1 = m.make_subseg().expect("subseg");
+        m.set_subseg_org(s1, a);
+        m.set_subseg_dest(s1, e);
         m.set_sub_mark(s1.ss, 7);
-        let s2 = m.makesubseg().expect("subseg");
-        m.setsorg(s2, e);
-        m.setsdest(s2, c);
+        let s2 = m.make_subseg().expect("subseg");
+        m.set_subseg_org(s2, e);
+        m.set_subseg_dest(s2, c);
         m.set_sub_mark(s2.ss, 8);
-        numbernodes(&mut m, &b);
+        number_nodes(&mut m, &b);
         let mut slist: Vec<[i32; 2]> = Vec::new();
         let mut smlist: Vec<i32> = Vec::new();
-        writepoly(&mut m, &b, &mut slist, &mut smlist).expect("writepoly");
+        write_poly(&mut m, &b, &mut slist, &mut smlist).expect("writepoly");
         assert_eq!(slist, vec![[1, 2], [2, 3]]);
         assert_eq!(smlist, vec![7, 8]);
         // -B: the segment list is written, the markers are not
@@ -942,19 +942,19 @@ mod tests {
         });
         let (mut m, _t1, _t2, v) = square_two_triangles(&b, 0);
         let [a, e, _c, _d] = v;
-        let s1 = m.makesubseg().expect("subseg");
-        m.setsorg(s1, a);
-        m.setsdest(s1, e);
-        numbernodes(&mut m, &b);
+        let s1 = m.make_subseg().expect("subseg");
+        m.set_subseg_org(s1, a);
+        m.set_subseg_dest(s1, e);
+        number_nodes(&mut m, &b);
         let mut slist: Vec<[i32; 2]> = Vec::new();
         let mut smlist: Vec<i32> = Vec::new();
-        writepoly(&mut m, &b, &mut slist, &mut smlist).expect("writepoly");
+        write_poly(&mut m, &b, &mut slist, &mut smlist).expect("writepoly");
         assert_eq!(slist, vec![[1, 2]]);
         assert!(smlist.is_empty());
     }
 
     #[test]
-    fn writeedges_visits_every_edge_once() {
+    fn write_edges_visits_every_edge_once() {
         // C writeedges (triangle.c:8017-8045) over the two-triangle
         // square without segments: the five edges are emitted from
         // t1's three orients then t2's hull orients (the interior
@@ -964,16 +964,16 @@ mod tests {
         let b = behavior();
         let (mut m, _t1, _t2, _v) = square_two_triangles(&b, 0);
         m.edges = 5; // the m->edges writer of the C entry points
-        numbernodes(&mut m, &b);
+        number_nodes(&mut m, &b);
         let mut elist: Vec<[i32; 2]> = Vec::new();
         let mut emlist: Vec<i32> = Vec::new();
-        writeedges(&mut m, &b, &mut elist, &mut emlist).expect("writeedges");
+        write_edges(&mut m, &b, &mut elist, &mut emlist).expect("writeedges");
         assert_eq!(elist, vec![[1, 2], [2, 3], [3, 1], [3, 4], [4, 1]]);
         assert_eq!(emlist, vec![1, 1, 0, 1, 1]);
     }
 
     #[test]
-    fn writeedges_marks_the_segment_edges_under_pslg() {
+    fn write_edges_marks_the_segment_edges_under_pslg() {
         // The usesegments branch (triangle.c:8030-8036): a bonded
         // subsegment lends its boundary marker to the edge, an
         // unbonded edge writes 0.
@@ -981,20 +981,20 @@ mod tests {
             o.pslg();
         });
         let (mut m, t1, _t2, _v) = square_two_triangles(&b, 0);
-        let s = m.makesubseg().expect("subseg");
+        let s = m.make_subseg().expect("subseg");
         m.set_sub_mark(s.ss, 7);
-        m.tsbond(Otri { tri: t1, orient: 0 }, s);
+        m.bond_tri_subseg(Otri { tri: t1, orient: 0 }, s);
         m.edges = 5;
-        numbernodes(&mut m, &b);
+        number_nodes(&mut m, &b);
         let mut elist: Vec<[i32; 2]> = Vec::new();
         let mut emlist: Vec<i32> = Vec::new();
-        writeedges(&mut m, &b, &mut elist, &mut emlist).expect("writeedges");
+        write_edges(&mut m, &b, &mut elist, &mut emlist).expect("writeedges");
         assert_eq!(elist, vec![[1, 2], [2, 3], [3, 1], [3, 4], [4, 1]]);
         assert_eq!(emlist, vec![7, 0, 0, 0, 0]);
     }
 
     #[test]
-    fn writeneighbors_numbers_reads_and_restores() {
+    fn write_neighbors_numbers_reads_and_restores() {
         // C writeneighbors (triangle.c:8083-8129) over the
         // two-triangle square under -n: the numbering writes the
         // element numbers over word 6's low half, the neighbor reads
@@ -1005,7 +1005,7 @@ mod tests {
         });
         let (mut m, t1, t2, _v) = square_two_triangles(&b, 0);
         let mut nlist: Vec<i32> = Vec::new();
-        writeneighbors(&mut m, &b, &mut nlist).expect("writeneighbors");
+        write_neighbors(&mut m, &b, &mut nlist).expect("writeneighbors");
         // t1 is element 1, t2 element 2 (allocation order); t1's
         // neighbors from orients 1, 2, 0: hull, t2, hull; t2's: hull,
         // hull, t1 (triangle.c:8101-8113).
@@ -1022,7 +1022,7 @@ mod tests {
     }
 
     #[test]
-    fn writeneighbors_restores_the_subseg_slots_under_pslg() {
+    fn write_neighbors_restores_the_subseg_slots_under_pslg() {
         // The -p twin: word 6 is a live subseg slot, and the C pun
         // saves and restores its low half around the numbering
         // (triangle.c:8078-8093, 8119-8129) - the bonded edge pivots
@@ -1032,17 +1032,17 @@ mod tests {
             o.neighbors();
         });
         let (mut m, t1, _t2, _v) = square_two_triangles(&b, 0);
-        let s = m.makesubseg().expect("subseg");
-        m.tsbond(Otri { tri: t1, orient: 0 }, s);
+        let s = m.make_subseg().expect("subseg");
+        m.bond_tri_subseg(Otri { tri: t1, orient: 0 }, s);
         let mut nlist: Vec<i32> = Vec::new();
-        writeneighbors(&mut m, &b, &mut nlist).expect("writeneighbors");
+        write_neighbors(&mut m, &b, &mut nlist).expect("writeneighbors");
         assert_eq!(nlist, vec![-1, 2, -1, -1, -1, 1]);
-        assert_eq!(m.tspivot(Otri { tri: t1, orient: 0 }), s);
+        assert_eq!(m.tri_subseg(Otri { tri: t1, orient: 0 }), s);
     }
 
     #[test]
     #[should_panic(expected = "the writeneighbors numbering overlay exists only with -n")]
-    fn writeneighbors_without_the_option_refuses_the_out_of_row_pun() {
+    fn write_neighbors_without_the_option_refuses_the_out_of_row_pun() {
         // The widened row exists only under -n (C: triangle.c:
         // 491-495); C puns past the row here (its own TODO,
         // triangle.c:8073-8076), the port refuses loudly at the
@@ -1052,11 +1052,11 @@ mod tests {
         });
         let (mut m, _t1, _t2, _v) = square_two_triangles(&b, 0);
         let mut nlist: Vec<i32> = Vec::new();
-        let _ = writeneighbors(&mut m, &b, &mut nlist);
+        let _ = write_neighbors(&mut m, &b, &mut nlist);
     }
 
     #[test]
-    fn writeneighbors_on_an_empty_mesh_still_numbers_outer_space() {
+    fn write_neighbors_on_an_empty_mesh_still_numbers_outer_space() {
         // With no triangles the loops do not run, but C's dummy
         // store (triangle.c:8094) is unconditional.
         let b = behavior_with(|o| {
@@ -1064,7 +1064,7 @@ mod tests {
         });
         let mut m = core_mesh(&b, 3, 0);
         let mut nlist: Vec<i32> = Vec::new();
-        writeneighbors(&mut m, &b, &mut nlist).expect("writeneighbors");
+        write_neighbors(&mut m, &b, &mut nlist).expect("writeneighbors");
         assert!(nlist.is_empty());
         let numberindex = m.tri_shape.numberindex.expect("overlay");
         assert_eq!(m.tri_int(DUMMY_TRI, numberindex), -1);

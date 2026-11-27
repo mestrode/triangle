@@ -32,7 +32,7 @@
 //! - The three "infinite" bounding box vertices (boundingbox) are C
 //!   trimalloc allocations outside the vertex pool; the port mirror is
 //!   the reserved out-of-pool INFVERTEX ids plus the owned store, per
-//!   deviation D12 (mesh/slots.rs, mesh/mod.rs::infvertex_store).
+//!   deviation D12 (mesh/mesh/slots.rs, mesh/mod.rs::infvertex_store).
 //! - The trimalloc'd scratch of part 1 (sortarray) and part 2 (the
 //!   event arena, the event heap index array, the splay plumbing) is
 //!   not mesh state, is not counted by C's triangle_memory, and
@@ -52,7 +52,7 @@
 //!   slot of front handles (setorg, triangle.c:5388/5403; cleared at
 //!   5016) and reads it back reinterpreted (triangle.c:5008) in
 //!   exactly one function, check4deadevent. The port stores a tagged
-//!   full-width word through mesh/slots.rs orgword/setorgword (the same
+//!   full-width word through mesh/mesh/slots.rs orgword/setorgword (the same
 //!   slot org/setorg use); bit 32 tags the event, the low 32 bits are
 //!   the arena index, and the all-zero word keeps the C NULL meaning.
 //! - sweeplinedelaunay raises Error::Input at C's TRI_INPUT return
@@ -76,14 +76,14 @@
 //! removed when the scaffolding is consumed.
 #![allow(dead_code)]
 
-use crate::algorithm::transform::{flip, insertvertex, InsertVertexResult};
-use crate::mesh::handles::{decode, encode, Otri, DUMMY_TRI, NULL};
+use crate::algorithm::transform::{flip, insert_vertex, InsertVertexResult};
+use crate::mesh::handles::{decode, encode, Otri, DUMMY_TRI, NULL_ROW};
 use crate::mesh::pool::Oom;
-use crate::mesh::slots::{INFVERTEX1, INFVERTEX2, INFVERTEX3, UNDEADVERTEX};
-use crate::mesh::util::{randomnation, vertex_coords};
+use crate::mesh::slots::{INF_VERTEX_1, INF_VERTEX_2, INF_VERTEX_3, UNDEAD_VERTEX};
+use crate::mesh::util::{random_below, vertex_coords};
 use crate::mesh::Mesh;
 use crate::options::Behavior;
-use crate::predicates::{tri_counterclockwise, tri_incircle};
+use crate::predicates::{counterclockwise, incircle};
 
 /// C: vertexsort (triangle.c:3870-3930). Sort an array of vertices by
 /// x-coordinate, using the y-coordinate as a secondary key. Uses quicksort.
@@ -91,7 +91,7 @@ use crate::predicates::{tri_counterclockwise, tri_incircle};
 /// quicksort mistakes. (C comments preserved in the body.) The C
 /// `arraysize` parameter is the slice length; the recursion passes
 /// subslices exactly where C passes shifted pointers.
-pub(crate) fn vertexsort(m: &mut Mesh, sortarray: &mut [u32]) {
+pub(crate) fn vertex_sort(m: &mut Mesh, sortarray: &mut [u32]) {
     let arraysize = sortarray.len() as i32;
 
     let mut left: i32;
@@ -110,7 +110,7 @@ pub(crate) fn vertexsort(m: &mut Mesh, sortarray: &mut [u32]) {
     }
     // Choose a random pivot to split the array.
     // C: pivot = (int) randomnation((unsigned int) arraysize);
-    let pivot = randomnation(m, arraysize as u32) as usize;
+    let pivot = random_below(m, arraysize as u32) as usize;
     let pivotx = m.vx_x(sortarray[pivot]);
     let pivoty = m.vx_y(sortarray[pivot]);
     // Split the array.
@@ -146,11 +146,11 @@ pub(crate) fn vertexsort(m: &mut Mesh, sortarray: &mut [u32]) {
     }
     if left > 1 {
         // Recursively sort the left subset.
-        vertexsort(m, &mut sortarray[..left as usize]);
+        vertex_sort(m, &mut sortarray[..left as usize]);
     }
     if right < arraysize - 2 {
         // Recursively sort the right subset.
-        vertexsort(m, &mut sortarray[right as usize + 1..]);
+        vertex_sort(m, &mut sortarray[right as usize + 1..]);
     }
 }
 
@@ -161,7 +161,7 @@ pub(crate) fn vertexsort(m: &mut Mesh, sortarray: &mut [u32]) {
 /// y-coordinate if axis == 1. Very similar to the vertexsort() procedure,
 /// but runs in randomized linear time. (C comments preserved in the
 /// body.)
-pub(crate) fn vertexmedian(m: &mut Mesh, sortarray: &mut [u32], median: i32, axis: i32) {
+pub(crate) fn vertex_median(m: &mut Mesh, sortarray: &mut [u32], median: i32, axis: i32) {
     let arraysize = sortarray.len() as i32;
     let axis = axis as usize;
 
@@ -185,7 +185,7 @@ pub(crate) fn vertexmedian(m: &mut Mesh, sortarray: &mut [u32], median: i32, axi
     }
     // Choose a random pivot to split the array.
     // C: pivot = (int) randomnation((unsigned int) arraysize);
-    let pivot = randomnation(m, arraysize as u32) as usize;
+    let pivot = random_below(m, arraysize as u32) as usize;
     let pivot1 = m.vx_real(sortarray[pivot], axis);
     let pivot2 = m.vx_real(sortarray[pivot], 1 - axis);
     // Split the array.
@@ -223,11 +223,11 @@ pub(crate) fn vertexmedian(m: &mut Mesh, sortarray: &mut [u32], median: i32, axi
     //   conditionals is true.
     if left > median {
         // Recursively shuffle the left subset.
-        vertexmedian(m, &mut sortarray[..left as usize], median, axis as i32);
+        vertex_median(m, &mut sortarray[..left as usize], median, axis as i32);
     }
     if right < median - 1 {
         // Recursively shuffle the right subset.
-        vertexmedian(
+        vertex_median(
             m,
             &mut sortarray[right as usize + 1..],
             median - right - 1,
@@ -242,7 +242,7 @@ pub(crate) fn vertexmedian(m: &mut Mesh, sortarray: &mut [u32], median: i32, axi
 /// axis == 1. For the base case, subsets containing only two or three
 /// vertices are always sorted by x-coordinate. (C comments preserved in
 /// the body.)
-pub(crate) fn alternateaxes(m: &mut Mesh, sortarray: &mut [u32], mut axis: i32) {
+pub(crate) fn alternate_axes(m: &mut Mesh, sortarray: &mut [u32], mut axis: i32) {
     let arraysize = sortarray.len() as i32;
 
     let divider = arraysize >> 1;
@@ -252,13 +252,13 @@ pub(crate) fn alternateaxes(m: &mut Mesh, sortarray: &mut [u32], mut axis: i32) 
         axis = 0;
     }
     // Partition with a horizontal or vertical cut.
-    vertexmedian(m, sortarray, divider, axis);
+    vertex_median(m, sortarray, divider, axis);
     // Recursively partition the subsets with a cross cut.
     if arraysize - divider >= 2 {
         if divider >= 2 {
-            alternateaxes(m, &mut sortarray[..divider as usize], 1 - axis);
+            alternate_axes(m, &mut sortarray[..divider as usize], 1 - axis);
         }
-        alternateaxes(m, &mut sortarray[divider as usize..], 1 - axis);
+        alternate_axes(m, &mut sortarray[divider as usize..], 1 - axis);
     }
 }
 
@@ -298,7 +298,7 @@ pub(crate) fn alternateaxes(m: &mut Mesh, sortarray: &mut [u32], mut axis: i32) 
 // flow stays verbatim and the dead stores are silenced here.
 #[allow(unused_assignments)]
 #[allow(clippy::too_many_arguments)] // the C signature carries seven parameters
-pub(crate) fn mergehulls(
+pub(crate) fn merge_hulls(
     m: &mut Mesh,
     b: &Behavior,
     farleft: &mut Otri,
@@ -311,10 +311,10 @@ pub(crate) fn mergehulls(
     let mut innerleftapex = m.apex(*innerleft);
     let mut innerrightorg = m.org(*innerright);
     let mut innerrightapex = m.apex(*innerright);
-    let mut farleftpt = NULL;
-    let mut farleftapex = NULL;
-    let mut farrightpt = NULL;
-    let mut farrightapex = NULL;
+    let mut farleftpt = NULL_ROW;
+    let mut farleftapex = NULL_ROW;
+    let mut farrightpt = NULL_ROW;
+    let mut farrightapex = NULL_ROW;
     // Special treatment for horizontal cuts.
     if b.dwyer && (axis == 1) {
         farleftpt = m.org(*farleft);
@@ -325,8 +325,8 @@ pub(crate) fn mergehulls(
         //   topmost and bottommost vertex of each hull, rather than the
         //   leftmost and rightmost vertices.
         while m.vx_y(farleftapex) < m.vx_y(farleftpt) {
-            farleft.lnextself();
-            m.symself(farleft);
+            farleft.lnext_self();
+            m.sym_self(farleft);
             farleftpt = farleftapex;
             farleftapex = m.apex(*farleft);
         }
@@ -340,8 +340,8 @@ pub(crate) fn mergehulls(
             checkvertex = m.apex(checkedge);
         }
         while m.vx_y(innerrightapex) < m.vx_y(innerrightorg) {
-            innerright.lnextself();
-            m.symself(innerright);
+            innerright.lnext_self();
+            m.sym_self(innerright);
             innerrightorg = innerrightapex;
             innerrightapex = m.apex(*innerright);
         }
@@ -359,7 +359,7 @@ pub(crate) fn mergehulls(
     loop {
         let mut changemade = false;
         // Make innerleftdest the "bottommost" vertex of the left hull.
-        if tri_counterclockwise(
+        if counterclockwise(
             m,
             b,
             vertex_coords(m, innerleftdest),
@@ -367,14 +367,14 @@ pub(crate) fn mergehulls(
             vertex_coords(m, innerrightorg),
         ) > 0.0
         {
-            innerleft.lprevself();
-            m.symself(innerleft);
+            innerleft.lprev_self();
+            m.sym_self(innerleft);
             innerleftdest = innerleftapex;
             innerleftapex = m.apex(*innerleft);
             changemade = true;
         }
         // Make innerrightorg the "bottommost" vertex of the right hull.
-        if tri_counterclockwise(
+        if counterclockwise(
             m,
             b,
             vertex_coords(m, innerrightapex),
@@ -382,8 +382,8 @@ pub(crate) fn mergehulls(
             vertex_coords(m, innerleftdest),
         ) > 0.0
         {
-            innerright.lnextself();
-            m.symself(innerright);
+            innerright.lnext_self();
+            m.sym_self(innerright);
             innerrightorg = innerrightapex;
             innerrightapex = m.apex(*innerright);
             changemade = true;
@@ -396,14 +396,14 @@ pub(crate) fn mergehulls(
     let mut leftcand = m.sym(*innerleft);
     let mut rightcand = m.sym(*innerright);
     // Create the bottom new bounding triangle.
-    let mut baseedge = m.maketriangle(b.usesegments, b.vararea)?;
+    let mut baseedge = m.make_triangle(b.usesegments, b.vararea)?;
     // Connect it to the bounding boxes of the left and right triangulations.
     m.bond(baseedge, *innerleft);
-    baseedge.lnextself();
+    baseedge.lnext_self();
     m.bond(baseedge, *innerright);
-    baseedge.lnextself();
-    m.setorg(baseedge, innerrightorg);
-    m.setdest(baseedge, innerleftdest);
+    baseedge.lnext_self();
+    m.set_org(baseedge, innerrightorg);
+    m.set_dest(baseedge, innerleftdest);
     // Apex is intentionally left NULL.
 
     // Fix the extreme triangles if necessary.
@@ -427,14 +427,14 @@ pub(crate) fn mergehulls(
         //   because even though the left triangulation might seem finished now,
         //   moving up on the right triangulation might reveal a new vertex of
         //   the left triangulation.  And vice-versa.)
-        let leftfinished = tri_counterclockwise(
+        let leftfinished = counterclockwise(
             m,
             b,
             vertex_coords(m, upperleft),
             vertex_coords(m, lowerleft),
             vertex_coords(m, lowerright),
         ) <= 0.0;
-        let rightfinished = tri_counterclockwise(
+        let rightfinished = counterclockwise(
             m,
             b,
             vertex_coords(m, upperright),
@@ -443,15 +443,15 @@ pub(crate) fn mergehulls(
         ) <= 0.0;
         if leftfinished && rightfinished {
             // Create the top new bounding triangle.
-            let mut nextedge = m.maketriangle(b.usesegments, b.vararea)?;
-            m.setorg(nextedge, lowerleft);
-            m.setdest(nextedge, lowerright);
+            let mut nextedge = m.make_triangle(b.usesegments, b.vararea)?;
+            m.set_org(nextedge, lowerleft);
+            m.set_dest(nextedge, lowerright);
             // Apex is intentionally left NULL.
             // Connect it to the bounding boxes of the two triangulations.
             m.bond(nextedge, baseedge);
-            nextedge.lnextself();
+            nextedge.lnext_self();
             m.bond(nextedge, rightcand);
-            nextedge.lnextself();
+            nextedge.lnext_self();
             m.bond(nextedge, leftcand);
             // Special treatment for horizontal cuts.
             if b.dwyer && (axis == 1) {
@@ -472,8 +472,8 @@ pub(crate) fn mergehulls(
                     checkvertex = m.apex(checkedge);
                 }
                 while m.vx_x(farrightapex) > m.vx_x(farrightpt) {
-                    farright.lprevself();
-                    m.symself(farright);
+                    farright.lprev_self();
+                    m.sym_self(farright);
                     farrightpt = farrightapex;
                     farrightapex = m.apex(*farright);
                 }
@@ -484,13 +484,13 @@ pub(crate) fn mergehulls(
         if !leftfinished {
             // What vertex would be exposed if an edge were deleted?
             let mut nextedge = leftcand.lprev();
-            m.symself(&mut nextedge);
+            m.sym_self(&mut nextedge);
             let mut nextapex = m.apex(nextedge);
             // If nextapex is NULL, then no vertex would be exposed; the
             //   triangulation would have been eaten right through.
-            if nextapex != NULL {
+            if nextapex != NULL_ROW {
                 // Check whether the edge is Delaunay.
-                let mut badedge = tri_incircle(
+                let mut badedge = incircle(
                     m,
                     b,
                     vertex_coords(m, lowerleft),
@@ -501,32 +501,32 @@ pub(crate) fn mergehulls(
                 while badedge {
                     // Eliminate the edge with an edge flip.  As a result, the
                     //   left triangulation will have one more boundary triangle.
-                    nextedge.lnextself();
+                    nextedge.lnext_self();
                     let topcasing = m.sym(nextedge);
-                    nextedge.lnextself();
+                    nextedge.lnext_self();
                     let sidecasing = m.sym(nextedge);
                     m.bond(nextedge, topcasing);
                     m.bond(leftcand, sidecasing);
-                    leftcand.lnextself();
+                    leftcand.lnext_self();
                     let outercasing = m.sym(leftcand);
-                    nextedge.lprevself();
+                    nextedge.lprev_self();
                     m.bond(nextedge, outercasing);
                     // Correct the vertices to reflect the edge flip.
-                    m.setorg(leftcand, lowerleft);
-                    m.setdest(leftcand, NULL);
-                    m.setapex(leftcand, nextapex);
-                    m.setorg(nextedge, NULL);
-                    m.setdest(nextedge, upperleft);
-                    m.setapex(nextedge, nextapex);
+                    m.set_org(leftcand, lowerleft);
+                    m.set_dest(leftcand, NULL_ROW);
+                    m.set_apex(leftcand, nextapex);
+                    m.set_org(nextedge, NULL_ROW);
+                    m.set_dest(nextedge, upperleft);
+                    m.set_apex(nextedge, nextapex);
                     // Consider the newly exposed vertex.
                     upperleft = nextapex;
                     // What vertex would be exposed if another edge were deleted?
                     // C: otricopy(sidecasing, nextedge).
                     nextedge = sidecasing;
                     nextapex = m.apex(nextedge);
-                    if nextapex != NULL {
+                    if nextapex != NULL_ROW {
                         // Check whether the edge is Delaunay.
-                        badedge = tri_incircle(
+                        badedge = incircle(
                             m,
                             b,
                             vertex_coords(m, lowerleft),
@@ -545,13 +545,13 @@ pub(crate) fn mergehulls(
         if !rightfinished {
             // What vertex would be exposed if an edge were deleted?
             let mut nextedge = rightcand.lnext();
-            m.symself(&mut nextedge);
+            m.sym_self(&mut nextedge);
             let mut nextapex = m.apex(nextedge);
             // If nextapex is NULL, then no vertex would be exposed; the
             //   triangulation would have been eaten right through.
-            if nextapex != NULL {
+            if nextapex != NULL_ROW {
                 // Check whether the edge is Delaunay.
-                let mut badedge = tri_incircle(
+                let mut badedge = incircle(
                     m,
                     b,
                     vertex_coords(m, lowerleft),
@@ -562,32 +562,32 @@ pub(crate) fn mergehulls(
                 while badedge {
                     // Eliminate the edge with an edge flip.  As a result, the
                     //   right triangulation will have one more boundary triangle.
-                    nextedge.lprevself();
+                    nextedge.lprev_self();
                     let topcasing = m.sym(nextedge);
-                    nextedge.lprevself();
+                    nextedge.lprev_self();
                     let sidecasing = m.sym(nextedge);
                     m.bond(nextedge, topcasing);
                     m.bond(rightcand, sidecasing);
-                    rightcand.lprevself();
+                    rightcand.lprev_self();
                     let outercasing = m.sym(rightcand);
-                    nextedge.lnextself();
+                    nextedge.lnext_self();
                     m.bond(nextedge, outercasing);
                     // Correct the vertices to reflect the edge flip.
-                    m.setorg(rightcand, NULL);
-                    m.setdest(rightcand, lowerright);
-                    m.setapex(rightcand, nextapex);
-                    m.setorg(nextedge, upperright);
-                    m.setdest(nextedge, NULL);
-                    m.setapex(nextedge, nextapex);
+                    m.set_org(rightcand, NULL_ROW);
+                    m.set_dest(rightcand, lowerright);
+                    m.set_apex(rightcand, nextapex);
+                    m.set_org(nextedge, upperright);
+                    m.set_dest(nextedge, NULL_ROW);
+                    m.set_apex(nextedge, nextapex);
                     // Consider the newly exposed vertex.
                     upperright = nextapex;
                     // What vertex would be exposed if another edge were deleted?
                     // C: otricopy(sidecasing, nextedge).
                     nextedge = sidecasing;
                     nextapex = m.apex(nextedge);
-                    if nextapex != NULL {
+                    if nextapex != NULL_ROW {
                         // Check whether the edge is Delaunay.
-                        badedge = tri_incircle(
+                        badedge = incircle(
                             m,
                             b,
                             vertex_coords(m, lowerleft),
@@ -604,7 +604,7 @@ pub(crate) fn mergehulls(
         }
         if leftfinished
             || (!rightfinished
-                && tri_incircle(
+                && incircle(
                     m,
                     b,
                     vertex_coords(m, upperleft),
@@ -617,7 +617,7 @@ pub(crate) fn mergehulls(
             //   to `upperright'.
             m.bond(baseedge, rightcand);
             baseedge = rightcand.lprev();
-            m.setdest(baseedge, lowerleft);
+            m.set_dest(baseedge, lowerleft);
             lowerright = upperright;
             rightcand = m.sym(baseedge);
             upperright = m.apex(rightcand);
@@ -626,7 +626,7 @@ pub(crate) fn mergehulls(
             //   to `lowerright'.
             m.bond(baseedge, leftcand);
             baseedge = leftcand.lnext();
-            m.setorg(baseedge, lowerright);
+            m.set_org(baseedge, lowerright);
             lowerleft = upperleft;
             leftcand = m.sym(baseedge);
             upperleft = m.apex(leftcand);
@@ -650,7 +650,7 @@ pub(crate) fn mergehulls(
 // alternative of falling out of the else-if chain is C-invisible control
 // flow.
 #[allow(clippy::needless_return)]
-pub(crate) fn divconqrecurse(
+pub(crate) fn divconq_recurse(
     m: &mut Mesh,
     b: &Behavior,
     sortarray: &[u32],
@@ -662,20 +662,20 @@ pub(crate) fn divconqrecurse(
     if vertices == 2 {
         // The triangulation of two vertices is an edge.  An edge is
         //   represented by two bounding triangles.
-        *farleft = m.maketriangle(b.usesegments, b.vararea)?;
-        m.setorg(*farleft, sortarray[0]);
-        m.setdest(*farleft, sortarray[1]);
+        *farleft = m.make_triangle(b.usesegments, b.vararea)?;
+        m.set_org(*farleft, sortarray[0]);
+        m.set_dest(*farleft, sortarray[1]);
         // The apex is intentionally left NULL.
-        *farright = m.maketriangle(b.usesegments, b.vararea)?;
-        m.setorg(*farright, sortarray[1]);
-        m.setdest(*farright, sortarray[0]);
+        *farright = m.make_triangle(b.usesegments, b.vararea)?;
+        m.set_org(*farright, sortarray[1]);
+        m.set_dest(*farright, sortarray[0]);
         // The apex is intentionally left NULL.
         m.bond(*farleft, *farright);
-        farleft.lprevself();
-        farright.lnextself();
+        farleft.lprev_self();
+        farright.lnext_self();
         m.bond(*farleft, *farright);
-        farleft.lprevself();
-        farright.lnextself();
+        farleft.lprev_self();
+        farright.lnext_self();
         m.bond(*farleft, *farright);
         // Ensure that the origin of `farleft' is sortarray[0].
         // C: lprev(*farright, *farleft).
@@ -685,11 +685,11 @@ pub(crate) fn divconqrecurse(
         // The triangulation of three vertices is either a triangle (with
         //   three bounding triangles) or two edges (with four bounding
         //   triangles).  In either case, four triangles are created.
-        let mut midtri = m.maketriangle(b.usesegments, b.vararea)?;
-        let mut tri1 = m.maketriangle(b.usesegments, b.vararea)?;
-        let mut tri2 = m.maketriangle(b.usesegments, b.vararea)?;
-        let mut tri3 = m.maketriangle(b.usesegments, b.vararea)?;
-        let area = tri_counterclockwise(
+        let mut midtri = m.make_triangle(b.usesegments, b.vararea)?;
+        let mut tri1 = m.make_triangle(b.usesegments, b.vararea)?;
+        let mut tri2 = m.make_triangle(b.usesegments, b.vararea)?;
+        let mut tri3 = m.make_triangle(b.usesegments, b.vararea)?;
+        let area = counterclockwise(
             m,
             b,
             vertex_coords(m, sortarray[0]),
@@ -698,27 +698,27 @@ pub(crate) fn divconqrecurse(
         );
         if area == 0.0 {
             // Three collinear vertices; the triangulation is two edges.
-            m.setorg(midtri, sortarray[0]);
-            m.setdest(midtri, sortarray[1]);
-            m.setorg(tri1, sortarray[1]);
-            m.setdest(tri1, sortarray[0]);
-            m.setorg(tri2, sortarray[2]);
-            m.setdest(tri2, sortarray[1]);
-            m.setorg(tri3, sortarray[1]);
-            m.setdest(tri3, sortarray[2]);
+            m.set_org(midtri, sortarray[0]);
+            m.set_dest(midtri, sortarray[1]);
+            m.set_org(tri1, sortarray[1]);
+            m.set_dest(tri1, sortarray[0]);
+            m.set_org(tri2, sortarray[2]);
+            m.set_dest(tri2, sortarray[1]);
+            m.set_org(tri3, sortarray[1]);
+            m.set_dest(tri3, sortarray[2]);
             // All apices are intentionally left NULL.
             m.bond(midtri, tri1);
             m.bond(tri2, tri3);
-            midtri.lnextself();
-            tri1.lprevself();
-            tri2.lnextself();
-            tri3.lprevself();
+            midtri.lnext_self();
+            tri1.lprev_self();
+            tri2.lnext_self();
+            tri3.lprev_self();
             m.bond(midtri, tri3);
             m.bond(tri1, tri2);
-            midtri.lnextself();
-            tri1.lprevself();
-            tri2.lnextself();
-            tri3.lprevself();
+            midtri.lnext_self();
+            tri1.lprev_self();
+            tri2.lnext_self();
+            tri3.lprev_self();
             m.bond(midtri, tri1);
             m.bond(tri2, tri3);
             // Ensure that the origin of `farleft' is sortarray[0].
@@ -730,41 +730,41 @@ pub(crate) fn divconqrecurse(
         } else {
             // The three vertices are not collinear; the triangulation is one
             //   triangle, namely `midtri'.
-            m.setorg(midtri, sortarray[0]);
-            m.setdest(tri1, sortarray[0]);
-            m.setorg(tri3, sortarray[0]);
+            m.set_org(midtri, sortarray[0]);
+            m.set_dest(tri1, sortarray[0]);
+            m.set_org(tri3, sortarray[0]);
             // Apices of tri1, tri2, and tri3 are left NULL.
             if area > 0.0 {
                 // The vertices are in counterclockwise order.
-                m.setdest(midtri, sortarray[1]);
-                m.setorg(tri1, sortarray[1]);
-                m.setdest(tri2, sortarray[1]);
-                m.setapex(midtri, sortarray[2]);
-                m.setorg(tri2, sortarray[2]);
-                m.setdest(tri3, sortarray[2]);
+                m.set_dest(midtri, sortarray[1]);
+                m.set_org(tri1, sortarray[1]);
+                m.set_dest(tri2, sortarray[1]);
+                m.set_apex(midtri, sortarray[2]);
+                m.set_org(tri2, sortarray[2]);
+                m.set_dest(tri3, sortarray[2]);
             } else {
                 // The vertices are in clockwise order.
-                m.setdest(midtri, sortarray[2]);
-                m.setorg(tri1, sortarray[2]);
-                m.setdest(tri2, sortarray[2]);
-                m.setapex(midtri, sortarray[1]);
-                m.setorg(tri2, sortarray[1]);
-                m.setdest(tri3, sortarray[1]);
+                m.set_dest(midtri, sortarray[2]);
+                m.set_org(tri1, sortarray[2]);
+                m.set_dest(tri2, sortarray[2]);
+                m.set_apex(midtri, sortarray[1]);
+                m.set_org(tri2, sortarray[1]);
+                m.set_dest(tri3, sortarray[1]);
             }
             // The topology does not depend on how the vertices are ordered.
             m.bond(midtri, tri1);
-            midtri.lnextself();
+            midtri.lnext_self();
             m.bond(midtri, tri2);
-            midtri.lnextself();
+            midtri.lnext_self();
             m.bond(midtri, tri3);
-            tri1.lprevself();
-            tri2.lnextself();
+            tri1.lprev_self();
+            tri2.lnext_self();
             m.bond(tri1, tri2);
-            tri1.lprevself();
-            tri3.lprevself();
+            tri1.lprev_self();
+            tri3.lprev_self();
             m.bond(tri1, tri3);
-            tri2.lnextself();
-            tri3.lprevself();
+            tri2.lnext_self();
+            tri3.lprev_self();
             m.bond(tri2, tri3);
             // Ensure that the origin of `farleft' is sortarray[0].
             // C: otricopy(tri1, *farleft)
@@ -786,15 +786,15 @@ pub(crate) fn divconqrecurse(
         // calls write them; the port initializes the null-handle
         // superset, which is never read before the calls return.
         let mut innerleft = Otri {
-            tri: NULL,
+            tri: NULL_ROW,
             orient: 0,
         };
         let mut innerright = Otri {
-            tri: NULL,
+            tri: NULL_ROW,
             orient: 0,
         };
         // Recursively triangulate each half.
-        divconqrecurse(
+        divconq_recurse(
             m,
             b,
             &sortarray[..divider as usize],
@@ -803,7 +803,7 @@ pub(crate) fn divconqrecurse(
             farleft,
             &mut innerleft,
         )?;
-        divconqrecurse(
+        divconq_recurse(
             m,
             b,
             &sortarray[divider as usize..],
@@ -813,7 +813,7 @@ pub(crate) fn divconqrecurse(
             farright,
         )?;
         // Merge the two triangulations into one.
-        mergehulls(
+        merge_hulls(
             m,
             b,
             farleft,
@@ -830,11 +830,11 @@ pub(crate) fn divconqrecurse(
 /// the convex hull edges, setting boundary markers as appropriate.
 /// Returns the number of edges on the convex hull of the triangulation.
 /// (C comments preserved in the body.)
-pub(crate) fn removeghosts(m: &mut Mesh, b: &Behavior, startghost: &Otri) -> i64 {
+pub(crate) fn remove_ghosts(m: &mut Mesh, b: &Behavior, startghost: &Otri) -> i64 {
     // Find an edge on the convex hull to start point location from.
     // C: lprev(*startghost, searchedge).
     let mut searchedge = startghost.lprev();
-    m.symself(&mut searchedge);
+    m.sym_self(&mut searchedge);
     // C: m->dummytri[0] = encode(searchedge).
     m.set_tri_neighbor_word(DUMMY_TRI, 0, encode(searchedge));
     // Remove the bounding box and count the convex hull edges.
@@ -845,8 +845,8 @@ pub(crate) fn removeghosts(m: &mut Mesh, b: &Behavior, startghost: &Otri) -> i64
         hullsize += 1;
         // C: lnext(dissolveedge, deadtriangle).
         let deadtriangle = dissolveedge.lnext();
-        dissolveedge.lprevself();
-        m.symself(&mut dissolveedge);
+        dissolveedge.lprev_self();
+        m.sym_self(&mut dissolveedge);
         // If no PSLG is involved, set the boundary markers of all the
         //   vertices on the convex hull.  If a PSLG is used, this step is
         //   done later.
@@ -882,7 +882,7 @@ pub(crate) fn removeghosts(m: &mut Mesh, b: &Behavior, startghost: &Otri) -> i64
 /// bounding box, setting boundary markers as appropriate. Returns the
 /// number of edges on the convex hull of the triangulation. (C comments
 /// preserved in the body.)
-pub(crate) fn divconqdelaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, Oom> {
+pub(crate) fn divconq_delaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, Oom> {
     // Allocate an array of pointers to vertices for sorting. C:
     // trimalloc(m->invertices * sizeof(vertex)); the funnel mirror is
     // try_reserve + Oom (D8/D11: no process exit, no manual free).
@@ -893,11 +893,11 @@ pub(crate) fn divconqdelaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, Oom> {
     // C: traversalinit(&m->vertices) (the pool traversal cursor).
     let mut tr = m.vertices.traversal();
     for _ in 0..m.invertices as usize {
-        let v = m.vertextraverse(&mut tr);
-        sortarray.push(v.unwrap_or(NULL));
+        let v = m.traverse_vertex(&mut tr);
+        sortarray.push(v.unwrap_or(NULL_ROW));
     }
     // Sort the vertices.
-    vertexsort(m, &mut sortarray);
+    vertex_sort(m, &mut sortarray);
     // Discard duplicate vertices, which can really mess up the algorithm.
     let mut i: usize = 0;
     for j in 1..m.invertices as usize {
@@ -907,7 +907,7 @@ pub(crate) fn divconqdelaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, Oom> {
             // C prints the duplicate-vertex warning only under _DEBUG
             // (not compiled in the pinned oracle build); the accounting
             // below is C's regardless.
-            m.vx_set_type(sortarray[j], UNDEADVERTEX);
+            m.vx_set_type(sortarray[j], UNDEAD_VERTEX);
             m.undeads += 1;
         } else {
             i += 1;
@@ -920,22 +920,22 @@ pub(crate) fn divconqdelaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, Oom> {
         let divider = i >> 1;
         if i - divider >= 2 {
             if divider >= 2 {
-                alternateaxes(m, &mut sortarray[..divider], 1);
+                alternate_axes(m, &mut sortarray[..divider], 1);
             }
-            alternateaxes(m, &mut sortarray[divider..], 1);
+            alternate_axes(m, &mut sortarray[divider..], 1);
         }
     }
 
     // Form the Delaunay triangulation.
     let mut hullleft = Otri {
-        tri: NULL,
+        tri: NULL_ROW,
         orient: 0,
     };
     let mut hullright = Otri {
-        tri: NULL,
+        tri: NULL_ROW,
         orient: 0,
     };
-    divconqrecurse(
+    divconq_recurse(
         m,
         b,
         &sortarray[..i],
@@ -947,7 +947,7 @@ pub(crate) fn divconqdelaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, Oom> {
     // C: trifree((VOID *) sortarray); the Drop dissolves the free (D11).
     drop(sortarray);
 
-    Ok(removeghosts(m, b, &hullleft))
+    Ok(remove_ghosts(m, b, &hullleft))
 }
 
 /// C: boundingbox (triangle.c:4620-4650). Form an "infinite" bounding
@@ -957,8 +957,8 @@ pub(crate) fn divconqdelaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, Oom> {
 /// (C comments preserved in the body.)
 ///
 /// The three trimalloc'ed vertices of C land under the reserved D12
-/// out-of-pool INFVERTEX ids (mesh/slots.rs; see the deviation register).
-pub(crate) fn boundingbox(m: &mut Mesh, b: &Behavior) -> Result<(), Oom> {
+/// out-of-pool INFVERTEX ids (mesh/mesh/slots.rs; see the deviation register).
+pub(crate) fn bounding_box(m: &mut Mesh, b: &Behavior) -> Result<(), Oom> {
     // Find the width (or height, whichever is larger) of the triangulation.
     let mut width = m.xmax - m.xmin;
     if m.ymax - m.ymin > width {
@@ -971,9 +971,9 @@ pub(crate) fn boundingbox(m: &mut Mesh, b: &Behavior) -> Result<(), Oom> {
     // C: three trimalloc(m->vertices.itembytes) rows outside the vertex
     // pool; the port's D12 mirror: reserved ids + the owned store, written
     // through the chokepoint.
-    m.infvertex1 = INFVERTEX1;
-    m.infvertex2 = INFVERTEX2;
-    m.infvertex3 = INFVERTEX3;
+    m.infvertex1 = INF_VERTEX_1;
+    m.infvertex2 = INF_VERTEX_2;
+    m.infvertex3 = INF_VERTEX_3;
     m.set_vx_x(m.infvertex1, m.xmin - 50.0 * width);
     m.set_vx_y(m.infvertex1, m.ymin - 40.0 * width);
     m.set_vx_x(m.infvertex2, m.xmax + 50.0 * width);
@@ -982,10 +982,10 @@ pub(crate) fn boundingbox(m: &mut Mesh, b: &Behavior) -> Result<(), Oom> {
     m.set_vx_y(m.infvertex3, m.ymax + 60.0 * width);
 
     // Create the bounding box.
-    let inftri = m.maketriangle(b.usesegments, b.vararea)?;
-    m.setorg(inftri, m.infvertex1);
-    m.setdest(inftri, m.infvertex2);
-    m.setapex(inftri, m.infvertex3);
+    let inftri = m.make_triangle(b.usesegments, b.vararea)?;
+    m.set_org(inftri, m.infvertex1);
+    m.set_dest(inftri, m.infvertex2);
+    m.set_apex(inftri, m.infvertex3);
     // Link dummytri to the bounding box so we can always find an
     //   edge to begin searching (point location) from.
     // C: m->dummytri[0] = (triangle) inftri.tri (the raw pointer carries
@@ -1009,34 +1009,34 @@ pub(crate) fn boundingbox(m: &mut Mesh, b: &Behavior) -> Result<(), Oom> {
 /// of the inner mesh). This routine removes these triangles. Returns the
 /// number of edges on the convex hull of the triangulation. (C comments
 /// preserved in the body.)
-pub(crate) fn removebox(m: &mut Mesh, b: &Behavior) -> i64 {
+pub(crate) fn remove_box(m: &mut Mesh, b: &Behavior) -> i64 {
     // Find a boundary triangle.
     let mut nextedge = Otri {
         tri: DUMMY_TRI,
         orient: 0,
     };
-    m.symself(&mut nextedge);
+    m.sym_self(&mut nextedge);
     // Mark a place to stop.
     // C: lprev(nextedge, finaledge).
     let finaledge = nextedge.lprev();
-    nextedge.lnextself();
-    m.symself(&mut nextedge);
+    nextedge.lnext_self();
+    m.sym_self(&mut nextedge);
     // Find a triangle (on the boundary of the vertex set) that isn't
     //   a bounding box triangle.
     // C: lprev(nextedge, searchedge).
     let mut searchedge = nextedge.lprev();
-    m.symself(&mut searchedge);
+    m.sym_self(&mut searchedge);
     // Check whether nextedge is another boundary triangle
     //   adjacent to the first one.
     // C: lnext(nextedge, checkedge).
     let mut checkedge = nextedge.lnext();
-    m.symself(&mut checkedge);
+    m.sym_self(&mut checkedge);
     if checkedge.tri == DUMMY_TRI {
         // Go on to the next triangle.  There are only three boundary
         //   triangles, and this next triangle cannot be the third one,
         //   so it's safe to stop here.
-        searchedge.lprevself();
-        m.symself(&mut searchedge);
+        searchedge.lprev_self();
+        m.sym_self(&mut searchedge);
     }
     // Find a new boundary edge to search from, as the current search
     //   edge lies on a bounding box triangle and will be deleted.
@@ -1047,7 +1047,7 @@ pub(crate) fn removebox(m: &mut Mesh, b: &Behavior) -> i64 {
         hullsize += 1;
         // C: lprev(nextedge, dissolveedge).
         let mut dissolveedge = nextedge.lprev();
-        m.symself(&mut dissolveedge);
+        m.sym_self(&mut dissolveedge);
         // If not using a PSLG, the vertices should be marked now.
         //   (If using a PSLG, markhull() will do the job.)
         if !b.poly {
@@ -1084,15 +1084,15 @@ pub(crate) fn removebox(m: &mut Mesh, b: &Behavior) -> i64 {
     // the D12 mirror zeroes the owned store and resets the ids to the
     // null id (the C pointers dangle unread; the port keeps a defined
     // superset).
-    m.set_vx_x(INFVERTEX1, 0.0);
-    m.set_vx_y(INFVERTEX1, 0.0);
-    m.set_vx_x(INFVERTEX2, 0.0);
-    m.set_vx_y(INFVERTEX2, 0.0);
-    m.set_vx_x(INFVERTEX3, 0.0);
-    m.set_vx_y(INFVERTEX3, 0.0);
-    m.infvertex1 = NULL;
-    m.infvertex2 = NULL;
-    m.infvertex3 = NULL;
+    m.set_vx_x(INF_VERTEX_1, 0.0);
+    m.set_vx_y(INF_VERTEX_1, 0.0);
+    m.set_vx_x(INF_VERTEX_2, 0.0);
+    m.set_vx_y(INF_VERTEX_2, 0.0);
+    m.set_vx_x(INF_VERTEX_3, 0.0);
+    m.set_vx_y(INF_VERTEX_3, 0.0);
+    m.infvertex1 = NULL_ROW;
+    m.infvertex2 = NULL_ROW;
+    m.infvertex3 = NULL_ROW;
 
     hullsize
 }
@@ -1104,7 +1104,7 @@ pub(crate) fn removebox(m: &mut Mesh, b: &Behavior) -> i64 {
 /// C: SAMPLERATE (triangle_config.h "10"): the sweepline front sampler -
 /// one in SAMPLERATE candidate edges is tracked in the splay tree. The D10
 /// per-run draw order mirrors C's exactly.
-const SAMPLERATE: u32 = 10;
+const SAMPLE_RATE: u32 = 10;
 
 /// C: incrementaldelaunay (triangle.c:4761-4786). Forms the Delaunay
 /// triangulation by inserting every input vertex into a bounding box,
@@ -1116,27 +1116,27 @@ const SAMPLERATE: u32 = 10;
 /// C's duplicate accounting (setvertextype(UNDEADVERTEX) + undeads,
 /// triangle.c:4779-4780); the _DEBUG printf above it is compiled out of
 /// the pinned oracle build.
-pub(crate) fn incrementaldelaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, Oom> {
+pub(crate) fn incremental_delaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, Oom> {
     // Create a triangular bounding box.
-    boundingbox(m, b)?;
+    bounding_box(m, b)?;
     // C: traversalinit(&m->vertices) then vertextraverse until NULL: walk
     // every input vertex in pool order.
     let mut tr = m.vertices.traversal();
-    while let Some(vertexloop) = m.vertextraverse(&mut tr) {
+    while let Some(vertexloop) = m.traverse_vertex(&mut tr) {
         let mut starttri = Otri {
             tri: DUMMY_TRI,
             orient: 0,
         };
-        if insertvertex(m, b, vertexloop, &mut starttri, None, false, false, false)?
+        if insert_vertex(m, b, vertexloop, &mut starttri, None, false, false, false)?
             == InsertVertexResult::DuplicateVertex
         {
             // C: setvertextype(vertexloop, UNDEADVERTEX); m->undeads++.
-            m.vx_set_type(vertexloop, UNDEADVERTEX);
+            m.vx_set_type(vertexloop, UNDEAD_VERTEX);
             m.undeads += 1;
         }
     }
     // Remove the bounding box.
-    Ok(removebox(m, b))
+    Ok(remove_box(m, b))
 }
 
 // ---------------------------------------------------------------------------
@@ -1208,7 +1208,7 @@ fn event_index(w: u64) -> u32 {
 /// below it. The y coordinate is the primary key, the x the tiebreak (the
 /// exact C comparison, including the <= on the x tie); every moved event's
 /// heapposition is kept exact.
-pub(crate) fn eventheapinsert(
+pub(crate) fn event_heap_insert(
     heap: &mut [u32],
     heapsize: i32,
     newevent: u32,
@@ -1241,7 +1241,7 @@ pub(crate) fn eventheapinsert(
 /// comparisons are the exact C ones (strict < on both keys here; the
 /// right child competes against the current smallest, which can be
 /// the sifted event itself exactly as C's heap[smallest] reads it).
-pub(crate) fn eventheapify(heap: &mut [u32], heapsize: i32, eventnum: i32, events: &mut [Event]) {
+pub(crate) fn event_heapify(heap: &mut [u32], heapsize: i32, eventnum: i32, events: &mut [Event]) {
     let thisevent = heap[eventnum as usize];
     let eventx = events[thisevent as usize].xkey;
     let eventy = events[thisevent as usize].ykey;
@@ -1286,7 +1286,7 @@ pub(crate) fn eventheapify(heap: &mut [u32], heapsize: i32, eventnum: i32, event
 /// smaller than its ancestors (the do-while with C's exact stop
 /// conditions), then heapify downward from its destination. The
 /// heapsize passed here is the size before the caller's decrement.
-pub(crate) fn eventheapdelete(
+pub(crate) fn event_heap_delete(
     heap: &mut [u32],
     heapsize: i32,
     eventnum: i32,
@@ -1321,7 +1321,7 @@ pub(crate) fn eventheapdelete(
     }
     heap[eventnum as usize] = moveevent;
     events[moveevent as usize].heapposition = eventnum;
-    eventheapify(heap, heapsize - 1, eventnum, events);
+    event_heapify(heap, heapsize - 1, eventnum, events);
 }
 
 /// C: createeventheap (triangle.c:4916-4940). Build the event arena (the
@@ -1337,7 +1337,7 @@ pub(crate) fn eventheapdelete(
 /// C's trimalloc garbage (C writes every field before reading it).
 #[allow(clippy::type_complexity)] // C's three out-params (heap, events,
                                   // freeevents) ride one tuple exactly as the C signature hands them over
-pub(crate) fn createeventheap(m: &Mesh) -> Result<(Vec<u32>, Vec<Event>, Option<u32>), Oom> {
+pub(crate) fn create_event_heap(m: &Mesh) -> Result<(Vec<u32>, Vec<Event>, Option<u32>), Oom> {
     let maxevents = (3 * m.invertices) / 2;
     // C: *eventheap = trimalloc(maxevents * sizeof(struct event *));
     let mut eventheap: Vec<u32> = Vec::new();
@@ -1362,11 +1362,11 @@ pub(crate) fn createeventheap(m: &Mesh) -> Result<(Vec<u32>, Vec<Event>, Option<
     // C: traversalinit(&m->vertices) then one vertextraverse per site.
     let mut tr = m.vertices.traversal();
     for i in 0..m.invertices as usize {
-        let thisvertex = m.vertextraverse(&mut tr).unwrap_or(NULL);
+        let thisvertex = m.traverse_vertex(&mut tr).unwrap_or(NULL_ROW);
         events[i].eventptr = EventPtr::Vertex(thisvertex);
         events[i].xkey = m.vx_x(thisvertex);
         events[i].ykey = m.vx_y(thisvertex);
-        eventheapinsert(&mut eventheap[..], i as i32, i as u32, &mut events[..]);
+        event_heap_insert(&mut eventheap[..], i as i32, i as u32, &mut events[..]);
     }
     // C: *freeevents = NULL; then thread the spare cells high to low, so
     // the head ends at events[m->invertices] exactly like C.
@@ -1385,7 +1385,7 @@ pub(crate) fn createeventheap(m: &Mesh) -> Result<(Vec<u32>, Vec<Event>, Option<
 /// coordinate pair (C passes the vertex pointer but reads only
 /// newsite[0] and newsite[1]). hyperbolacount increments first, on
 /// every call, exactly like C.
-pub(crate) fn rightofhyperbola(m: &mut Mesh, fronttri: &Otri, newsite: (f64, f64)) -> bool {
+pub(crate) fn right_of_hyperbola(m: &mut Mesh, fronttri: &Otri, newsite: (f64, f64)) -> bool {
     m.hyperbolacount += 1;
 
     let leftvertex = m.dest(*fronttri);
@@ -1417,7 +1417,7 @@ pub(crate) fn rightofhyperbola(m: &mut Mesh, fronttri: &Otri, newsite: (f64, f64
 /// the triple (the caller's tri_counterclockwise result rides along
 /// exactly like C's, one predicate call counted at the C call site, not
 /// here). circletopcount increments first, on every call.
-pub(crate) fn circletop(m: &mut Mesh, pa: u32, pb: u32, pc: u32, ccwabc: f64) -> f64 {
+pub(crate) fn circle_top(m: &mut Mesh, pa: u32, pb: u32, pc: u32, ccwabc: f64) -> f64 {
     m.circletopcount += 1;
 
     let pax = m.vx_x(pa);
@@ -1443,7 +1443,7 @@ pub(crate) fn circletop(m: &mut Mesh, pa: u32, pb: u32, pc: u32, ccwabc: f64) ->
 /// from the heap (through its exact heapposition) and clear the slot.
 /// The org-slot read is the single site of the event pun (see
 /// EVENT_WORD_TAG above).
-pub(crate) fn check4deadevent(
+pub(crate) fn check_for_dead_event(
     m: &mut Mesh,
     checktri: &Otri,
     freeevents: &mut Option<u32>,
@@ -1451,17 +1451,17 @@ pub(crate) fn check4deadevent(
     heapsize: &mut i32,
     events: &mut [Event],
 ) {
-    let eventvertex = m.orgword(*checktri);
+    let eventvertex = m.org_word(*checktri);
     if eventvertex != 0 {
         let deadevent = event_index(eventvertex);
         let eventnum = events[deadevent as usize].heapposition;
         // C: deadevent->eventptr = (VOID *) *freeevents;
         events[deadevent as usize].eventptr = EventPtr::Free(*freeevents);
         *freeevents = Some(deadevent);
-        eventheapdelete(eventheap, *heapsize, eventnum, events);
+        event_heap_delete(eventheap, *heapsize, eventnum, events);
         *heapsize -= 1;
         // C: setorg(*checktri, NULL).
-        m.setorgword(*checktri, 0);
+        m.set_org_word(*checktri, 0);
     }
 }
 
@@ -1480,138 +1480,138 @@ pub(crate) fn splay(
     searchpoint: (f64, f64),
     searchtri: &mut Otri,
 ) -> u32 {
-    if splaytree == NULL {
-        return NULL;
+    if splaytree == NULL_ROW {
+        return NULL_ROW;
     }
     // C: dest(splaytree->keyedge, checkvertex).
-    let keyedge = m.splay_keyedge(splaytree);
+    let keyedge = m.splay_key_edge(splaytree);
     let checkvertex = m.dest(keyedge);
-    if checkvertex == m.splay_keydest(splaytree) {
+    if checkvertex == m.splay_key_dest(splaytree) {
         // C: the key's destination still lives: rotate below it.
-        let rightofroot = rightofhyperbola(m, &keyedge, searchpoint);
+        let rightofroot = right_of_hyperbola(m, &keyedge, searchpoint);
         let mut child = if rightofroot {
             // C: otricopy(splaytree->keyedge, *searchtri).
             *searchtri = keyedge;
-            m.splay_rchild(splaytree)
+            m.splay_right_child(splaytree)
         } else {
-            m.splay_lchild(splaytree)
+            m.splay_left_child(splaytree)
         };
-        if child == NULL {
+        if child == NULL_ROW {
             return splaytree;
         }
         // C: dest(child->keyedge, checkvertex) vs child->keydest: a dead
         // key is replaced by whatever its subtree splay returns.
-        let childkeyedge = m.splay_keyedge(child);
+        let childkeyedge = m.splay_key_edge(child);
         let checkvertex = m.dest(childkeyedge);
-        if checkvertex != m.splay_keydest(child) {
+        if checkvertex != m.splay_key_dest(child) {
             child = splay(m, child, searchpoint, searchtri);
-            if child == NULL {
+            if child == NULL_ROW {
                 if rightofroot {
-                    m.set_splay_rchild(splaytree, NULL);
+                    m.set_splay_right_child(splaytree, NULL_ROW);
                 } else {
-                    m.set_splay_lchild(splaytree, NULL);
+                    m.set_splay_left_child(splaytree, NULL_ROW);
                 }
                 return splaytree;
             }
         }
         // C: rightofchild is decided on the (possibly re-splayed) child's
         // keyedge; the re-assignment order below is C's exactly.
-        let childkeyedge = m.splay_keyedge(child);
-        let rightofchild = rightofhyperbola(m, &childkeyedge, searchpoint);
+        let childkeyedge = m.splay_key_edge(child);
+        let rightofchild = right_of_hyperbola(m, &childkeyedge, searchpoint);
         let grandchild = if rightofchild {
             // C: otricopy(child->keyedge, *searchtri).
             *searchtri = childkeyedge;
-            let g = splay(m, m.splay_rchild(child), searchpoint, searchtri);
-            m.set_splay_rchild(child, g);
+            let g = splay(m, m.splay_right_child(child), searchpoint, searchtri);
+            m.set_splay_right_child(child, g);
             g
         } else {
-            let g = splay(m, m.splay_lchild(child), searchpoint, searchtri);
-            m.set_splay_lchild(child, g);
+            let g = splay(m, m.splay_left_child(child), searchpoint, searchtri);
+            m.set_splay_left_child(child, g);
             g
         };
-        if grandchild == NULL {
+        if grandchild == NULL_ROW {
             if rightofroot {
                 // C: splaytree->rchild = child->lchild; child->lchild = splaytree.
-                let cl = m.splay_lchild(child);
-                m.set_splay_rchild(splaytree, cl);
-                m.set_splay_lchild(child, splaytree);
+                let cl = m.splay_left_child(child);
+                m.set_splay_right_child(splaytree, cl);
+                m.set_splay_left_child(child, splaytree);
             } else {
                 // C: splaytree->lchild = child->rchild; child->rchild = splaytree.
-                let cr = m.splay_rchild(child);
-                m.set_splay_lchild(splaytree, cr);
-                m.set_splay_rchild(child, splaytree);
+                let cr = m.splay_right_child(child);
+                m.set_splay_left_child(splaytree, cr);
+                m.set_splay_right_child(child, splaytree);
             }
             return child;
         }
         if rightofchild {
             if rightofroot {
                 // C: splaytree->rchild = child->lchild; child->lchild = splaytree.
-                let cl = m.splay_lchild(child);
-                m.set_splay_rchild(splaytree, cl);
-                m.set_splay_lchild(child, splaytree);
+                let cl = m.splay_left_child(child);
+                m.set_splay_right_child(splaytree, cl);
+                m.set_splay_left_child(child, splaytree);
             } else {
                 // C: splaytree->lchild = grandchild->rchild;
                 //    grandchild->rchild = splaytree.
-                let gr = m.splay_rchild(grandchild);
-                m.set_splay_lchild(splaytree, gr);
-                m.set_splay_rchild(grandchild, splaytree);
+                let gr = m.splay_right_child(grandchild);
+                m.set_splay_left_child(splaytree, gr);
+                m.set_splay_right_child(grandchild, splaytree);
             }
             // C: child->rchild = grandchild->lchild; grandchild->lchild = child.
-            let gl = m.splay_lchild(grandchild);
-            m.set_splay_rchild(child, gl);
-            m.set_splay_lchild(grandchild, child);
+            let gl = m.splay_left_child(grandchild);
+            m.set_splay_right_child(child, gl);
+            m.set_splay_left_child(grandchild, child);
         } else {
             if rightofroot {
                 // C: splaytree->rchild = grandchild->lchild;
                 //    grandchild->lchild = splaytree.
-                let gl = m.splay_lchild(grandchild);
-                m.set_splay_rchild(splaytree, gl);
-                m.set_splay_lchild(grandchild, splaytree);
+                let gl = m.splay_left_child(grandchild);
+                m.set_splay_right_child(splaytree, gl);
+                m.set_splay_left_child(grandchild, splaytree);
             } else {
                 // C: splaytree->lchild = child->rchild; child->rchild = splaytree.
-                let cr = m.splay_rchild(child);
-                m.set_splay_lchild(splaytree, cr);
-                m.set_splay_rchild(child, splaytree);
+                let cr = m.splay_right_child(child);
+                m.set_splay_left_child(splaytree, cr);
+                m.set_splay_right_child(child, splaytree);
             }
             // C: child->lchild = grandchild->rchild; grandchild->rchild = child.
-            let gr = m.splay_rchild(grandchild);
-            m.set_splay_lchild(child, gr);
-            m.set_splay_rchild(grandchild, child);
+            let gr = m.splay_right_child(grandchild);
+            m.set_splay_left_child(child, gr);
+            m.set_splay_right_child(grandchild, child);
         }
         grandchild
     } else {
         // C: the key is dead: splay both subtrees, free the node, and
         // join the remains by the five-way case ladder.
-        let lefttree = splay(m, m.splay_lchild(splaytree), searchpoint, searchtri);
-        let righttree = splay(m, m.splay_rchild(splaytree), searchpoint, searchtri);
+        let lefttree = splay(m, m.splay_left_child(splaytree), searchpoint, searchtri);
+        let righttree = splay(m, m.splay_right_child(splaytree), searchpoint, searchtri);
         // C: pooldealloc(&m->splaynodes, splaytree).
         m.splay_dealloc(splaytree);
-        if lefttree == NULL {
+        if lefttree == NULL_ROW {
             righttree
-        } else if righttree == NULL {
+        } else if righttree == NULL_ROW {
             lefttree
-        } else if m.splay_rchild(lefttree) == NULL {
+        } else if m.splay_right_child(lefttree) == NULL_ROW {
             // C: lefttree->rchild = righttree->lchild;
             //    righttree->lchild = lefttree; return righttree.
-            let rl = m.splay_lchild(righttree);
-            m.set_splay_rchild(lefttree, rl);
-            m.set_splay_lchild(righttree, lefttree);
+            let rl = m.splay_left_child(righttree);
+            m.set_splay_right_child(lefttree, rl);
+            m.set_splay_left_child(righttree, lefttree);
             righttree
-        } else if m.splay_lchild(righttree) == NULL {
+        } else if m.splay_left_child(righttree) == NULL_ROW {
             // C: righttree->lchild = lefttree->rchild;
             //    lefttree->rchild = righttree; return lefttree.
-            let lr = m.splay_rchild(lefttree);
-            m.set_splay_lchild(righttree, lr);
-            m.set_splay_rchild(lefttree, righttree);
+            let lr = m.splay_right_child(lefttree);
+            m.set_splay_left_child(righttree, lr);
+            m.set_splay_right_child(lefttree, righttree);
             lefttree
         } else {
             // C: leftright = lefttree->rchild; while (leftright->rchild)
             //    leftright = leftright->rchild; (the "Holy Toledo" merge)
-            let mut leftright = m.splay_rchild(lefttree);
-            while m.splay_rchild(leftright) != NULL {
-                leftright = m.splay_rchild(leftright);
+            let mut leftright = m.splay_right_child(lefttree);
+            while m.splay_right_child(leftright) != NULL_ROW {
+                leftright = m.splay_right_child(leftright);
             }
-            m.set_splay_rchild(leftright, righttree);
+            m.set_splay_right_child(leftright, righttree);
             lefttree
         }
     }
@@ -1621,7 +1621,7 @@ pub(crate) fn splay(
 /// root's hyperbola and hang the root under the fresh node, left when
 /// the search point is right of the root (the C three-way case). The
 /// node comes from the splaynodes pool exactly like C.
-pub(crate) fn splayinsert(
+pub(crate) fn splay_insert(
     m: &mut Mesh,
     splayroot: u32,
     newkey: &Otri,
@@ -1631,27 +1631,27 @@ pub(crate) fn splayinsert(
     let newsplaynode = m.splay_alloc()?;
     // C: otricopy(*newkey, newsplaynode->keyedge); dest(*newkey,
     //    newsplaynode->keydest).
-    m.set_splay_keyedge(newsplaynode, *newkey);
-    m.set_splay_keydest(newsplaynode, m.dest(*newkey));
-    if splayroot == NULL {
-        m.set_splay_lchild(newsplaynode, NULL);
-        m.set_splay_rchild(newsplaynode, NULL);
+    m.set_splay_key_edge(newsplaynode, *newkey);
+    m.set_splay_key_dest(newsplaynode, m.dest(*newkey));
+    if splayroot == NULL_ROW {
+        m.set_splay_left_child(newsplaynode, NULL_ROW);
+        m.set_splay_right_child(newsplaynode, NULL_ROW);
     } else {
-        let rootkeyedge = m.splay_keyedge(splayroot);
-        if rightofhyperbola(m, &rootkeyedge, searchpoint) {
+        let rootkeyedge = m.splay_key_edge(splayroot);
+        if right_of_hyperbola(m, &rootkeyedge, searchpoint) {
             // C: newsplaynode->lchild = splayroot; newsplaynode->rchild
             //    = splayroot->rchild; splayroot->rchild = NULL.
-            m.set_splay_lchild(newsplaynode, splayroot);
-            let rr = m.splay_rchild(splayroot);
-            m.set_splay_rchild(newsplaynode, rr);
-            m.set_splay_rchild(splayroot, NULL);
+            m.set_splay_left_child(newsplaynode, splayroot);
+            let rr = m.splay_right_child(splayroot);
+            m.set_splay_right_child(newsplaynode, rr);
+            m.set_splay_right_child(splayroot, NULL_ROW);
         } else {
             // C: newsplaynode->lchild = splayroot->lchild;
             //    newsplaynode->rchild = splayroot; splayroot->lchild = NULL.
-            let ll = m.splay_lchild(splayroot);
-            m.set_splay_lchild(newsplaynode, ll);
-            m.set_splay_rchild(newsplaynode, splayroot);
-            m.set_splay_lchild(splayroot, NULL);
+            let ll = m.splay_left_child(splayroot);
+            m.set_splay_left_child(newsplaynode, ll);
+            m.set_splay_right_child(newsplaynode, splayroot);
+            m.set_splay_left_child(splayroot, NULL_ROW);
         }
     }
     Ok(newsplaynode)
@@ -1663,7 +1663,7 @@ pub(crate) fn splayinsert(
 /// splay to that point and insert. ccwabc is computed exactly once, at
 /// C's call site (the predicate call count mirrors C).
 #[allow(clippy::too_many_arguments)] // the C signature carries eight parameters
-pub(crate) fn circletopinsert(
+pub(crate) fn circle_top_insert(
     m: &mut Mesh,
     b: &Behavior,
     splayroot: u32,
@@ -1680,7 +1680,7 @@ pub(crate) fn circletopinsert(
     let pcx = m.vx_x(pc);
     let pcy = m.vx_y(pc);
     // C: ccwabc = tri_counterclockwise(m, b, pa, pb, pc).
-    let ccwabc = tri_counterclockwise(
+    let ccwabc = counterclockwise(
         m,
         b,
         vertex_coords(m, pa),
@@ -1699,11 +1699,11 @@ pub(crate) fn circletopinsert(
     // C: splay's searchtri out-param is a scratch local here (D11: the
     // port initializes where C left it uninitialized).
     let mut dummytri = Otri {
-        tri: NULL,
+        tri: NULL_ROW,
         orient: 0,
     };
     let splayed = splay(m, splayroot, searchpoint, &mut dummytri);
-    splayinsert(m, splayed, newkey, searchpoint)
+    splay_insert(m, splayed, newkey, searchpoint)
 }
 
 /// C: frontlocate (triangle.c:5189-5206). Splay to the search vertex,
@@ -1711,7 +1711,7 @@ pub(crate) fn circletopinsert(
 /// right of the current front edge, or the walk closes back at
 /// bottommost (farright). The walk condition's rightofhyperbola call
 /// order is C's exactly.
-pub(crate) fn frontlocate(
+pub(crate) fn front_locate(
     m: &mut Mesh,
     splayroot: u32,
     bottommost: &Otri,
@@ -1726,9 +1726,9 @@ pub(crate) fn frontlocate(
     let splayroot = splay(m, splayroot, searchpoint, searchtri);
 
     let mut farrightflag = false;
-    while !farrightflag && rightofhyperbola(m, searchtri, searchpoint) {
+    while !farrightflag && right_of_hyperbola(m, searchtri, searchpoint) {
         // C: onextself(*searchtri).
-        m.onextself(searchtri);
+        m.onext_self(searchtri);
         // C: farrightflag = otriequal(*searchtri, *bottommost).
         farrightflag = *searchtri == *bottommost;
     }
@@ -1749,15 +1749,15 @@ pub(crate) fn frontlocate(
 /// carrying the org-slot event pun are read only by check4deadevent;
 /// splayroot is the splay-tree row id (0 = C NULL). The two
 /// randomnation draws sweep at exactly the C sites.
-pub(crate) fn sweeplinedelaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, crate::error::Error> {
+pub(crate) fn sweepline_delaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, crate::error::Error> {
     // C: poolinit(&m->splaynodes, ...) at this site dissolves into the
     // eager Mesh::new init (same geometry), so nothing happens here;
     // the pooldeinit at the end dissolves the same way.
-    let mut splayroot: u32 = NULL;
+    let mut splayroot: u32 = NULL_ROW;
 
-    let (mut eventheap, mut events, mut freeevents) = createeventheap(m)?;
+    let (mut eventheap, mut events, mut freeevents) = create_event_heap(m)?;
     let mut bottommost = Otri {
-        tri: NULL,
+        tri: NULL_ROW,
         orient: 0,
     };
     // C declares lefttri/righttri/fliptri/inserttri unassigned; each
@@ -1777,14 +1777,14 @@ pub(crate) fn sweeplinedelaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, crate
     //    bond(lefttri, righttri); lnextself(lefttri); lprevself(righttri);
     //    bond(lefttri, righttri) - the two-triangle tube over the first
     //    hull edge.
-    lefttri = m.maketriangle(b.usesegments, b.vararea)?;
-    righttri = m.maketriangle(b.usesegments, b.vararea)?;
+    lefttri = m.make_triangle(b.usesegments, b.vararea)?;
+    righttri = m.make_triangle(b.usesegments, b.vararea)?;
     m.bond(lefttri, righttri);
-    lefttri.lnextself();
-    righttri.lprevself();
+    lefttri.lnext_self();
+    righttri.lprev_self();
     m.bond(lefttri, righttri);
-    lefttri.lnextself();
-    righttri.lprevself();
+    lefttri.lnext_self();
+    righttri.lprev_self();
     m.bond(lefttri, righttri);
     // C: firstvertex = (vertex) eventheap[0]->eventptr; the cell is
     // recycled onto the free list before the heap delete, exactly C's
@@ -1792,11 +1792,11 @@ pub(crate) fn sweeplinedelaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, crate
     let e0 = eventheap[0];
     let firstvertex = match events[e0 as usize].eventptr {
         EventPtr::Vertex(v) => v,
-        _ => NULL,
+        _ => NULL_ROW,
     };
     events[e0 as usize].eventptr = EventPtr::Free(freeevents);
     freeevents = Some(e0);
-    eventheapdelete(&mut eventheap[..], heapsize, 0, &mut events[..]);
+    event_heap_delete(&mut eventheap[..], heapsize, 0, &mut events[..]);
     heapsize -= 1;
     // C declares secondvertex unassigned; the do-while writes it before
     // the first read, the deferred init mirrors that.
@@ -1818,18 +1818,18 @@ pub(crate) fn sweeplinedelaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, crate
         let e0 = eventheap[0];
         secondvertex = match events[e0 as usize].eventptr {
             EventPtr::Vertex(v) => v,
-            _ => NULL,
+            _ => NULL_ROW,
         };
         events[e0 as usize].eventptr = EventPtr::Free(freeevents);
         freeevents = Some(e0);
-        eventheapdelete(&mut eventheap[..], heapsize, 0, &mut events[..]);
+        event_heap_delete(&mut eventheap[..], heapsize, 0, &mut events[..]);
         heapsize -= 1;
         if (m.vx_x(firstvertex) == m.vx_x(secondvertex))
             && (m.vx_y(firstvertex) == m.vx_y(secondvertex))
         {
             // C's _DEBUG duplicate warning is compiled out; the accounting
             // stays (triangle.c:5273-5274).
-            m.vx_set_type(secondvertex, UNDEADVERTEX);
+            m.vx_set_type(secondvertex, UNDEAD_VERTEX);
             m.undeads += 1;
         }
         if !((m.vx_x(firstvertex) == m.vx_x(secondvertex))
@@ -1841,16 +1841,16 @@ pub(crate) fn sweeplinedelaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, crate
     // C: setorg(lefttri, firstvertex); setdest(lefttri, secondvertex);
     //    setorg(righttri, secondvertex); setdest(righttri, firstvertex);
     //    lprev(lefttri, &bottommost); lastvertex = secondvertex.
-    m.setorg(lefttri, firstvertex);
-    m.setdest(lefttri, secondvertex);
-    m.setorg(righttri, secondvertex);
-    m.setdest(righttri, firstvertex);
+    m.set_org(lefttri, firstvertex);
+    m.set_dest(lefttri, secondvertex);
+    m.set_org(righttri, secondvertex);
+    m.set_dest(righttri, firstvertex);
     bottommost = lefttri.lprev();
     let mut lastvertex = secondvertex;
 
     while heapsize > 0 {
         let nextevent = eventheap[0];
-        eventheapdelete(&mut eventheap[..], heapsize, 0, &mut events[..]);
+        event_heap_delete(&mut eventheap[..], heapsize, 0, &mut events[..]);
         heapsize -= 1;
         let mut check4events = true;
         if events[nextevent as usize].xkey < m.xmin {
@@ -1864,7 +1864,7 @@ pub(crate) fn sweeplinedelaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, crate
             // handle of the circle's low edge).
             fliptri = decode(eventptr_word);
             farlefttri = m.oprev(fliptri);
-            check4deadevent(
+            check_for_dead_event(
                 m,
                 &farlefttri,
                 &mut freeevents,
@@ -1873,7 +1873,7 @@ pub(crate) fn sweeplinedelaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, crate
                 &mut events[..],
             );
             farrighttri = m.onext(fliptri);
-            check4deadevent(
+            check_for_dead_event(
                 m,
                 &farrighttri,
                 &mut freeevents,
@@ -1891,21 +1891,21 @@ pub(crate) fn sweeplinedelaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, crate
             // left/right/farleft handle re-derivation. farrighttri keeps
             // its pre-flip value exactly like C (never reassigned here).
             flip(m, b, fliptri);
-            m.setapex(fliptri, NULL);
+            m.set_apex(fliptri, NULL_ROW);
             lefttri = fliptri.lprev();
             righttri = fliptri.lnext();
             farlefttri = m.sym(lefttri);
 
-            if randomnation(m, SAMPLERATE) == 0 {
+            if random_below(m, SAMPLE_RATE) == 0 {
                 // C: symself(fliptri); dest/apex/org of the flipped edge.
                 let mut symtri = fliptri;
-                m.symself(&mut symtri);
+                m.sym_self(&mut symtri);
                 let leftvertex = m.dest(symtri);
                 let midvertex = m.apex(symtri);
                 let rightvertex = m.org(symtri);
                 // C: splayroot = circletopinsert(..., nextevent->ykey):
                 // the y-key read happens here, before the cell is freed.
-                splayroot = circletopinsert(
+                splayroot = circle_top_insert(
                     m,
                     b,
                     splayroot,
@@ -1920,14 +1920,14 @@ pub(crate) fn sweeplinedelaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, crate
             // A site event: grow the front.
             let nextvertex = match events[nextevent as usize].eventptr {
                 EventPtr::Vertex(v) => v,
-                _ => NULL,
+                _ => NULL_ROW,
             };
             if (m.vx_x(nextvertex) == m.vx_x(lastvertex))
                 && (m.vx_y(nextvertex) == m.vx_y(lastvertex))
             {
                 // C's _DEBUG duplicate warning is compiled out; the
                 // accounting stays (triangle.c:5323-5325).
-                m.vx_set_type(nextvertex, UNDEADVERTEX);
+                m.vx_set_type(nextvertex, UNDEAD_VERTEX);
                 m.undeads += 1;
                 check4events = false;
             } else {
@@ -1936,7 +1936,7 @@ pub(crate) fn sweeplinedelaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, crate
                 // C: splayroot = frontlocate(m, splayroot, &bottommost,
                 //    nextvertex, &searchtri, &farrightflag).
                 let mut farrightflag = false;
-                splayroot = frontlocate(
+                splayroot = front_locate(
                     m,
                     splayroot,
                     &bottommost,
@@ -1945,7 +1945,7 @@ pub(crate) fn sweeplinedelaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, crate
                     &mut farrightflag,
                 );
 
-                check4deadevent(
+                check_for_dead_event(
                     m,
                     &searchtri,
                     &mut freeevents,
@@ -1959,20 +1959,20 @@ pub(crate) fn sweeplinedelaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, crate
                 //    the exact bond pattern.
                 farrighttri = searchtri;
                 farlefttri = m.sym(searchtri);
-                lefttri = m.maketriangle(b.usesegments, b.vararea)?;
-                righttri = m.maketriangle(b.usesegments, b.vararea)?;
+                lefttri = m.make_triangle(b.usesegments, b.vararea)?;
+                righttri = m.make_triangle(b.usesegments, b.vararea)?;
                 // C: dest(farrighttri, connectvertex).
                 let connectvertex = m.dest(farrighttri);
-                m.setorg(lefttri, connectvertex);
-                m.setdest(lefttri, nextvertex);
-                m.setorg(righttri, nextvertex);
-                m.setdest(righttri, connectvertex);
+                m.set_org(lefttri, connectvertex);
+                m.set_dest(lefttri, nextvertex);
+                m.set_org(righttri, nextvertex);
+                m.set_dest(righttri, connectvertex);
                 m.bond(lefttri, righttri);
-                lefttri.lnextself();
-                righttri.lprevself();
+                lefttri.lnext_self();
+                righttri.lprev_self();
                 m.bond(lefttri, righttri);
-                lefttri.lnextself();
-                righttri.lprevself();
+                lefttri.lnext_self();
+                righttri.lprev_self();
                 m.bond(lefttri, farlefttri);
                 m.bond(righttri, farrighttri);
                 // C: if (!farrightflag && otriequal(farrighttri, bottommost))
@@ -1984,16 +1984,16 @@ pub(crate) fn sweeplinedelaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, crate
                 // C: the two randomnation draws (triangle.c:5363-5368):
                 // the first sample splay-tracks the left edge, the second
                 // one the diagonal edge.
-                if randomnation(m, SAMPLERATE) == 0 {
-                    splayroot = splayinsert(
+                if random_below(m, SAMPLE_RATE) == 0 {
+                    splayroot = splay_insert(
                         m,
                         splayroot,
                         &lefttri,
                         (m.vx_x(nextvertex), m.vx_y(nextvertex)),
                     )?;
-                } else if randomnation(m, SAMPLERATE) == 0 {
+                } else if random_below(m, SAMPLE_RATE) == 0 {
                     inserttri = righttri.lnext();
-                    splayroot = splayinsert(
+                    splayroot = splay_insert(
                         m,
                         splayroot,
                         &inserttri,
@@ -2016,7 +2016,7 @@ pub(crate) fn sweeplinedelaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, crate
             let rightvertex = m.apex(lefttri);
             // C: lefttest = tri_counterclockwise(m, b, leftvertex,
             //    midvertex, rightvertex).
-            let lefttest = tri_counterclockwise(
+            let lefttest = counterclockwise(
                 m,
                 b,
                 vertex_coords(m, leftvertex),
@@ -2037,13 +2037,13 @@ pub(crate) fn sweeplinedelaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, crate
                 };
                 events[newevent as usize].xkey = m.xminextreme;
                 events[newevent as usize].ykey =
-                    circletop(m, leftvertex, midvertex, rightvertex, lefttest);
+                    circle_top(m, leftvertex, midvertex, rightvertex, lefttest);
                 // C: newevent->eventptr = (VOID *) encode(lefttri).
                 events[newevent as usize].eventptr = EventPtr::Triangle(encode(lefttri));
-                eventheapinsert(&mut eventheap[..], heapsize, newevent, &mut events[..]);
+                event_heap_insert(&mut eventheap[..], heapsize, newevent, &mut events[..]);
                 heapsize += 1;
                 // C: setorg(lefttri, (VOID *) newevent) - the event pun.
-                m.setorgword(lefttri, event_word(newevent));
+                m.set_org_word(lefttri, event_word(newevent));
             }
             // C: apex(righttri, leftvertex); org(righttri, midvertex);
             //    apex(farrighttri, rightvertex).
@@ -2051,7 +2051,7 @@ pub(crate) fn sweeplinedelaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, crate
             let midvertex = m.org(righttri);
             let rightvertex = m.apex(farrighttri);
             // C: righttest = tri_counterclockwise(m, b, ...).
-            let righttest = tri_counterclockwise(
+            let righttest = counterclockwise(
                 m,
                 b,
                 vertex_coords(m, leftvertex),
@@ -2072,11 +2072,11 @@ pub(crate) fn sweeplinedelaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, crate
                 };
                 events[newevent as usize].xkey = m.xminextreme;
                 events[newevent as usize].ykey =
-                    circletop(m, leftvertex, midvertex, rightvertex, righttest);
+                    circle_top(m, leftvertex, midvertex, rightvertex, righttest);
                 events[newevent as usize].eventptr = EventPtr::Triangle(encode(farrighttri));
-                eventheapinsert(&mut eventheap[..], heapsize, newevent, &mut events[..]);
+                event_heap_insert(&mut eventheap[..], heapsize, newevent, &mut events[..]);
                 heapsize += 1;
-                m.setorgword(farrighttri, event_word(newevent));
+                m.set_org_word(farrighttri, event_word(newevent));
             }
         }
     }
@@ -2086,8 +2086,8 @@ pub(crate) fn sweeplinedelaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, crate
     // port keeps the pool alive so the post-run statistics reads stay
     // C-identical, hence no action here.
     // C: lprevself(bottommost); return removeghosts(m, b, &bottommost).
-    bottommost.lprevself();
-    Ok(removeghosts(m, b, &bottommost))
+    bottommost.lprev_self();
+    Ok(remove_ghosts(m, b, &bottommost))
 }
 
 // ---------------------------------------------------------------------------
@@ -2105,7 +2105,7 @@ pub(crate) fn sweeplinedelaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, crate
 pub(crate) fn delaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, crate::error::Error> {
     // C: m->eextras = 0; initializetrisubpools(m, b).
     m.eextras = 0;
-    m.initializetrisubpools(
+    m.init_tri_and_subseg_pools(
         b.order,
         b.usesegments,
         b.vararea,
@@ -2116,7 +2116,7 @@ pub(crate) fn delaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, crate::error::
     // C: the REDUCED build compiles only divconqdelaunay; the unconditional
     // else-chain below is the not-REDUCED oracle build exactly.
     let hulledges = if b.incremental {
-        incrementaldelaunay(m, b)?
+        incremental_delaunay(m, b)?
     } else if b.sweepline {
         // C: hulledges = sweeplinedelaunay(m, b) (triangle.c:5436-
         // 5438). C's sweeplinedelaunay returns TRI_INPUT on the long
@@ -2129,13 +2129,13 @@ pub(crate) fn delaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, crate::error::
         // point; the dispatcher re-rides the code onto the long
         // channel exactly here, where C's value flow continues; every
         // other failure (the pool Oom bridge) propagates.
-        match sweeplinedelaunay(m, b) {
+        match sweepline_delaunay(m, b) {
             Ok(hulledges) => hulledges,
             Err(crate::error::Error::Input(_)) => -3, // TRI_INPUT (triangle_config.h:31)
             Err(e) => return Err(e),
         }
     } else {
-        divconqdelaunay(m, b)?
+        divconq_delaunay(m, b)?
     };
 
     if m.triangles.live_count() == 0 {
@@ -2149,7 +2149,7 @@ pub(crate) fn delaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, crate::error::
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algorithm::transform::{insertvertex, InsertVertexResult};
+    use crate::algorithm::transform::{insert_vertex, InsertVertexResult};
 
     /// A hand-built Behavior exactly like the landed modules' test
     /// helpers: plain or poly, everything else the defaults (the dwyer
@@ -2199,17 +2199,17 @@ mod tests {
         let mut edges: Vec<[[f64; 3]; 4]> = Vec::new();
         let mut tr = m.triangles.traversal();
         while let Some(id) = m.triangles.traverse_next(&mut tr) {
-            if m.deadtri(id) {
+            if m.is_dead_tri(id) {
                 continue;
             }
             for orient in 0..3u8 {
                 let e = Otri { tri: id, orient };
                 let oppo = m.sym(e);
-                if oppo.tri == DUMMY_TRI || m.deadtri(oppo.tri) {
+                if oppo.tri == DUMMY_TRI || m.is_dead_tri(oppo.tri) {
                     continue;
                 }
                 // a bounding triangle (NULL vertex) never tests an edge
-                if m.apex(e) == NULL || m.apex(oppo) == NULL {
+                if m.apex(e) == NULL_ROW || m.apex(oppo) == NULL_ROW {
                     continue;
                 }
                 edges.push([
@@ -2222,7 +2222,7 @@ mod tests {
         }
         for (i, [o, d, a, oa]) in edges.into_iter().enumerate() {
             assert!(
-                tri_incircle(m, b, o, d, a, oa) <= 0.0,
+                incircle(m, b, o, d, a, oa) <= 0.0,
                 "a non-Delaunay interior edge survived the merge at interior edge {}",
                 i
             );
@@ -2230,7 +2230,7 @@ mod tests {
     }
 
     #[test]
-    fn vertexsort_sorts_by_x_then_y_exactly_as_c() {
+    fn vertex_sort_sorts_by_x_then_y_exactly_as_c() {
         // Distinct coordinates: the pivot draws cannot change the total
         // order of a correct quicksort, so the comparison order (x, then
         // y, no further tiebreak) is pinned without any oracle.
@@ -2244,7 +2244,7 @@ mod tests {
         ];
         let mut m = mesh_with(&pts, false);
         let mut arr = ids(&pts);
-        vertexsort(&mut m, &mut arr);
+        vertex_sort(&mut m, &mut arr);
         let got: Vec<(f64, f64)> = arr.iter().map(|&v| coords(&m, v)).collect();
         assert_eq!(
             got,
@@ -2260,18 +2260,18 @@ mod tests {
     }
 
     #[test]
-    fn vertexsort_base_case_draws_no_seed() {
+    fn vertex_sort_base_case_draws_no_seed() {
         let pts = [(1.0, 0.0), (0.0, 0.0)];
         let mut m = mesh_with(&pts, false);
         let mut arr = ids(&pts);
-        vertexsort(&mut m, &mut arr);
+        vertex_sort(&mut m, &mut arr);
         assert_eq!(coords(&m, arr[0]), (0.0, 0.0));
         assert_eq!(coords(&m, arr[1]), (1.0, 0.0));
         assert_eq!(m.randomseed, 1, "the arraysize == 2 base case never draws");
     }
 
     #[test]
-    fn vertexsort_duplicate_keys_are_seed_deterministic() {
+    fn vertex_sort_duplicate_keys_are_seed_deterministic() {
         // Exact duplicate pairs: the total order is not strict, so the
         // permutation of equal keys is decided by the pivot draws; the
         // D10 per-run seed pins it (same seed, same output).
@@ -2287,10 +2287,10 @@ mod tests {
         ];
         let mut a = mesh_with(&pts, false);
         let mut arr_a = ids(&pts);
-        vertexsort(&mut a, &mut arr_a);
+        vertex_sort(&mut a, &mut arr_a);
         let mut b = mesh_with(&pts, false);
         let mut arr_b = ids(&pts);
-        vertexsort(&mut b, &mut arr_b);
+        vertex_sort(&mut b, &mut arr_b);
         assert_eq!(arr_a, arr_b, "same seed, same permutation of equal keys");
         assert_eq!(a.randomseed, b.randomseed);
         // the coordinate sequence (ignoring identity among equals) is
@@ -2306,7 +2306,7 @@ mod tests {
     }
 
     #[test]
-    fn vertexmedian_splits_at_the_median_size_on_both_axes() {
+    fn vertex_median_splits_at_the_median_size_on_both_axes() {
         // axis 0 (x primary) and axis 1 (y primary): the first `median'
         // entries occur lexicographically before the remaining ones
         // (distinct keys on both axes pin it regardless of pivots).
@@ -2321,7 +2321,7 @@ mod tests {
         for axis in 0..=1i32 {
             let mut m = mesh_with(&pts, false);
             let mut arr = ids(&pts);
-            vertexmedian(&mut m, &mut arr, 4, axis);
+            vertex_median(&mut m, &mut arr, 4, axis);
             assert_eq!(arr.len(), 6, "the shuffle keeps the array size");
             let key = |v: u32| (m.vx_real(v, axis as usize), m.vx_real(v, 1 - axis as usize));
             for l in arr.iter().take(4) {
@@ -2340,14 +2340,14 @@ mod tests {
     }
 
     #[test]
-    fn alternateaxes_partitions_by_the_alternating_axis() {
+    fn alternate_axes_partitions_by_the_alternating_axis() {
         // four vertices: vertexmedian cuts by the incoming axis (partition
         // property), then the base leaves always sort by x. Both halves
         // come out sorted by x within their y-class sets, pivot-independently.
         let pts = [(0.0, 1.0), (2.0, 2.0), (4.0, 0.0), (6.0, 3.0)];
         let mut m = mesh_with(&pts, false);
         let mut arr = ids(&pts);
-        alternateaxes(&mut m, &mut arr, 1);
+        alternate_axes(&mut m, &mut arr, 1);
         let got: Vec<(f64, f64)> = arr.iter().map(|&v| coords(&m, v)).collect();
         // y-lowest two form the first half, x-sorted: (0.0,1.0),(4.0,0.0); the
         // y-highest two the second half, x-sorted: (2,2),(6,3)
@@ -2358,20 +2358,20 @@ mod tests {
         let pts3 = [(0.0, 5.0), (1.0, 3.0), (2.0, 0.0)];
         let mut m = mesh_with(&pts3, false);
         let mut arr = ids(&pts3);
-        alternateaxes(&mut m, &mut arr, 1);
+        alternate_axes(&mut m, &mut arr, 1);
         let got: Vec<(f64, f64)> = arr.iter().map(|&v| coords(&m, v)).collect();
         assert_eq!(got, pts3.to_vec(), "x-sorted leaves, y untouched");
     }
 
     #[test]
-    fn alternateaxes_lcg_draws_are_the_c_sequence() {
+    fn alternate_axes_lcg_draws_are_the_c_sequence() {
         // the 3-vertex base-forced axis: vertexmedian(3) draws exactly
         // one pivot (the y-sorted singletons need no draws); the seed is
         // the first step of the C LCG (seeded 1 by triangleinit).
         let pts = [(0.0, 5.0), (1.0, 3.0), (2.0, 0.0)];
         let mut m = mesh_with(&pts, false);
         let mut arr = ids(&pts);
-        alternateaxes(&mut m, &mut arr, 1);
+        alternate_axes(&mut m, &mut arr, 1);
         // the C LCG first step from seed 1: (1 * 1366 + 150889) % 714025
         // = 152255, spelled as its (const-folded) value so clippy does
         // not flag the identity modulo
@@ -2380,7 +2380,7 @@ mod tests {
         let pts2 = [(1.0, 3.0), (0.0, 5.0)];
         let mut m2 = mesh_with(&pts2, false);
         let mut arr2 = ids(&pts2);
-        alternateaxes(&mut m2, &mut arr2, 0);
+        alternate_axes(&mut m2, &mut arr2, 0);
         assert_eq!(m2.randomseed, 1);
         assert_eq!(coords(&m2, arr2[0]), (0.0, 5.0));
     }
@@ -2392,20 +2392,20 @@ mod tests {
         let mut live: u64 = 0;
         let mut tr = m.triangles.traversal();
         while let Some(id) = m.triangles.traverse_next(&mut tr) {
-            if m.deadtri(id) {
+            if m.is_dead_tri(id) {
                 continue;
             }
             live += 1;
             for orient in 0..3u8 {
                 let e = Otri { tri: id, orient };
                 let s = m.sym(e);
-                assert_ne!(m.org(e), NULL, "a live triangle has a NULL org");
-                assert_ne!(m.dest(e), NULL, "a live triangle has a NULL dest");
-                assert_ne!(m.apex(e), NULL, "a live triangle has a NULL apex");
+                assert_ne!(m.org(e), NULL_ROW, "a live triangle has a NULL org");
+                assert_ne!(m.dest(e), NULL_ROW, "a live triangle has a NULL dest");
+                assert_ne!(m.apex(e), NULL_ROW, "a live triangle has a NULL apex");
                 if s.tri == DUMMY_TRI {
                     hull_edges += 1;
                 } else {
-                    assert!(!m.deadtri(s.tri), "a live triangle bonds to a dead one");
+                    assert!(!m.is_dead_tri(s.tri), "a live triangle bonds to a dead one");
                     assert_eq!(m.sym(s), e, "the bond is symmetric");
                 }
             }
@@ -2414,12 +2414,12 @@ mod tests {
     }
 
     #[test]
-    fn divconqdelaunay_square_end_state() {
+    fn divconq_delaunay_square_end_state() {
         // the cocircular square: exact counts are pivot-independent
         let pts = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
         let mut m = mesh_with(&pts, false);
         let b = behavior(false);
-        let hullsize = divconqdelaunay(&mut m, &b).expect("oom");
+        let hullsize = divconq_delaunay(&mut m, &b).expect("oom");
         assert_eq!(hullsize, 4);
         assert_eq!(m.undeads, 0);
         // 6 allocated rows (4 bounding + 2 real), the ghosts consumed
@@ -2429,14 +2429,14 @@ mod tests {
         // the non-dwyer (Lee-Yang cut) build ends in the same state
         let mut m2 = mesh_with(&pts, false);
         let b2 = behavior_dwyer_off();
-        let hullsize2 = divconqdelaunay(&mut m2, &b2).expect("oom");
+        let hullsize2 = divconq_delaunay(&mut m2, &b2).expect("oom");
         assert_eq!(hullsize2, 4);
         let (h2, l2, c2) = end_state_checks(&m2);
         assert_eq!((h2, l2, c2), (4, 2, 2));
     }
 
     #[test]
-    fn divconqdelaunay_grid9_end_state_and_delaunayhood() {
+    fn divconq_delaunay_grid9_end_state_and_delaunayhood() {
         // the harness's grid case in miniature: 9 lattice points, eight
         // collinear-sensitive hull edges, one interior vertex
         let pts = [
@@ -2452,7 +2452,7 @@ mod tests {
         ];
         let mut m = mesh_with(&pts, false);
         let b = behavior(false);
-        let hullsize = divconqdelaunay(&mut m, &b).expect("oom");
+        let hullsize = divconq_delaunay(&mut m, &b).expect("oom");
         assert_eq!(hullsize, 8);
         let (hull_edges, live, counted) = end_state_checks(&m);
         assert_eq!((hull_edges, live, counted), (8, 8, 8));
@@ -2466,7 +2466,7 @@ mod tests {
     }
 
     #[test]
-    fn divconqdelaunay_discards_duplicates() {
+    fn divconq_delaunay_discards_duplicates() {
         // one exact duplicate: i comes out 3, one triangle remains;
         // C's quicksort settles the relative order of exactly-equal keys
         // by its pivot draws (no tie-break), so under the fixed seed the
@@ -2475,22 +2475,22 @@ mod tests {
         let pts = [(0.0, 0.0), (0.0, 0.0), (1.0, 1.0), (2.0, 0.0)];
         let mut m = mesh_with(&pts, false);
         let b = behavior(false);
-        let hullsize = divconqdelaunay(&mut m, &b).expect("oom");
+        let hullsize = divconq_delaunay(&mut m, &b).expect("oom");
         assert_eq!(hullsize, 3);
         assert_eq!(m.undeads, 1);
-        assert_eq!(m.vx_type(1), UNDEADVERTEX, "the discarded duplicate");
+        assert_eq!(m.vx_type(1), UNDEAD_VERTEX, "the discarded duplicate");
         let (_, live, _) = end_state_checks(&m);
         assert_eq!(live, 1);
         // same seed, same output: a rerun on an identical mesh replays the
         // identical dead-stack sequence
         let mut m2 = mesh_with(&pts, false);
-        let hullsize2 = divconqdelaunay(&mut m2, &b).expect("oom");
+        let hullsize2 = divconq_delaunay(&mut m2, &b).expect("oom");
         assert_eq!(hullsize, hullsize2);
         assert_eq!(m.triangles.high_water(), m2.triangles.high_water());
     }
 
     #[test]
-    fn mergehulls_on_hand_built_halves_pins_the_seam() {
+    fn merge_hulls_on_hand_built_halves_pins_the_seam() {
         // two hand-built 3-vertex hulls (the exact halves a 6-vertex
         // divconq subdivision makes: divconqrecurse base cases), merged
         // with the axis the top-level call passes (0)
@@ -2507,25 +2507,25 @@ mod tests {
         let b = behavior(false);
 
         let mut farleft = Otri {
-            tri: NULL,
+            tri: NULL_ROW,
             orient: 0,
         };
         let mut innerleft = Otri {
-            tri: NULL,
+            tri: NULL_ROW,
             orient: 0,
         };
         let mut innerright = Otri {
-            tri: NULL,
+            tri: NULL_ROW,
             orient: 0,
         };
         let mut farright = Otri {
-            tri: NULL,
+            tri: NULL_ROW,
             orient: 0,
         };
         // build each half as the recursion would (axis 1 reaches the base
         // cases unchanged)
-        divconqrecurse(&mut m, &b, &arr[..3], 3, 1, &mut farleft, &mut innerleft).expect("oom");
-        divconqrecurse(&mut m, &b, &arr[3..], 3, 1, &mut innerright, &mut farright).expect("oom");
+        divconq_recurse(&mut m, &b, &arr[..3], 3, 1, &mut farleft, &mut innerleft).expect("oom");
+        divconq_recurse(&mut m, &b, &arr[3..], 3, 1, &mut innerright, &mut farright).expect("oom");
         // interiors: org(farleft) is the leftmost left vertex, dest(innerleft)
         // the rightmost of the left half, org(innerright) the leftmost of the
         // right, dest(farright) the rightmost right vertex
@@ -2534,7 +2534,7 @@ mod tests {
         assert_eq!(coords(&m, m.org(innerright)), (3.0, 0.0));
         assert_eq!(coords(&m, m.dest(farright)), (5.0, 1.0));
 
-        mergehulls(
+        merge_hulls(
             &mut m,
             &b,
             &mut farleft,
@@ -2561,7 +2561,7 @@ mod tests {
         let mut null_apex = 0;
         let mut tr = m.triangles.traversal();
         while let Some(id) = m.triangles.traverse_next(&mut tr) {
-            if m.deadtri(id) {
+            if m.is_dead_tri(id) {
                 continue;
             }
             for orient in 0..3u8 {
@@ -2570,7 +2570,7 @@ mod tests {
                 if s.tri != DUMMY_TRI {
                     assert_eq!(m.sym(s), e, "the bond is symmetric");
                 }
-                if m.apex(e) == NULL {
+                if m.apex(e) == NULL_ROW {
                     null_apex += 1;
                 }
             }
@@ -2579,7 +2579,7 @@ mod tests {
         // and every interior seam edge is Delaunay
         assert_locally_delaunay(&mut m, &b);
         // removeghosts then walks exactly that fan: one connected cycle
-        let hullsize = removeghosts(&mut m, &b, &farleft);
+        let hullsize = remove_ghosts(&mut m, &b, &farleft);
         assert_eq!(hullsize, 5);
         let (_, live, _) = end_state_checks(&m);
         assert_eq!(live, 5, "2n - 2 - h real triangles for n = 6, h = 5");
@@ -2591,7 +2591,7 @@ mod tests {
     }
 
     #[test]
-    fn boundingbox_and_removebox_account_the_rows() {
+    fn bounding_box_and_remove_box_account_the_rows() {
         // the incremental-style box build, mirroring the part-2
         // incrementaldelaunay flow through the landed insertvertex
         let pts = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
@@ -2604,15 +2604,15 @@ mod tests {
         m.ymax = 1.0;
         let b = behavior(false);
         let before = m.triangles.live_count();
-        boundingbox(&mut m, &b).expect("oom");
+        bounding_box(&mut m, &b).expect("oom");
         // exactly one triangle allocated (the box)
         assert_eq!(m.triangles.live_count(), before + 1);
         // the D12 out-of-pool vertices: no vertex row allocated, all three
         // readable through the chokepoint with the exact C coordinates
         assert_eq!(m.vertices.high_water() as usize, pts.len());
-        assert_eq!(m.infvertex1, INFVERTEX1);
-        assert_eq!(m.infvertex2, INFVERTEX2);
-        assert_eq!(m.infvertex3, INFVERTEX3);
+        assert_eq!(m.infvertex1, INF_VERTEX_1);
+        assert_eq!(m.infvertex2, INF_VERTEX_2);
+        assert_eq!(m.infvertex3, INF_VERTEX_3);
         assert_eq!(coords(&m, m.infvertex1), (0.0 - 50.0, 0.0 - 40.0));
         assert_eq!(coords(&m, m.infvertex2), (1.0 + 50.0, 0.0 - 40.0));
         assert_eq!(coords(&m, m.infvertex3), (0.5, 1.0 + 60.0));
@@ -2627,15 +2627,15 @@ mod tests {
         // body, assembled here from the landed rows)
         let mut inserted = 0;
         let mut tr = m.vertices.traversal();
-        while let Some(v) = m.vertextraverse(&mut tr) {
+        while let Some(v) = m.traverse_vertex(&mut tr) {
             let mut starttri = Otri {
                 tri: DUMMY_TRI,
                 orient: 0,
             };
-            let result = insertvertex(&mut m, &b, v, &mut starttri, None, false, false, false)
+            let result = insert_vertex(&mut m, &b, v, &mut starttri, None, false, false, false)
                 .expect("insert");
             if result == InsertVertexResult::DuplicateVertex {
-                m.vx_set_type(v, UNDEADVERTEX);
+                m.vx_set_type(v, UNDEAD_VERTEX);
                 m.undeads += 1;
             }
             inserted += 1;
@@ -2646,18 +2646,18 @@ mod tests {
         assert_eq!(m.triangles.live_count(), 9);
         assert_eq!(m.triangles.high_water(), 9);
 
-        let hullsize = removebox(&mut m, &b);
+        let hullsize = remove_box(&mut m, &b);
         assert_eq!(hullsize, 4);
         assert_eq!(m.triangles.live_count(), 2);
         // maxitems never drops on dealloc (C's semantic)
         assert_eq!(m.triangles.high_water(), 9);
         // the D12 store is reset like the trifree'd C rows
-        assert_eq!(m.infvertex1, NULL);
-        assert_eq!(m.infvertex2, NULL);
-        assert_eq!(m.infvertex3, NULL);
-        assert_eq!(coords(&m, INFVERTEX1), (0.0, 0.0));
-        assert_eq!(coords(&m, INFVERTEX2), (0.0, 0.0));
-        assert_eq!(coords(&m, INFVERTEX3), (0.0, 0.0));
+        assert_eq!(m.infvertex1, NULL_ROW);
+        assert_eq!(m.infvertex2, NULL_ROW);
+        assert_eq!(m.infvertex3, NULL_ROW);
+        assert_eq!(coords(&m, INF_VERTEX_1), (0.0, 0.0));
+        assert_eq!(coords(&m, INF_VERTEX_2), (0.0, 0.0));
+        assert_eq!(coords(&m, INF_VERTEX_3), (0.0, 0.0));
         // all four vertices lie on the hull and are marked
         for v in 1..=4u32 {
             assert_eq!(m.vx_mark(v), 1);
@@ -2696,10 +2696,10 @@ mod tests {
     /// builds, both children null.
     fn fresh_snode(m: &mut Mesh, keyedge: Otri, keydest: u32) -> u32 {
         let n = m.splay_alloc().expect("splaynode alloc");
-        m.set_splay_keyedge(n, keyedge);
-        m.set_splay_keydest(n, keydest);
-        m.set_splay_lchild(n, NULL);
-        m.set_splay_rchild(n, NULL);
+        m.set_splay_key_edge(n, keyedge);
+        m.set_splay_key_dest(n, keydest);
+        m.set_splay_left_child(n, NULL_ROW);
+        m.set_splay_right_child(n, NULL_ROW);
         n
     }
 
@@ -2707,9 +2707,9 @@ mod tests {
     /// with x >= 2 sit right of it, points left of (0,0) sit left.
     fn splay_key_mesh() -> (Mesh, Otri) {
         let mut m = mesh_with(&[(0.0, 0.0), (2.0, 0.0)], false);
-        let t = m.maketriangle(false, false).expect("tri");
-        m.setdest(t, 1);
-        m.setapex(t, 2);
+        let t = m.make_triangle(false, false).expect("tri");
+        m.set_dest(t, 1);
+        m.set_apex(t, 2);
         (m, t)
     }
 
@@ -2724,12 +2724,12 @@ mod tests {
     }
 
     #[test]
-    fn incrementaldelaunay_square_end_state() {
+    fn incremental_delaunay_square_end_state() {
         let pts = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
         let mut m = mesh_with(&pts, false);
         set_bounds(&mut m, &pts);
         let b = behavior(false);
-        let hullsize = incrementaldelaunay(&mut m, &b).expect("oom");
+        let hullsize = incremental_delaunay(&mut m, &b).expect("oom");
         // the hull of the cocircular square: 4 edges, 2 triangles
         assert_eq!(hullsize, 4);
         let (hull_edges, live, counted) = end_state_checks(&m);
@@ -2744,13 +2744,13 @@ mod tests {
     }
 
     #[test]
-    fn incrementaldelaunay_pentagon_and_duplicate_accounting() {
+    fn incremental_delaunay_pentagon_and_duplicate_accounting() {
         // five points in convex position
         let pts = [(0.0, 0.0), (2.0, 0.0), (3.0, 1.0), (1.0, 3.0), (-1.0, 1.0)];
         let mut m = mesh_with(&pts, false);
         set_bounds(&mut m, &pts);
         let b = behavior(false);
-        let hullsize = incrementaldelaunay(&mut m, &b).expect("oom");
+        let hullsize = incremental_delaunay(&mut m, &b).expect("oom");
         assert_eq!(hullsize, 5);
         let (hull_edges, live, counted) = end_state_checks(&m);
         assert_eq!((hull_edges, live, counted), (5, 3, 3));
@@ -2762,10 +2762,10 @@ mod tests {
         let pts2 = [(0.0, 0.0), (0.0, 0.0), (1.0, 0.0), (0.0, 1.0)];
         let mut m2 = mesh_with(&pts2, false);
         set_bounds(&mut m2, &pts2);
-        let hullsize2 = incrementaldelaunay(&mut m2, &b).expect("oom");
+        let hullsize2 = incremental_delaunay(&mut m2, &b).expect("oom");
         assert_eq!(hullsize2, 3);
         assert_eq!(m2.undeads, 1);
-        assert_eq!(m2.vx_type(2), UNDEADVERTEX, "the discarded duplicate");
+        assert_eq!(m2.vx_type(2), UNDEAD_VERTEX, "the discarded duplicate");
         let (hull_edges2, live2, _) = end_state_checks(&m2);
         assert_eq!((hull_edges2, live2), (3, 1));
         // three real insertions: 2*3 + 1 rows
@@ -2773,7 +2773,7 @@ mod tests {
     }
 
     #[test]
-    fn eventheapinsert_sifts_up_the_c_sequence() {
+    fn event_heap_insert_sifts_up_the_c_sequence() {
         // keys pinned by hand: the y coordinate is the primary key, the
         // x the tiebreak; the parent must be strictly below to stop
         let mut events = [
@@ -2786,9 +2786,9 @@ mod tests {
         // the C insertion sequence of createeventheap: sift-up only,
         // each smaller y walks over its parent (root 0 has y 5, the
         // y 4 event takes slot 0, the y 3 walks over both)
-        eventheapinsert(&mut heap[..], 0, 0, &mut events[..]);
-        eventheapinsert(&mut heap[..], 1, 1, &mut events[..]);
-        eventheapinsert(&mut heap[..], 2, 2, &mut events[..]);
+        event_heap_insert(&mut heap[..], 0, 0, &mut events[..]);
+        event_heap_insert(&mut heap[..], 1, 1, &mut events[..]);
+        event_heap_insert(&mut heap[..], 2, 2, &mut events[..]);
         assert_eq!(&heap[..3], &[2, 0, 1][..]);
         assert_eq!(
             (
@@ -2799,16 +2799,16 @@ mod tests {
             (0, 2, 1)
         );
         // a larger event stops at its parent
-        eventheapinsert(&mut heap[..], 3, 3, &mut events[..]);
+        event_heap_insert(&mut heap[..], 3, 3, &mut events[..]);
         assert_eq!(&heap[..4], &[2, 0, 1, 3][..]);
         assert_eq!(events[3].heapposition, 3);
     }
 
     #[test]
-    fn eventheapify_sifts_down_repairing_positions() {
+    fn event_heapify_sifts_down_repairing_positions() {
         let mut events = [cell(0.0, 3.0, 0), cell(0.0, 1.0, 1), cell(0.0, 4.0, 2)];
         let mut heap = [0u32, 1, 2];
-        eventheapify(&mut heap[..], 3, 0, &mut events[..]);
+        event_heapify(&mut heap[..], 3, 0, &mut events[..]);
         // the (0,1) child bubbles above both; positions written exactly
         assert_eq!(&heap[..3], &[1, 0, 2][..]);
         assert_eq!((events[1].heapposition, events[0].heapposition), (0, 1));
@@ -2816,19 +2816,19 @@ mod tests {
     }
 
     #[test]
-    fn eventheapdelete_leaf_root_and_sift_up_paths() {
+    fn event_heap_delete_leaf_root_and_sift_up_paths() {
         // (a) deleting the last used slot: the mover lands back where it
         // was, heapify over a one-slot tail does nothing
         let mut events = [cell(0.0, 1.0, 0), cell(0.0, 3.0, 1), cell(0.0, 4.0, 2)];
         let mut heap = [0u32, 1, 2];
-        eventheapdelete(&mut heap[..], 3, 2, &mut events[..]);
+        event_heap_delete(&mut heap[..], 3, 2, &mut events[..]);
         assert_eq!(&heap[..3], &[0, 1, 2][..]);
         assert_eq!(events[2].heapposition, 2);
 
         // (b) deleting the root: the last slot moves in, then sifts down
         let mut events_b = [cell(0.0, 1.0, 0), cell(0.0, 3.0, 1), cell(0.0, 4.0, 2)];
         let mut heap_b = [0u32, 1, 2];
-        eventheapdelete(&mut heap_b[..], 3, 0, &mut events_b[..]);
+        event_heap_delete(&mut heap_b[..], 3, 0, &mut events_b[..]);
         assert_eq!(&heap_b[..3], &[1, 2, 2][..], "the tail mirror stays");
         assert_eq!((events_b[1].heapposition, events_b[2].heapposition), (0, 1));
 
@@ -2841,7 +2841,7 @@ mod tests {
             cell(0.0, 2.0, 3),
         ];
         let mut heap_c = [0u32, 1, 2, 3];
-        eventheapdelete(&mut heap_c[..], 4, 3, &mut events_c[..]);
+        event_heap_delete(&mut heap_c[..], 4, 3, &mut events_c[..]);
         assert_eq!(&heap_c[..4], &[0, 3, 2, 1][..]);
         assert_eq!(
             (
@@ -2855,12 +2855,12 @@ mod tests {
     }
 
     #[test]
-    fn createeventheap_builds_the_exact_c_heap_and_free_list() {
+    fn create_event_heap_builds_the_exact_c_heap_and_free_list() {
         // five sites with y keys 0, 3, 2, 1, -1 in pool (id) order: the
         // hand-computed min-heap of the C insertion sequence
         let pts = [(2.0, 0.0), (1.0, 3.0), (0.0, 2.0), (3.0, 1.0), (0.0, -1.0)];
         let m = mesh_with(&pts, false);
-        let (heap, events, freeevents) = createeventheap(&m).expect("oom");
+        let (heap, events, freeevents) = create_event_heap(&m).expect("oom");
         // maxevents = (3 * 5) / 2 = 7 cells; the heap holds the 5 sites
         assert_eq!(heap.len(), 7);
         assert_eq!(&heap[..5], &[4, 0, 2, 1, 3][..]);
@@ -2888,7 +2888,7 @@ mod tests {
     }
 
     #[test]
-    fn rightofhyperbola_early_and_formula_paths() {
+    fn right_of_hyperbola_early_and_formula_paths() {
         let pts = [
             (0.0, 0.0),
             (2.0, 0.0),
@@ -2899,36 +2899,36 @@ mod tests {
             (1.0, 2.0),
         ];
         let mut m = mesh_with(&pts, false);
-        let t = m.maketriangle(false, false).expect("tri");
+        let t = m.make_triangle(false, false).expect("tri");
         let front = Otri {
             tri: t.tri,
             orient: 0,
         };
         // left (0,0), right (2,0): newsite x right of the right end
-        m.setdest(t, 1);
-        m.setapex(t, 2);
-        assert!(rightofhyperbola(&mut m, &front, (3.0, -7.0)));
+        m.set_dest(t, 1);
+        m.set_apex(t, 2);
+        assert!(right_of_hyperbola(&mut m, &front, (3.0, -7.0)));
         // left (2,0), right (0,5): newsite left of the left end
-        m.setdest(t, 2);
-        m.setapex(t, 3);
+        m.set_dest(t, 2);
+        m.set_apex(t, 3);
         // -20 > 39 is false: the formula answers no
-        assert!(!rightofhyperbola(&mut m, &front, (-1.0, 2.0)));
+        assert!(!right_of_hyperbola(&mut m, &front, (-1.0, 2.0)));
         // left (1,1), right (3,1): the sweep-side formula answers yes
-        m.setdest(t, 4);
-        m.setapex(t, 5);
-        assert!(rightofhyperbola(&mut m, &front, (0.0, 0.0)));
+        m.set_dest(t, 4);
+        m.set_apex(t, 5);
+        assert!(right_of_hyperbola(&mut m, &front, (0.0, 0.0)));
         // left (0,2), right (1,2), newsite (0.5, 0): both arms are
         // equidistant (2*(0.25+4) on either side), so the C strict >
         // answers no (the tie, triangle.c:4970)
-        m.setdest(t, 6);
-        m.setapex(t, 7);
-        assert!(!rightofhyperbola(&mut m, &front, (0.5, 0.0)));
+        m.set_dest(t, 6);
+        m.set_apex(t, 7);
+        assert!(!right_of_hyperbola(&mut m, &front, (0.5, 0.0)));
         // every call counted exactly at the C site
         assert_eq!(m.hyperbolacount, 4);
     }
 
     #[test]
-    fn circletop_pins_exact_circle_tops() {
+    fn circle_top_pins_exact_circle_tops() {
         let pts = [
             (0.0, 0.0),
             (2.0, 0.0),
@@ -2943,7 +2943,7 @@ mod tests {
         let b = behavior(false);
         // the unit circle: top exactly 1 (ccwabc from the landed
         // predicate fast path, hand-checked to be 2)
-        let ccw = tri_counterclockwise(
+        let ccw = counterclockwise(
             &mut m,
             &b,
             [pts[0].0, pts[0].1, 0.0],
@@ -2951,10 +2951,10 @@ mod tests {
             [pts[2].0, pts[2].1, 0.0],
         );
         assert_eq!(ccw, 2.0);
-        assert_eq!(circletop(&mut m, 1, 2, 3, ccw), 1.0);
+        assert_eq!(circle_top(&mut m, 1, 2, 3, ccw), 1.0);
         // top exactly 3 through (0,0),(4,0),(2,3): the sqrt argument is
         // the perfect square 13*13*16
-        let ccw = tri_counterclockwise(
+        let ccw = counterclockwise(
             &mut m,
             &b,
             [pts[0].0, pts[0].1, 0.0],
@@ -2962,9 +2962,9 @@ mod tests {
             [pts[4].0, pts[4].1, 0.0],
         );
         assert_eq!(ccw, 12.0);
-        assert_eq!(circletop(&mut m, 1, 4, 5, ccw), 3.0);
+        assert_eq!(circle_top(&mut m, 1, 4, 5, ccw), 3.0);
         // a clockwise triple: the negative ccwabc divides, top exactly -1
-        let ccw = tri_counterclockwise(
+        let ccw = counterclockwise(
             &mut m,
             &b,
             [pts[0].0, pts[0].1, 0.0],
@@ -2972,9 +2972,9 @@ mod tests {
             [pts[5].0, pts[5].1, 0.0],
         );
         assert_eq!(ccw, -2.0);
-        assert_eq!(circletop(&mut m, 1, 2, 6, ccw), -1.0);
+        assert_eq!(circle_top(&mut m, 1, 2, 6, ccw), -1.0);
         // a scalene triple with a nonzero numerator: top exactly 2.5
-        let ccw = tri_counterclockwise(
+        let ccw = counterclockwise(
             &mut m,
             &b,
             [pts[0].0, pts[0].1, 0.0],
@@ -2982,15 +2982,15 @@ mod tests {
             [pts[7].0, pts[7].1, 0.0],
         );
         assert_eq!(ccw, 10.0);
-        assert_eq!(circletop(&mut m, 1, 7, 8, ccw), 2.5);
+        assert_eq!(circle_top(&mut m, 1, 7, 8, ccw), 2.5);
         assert_eq!(m.circletopcount, 4);
         assert_eq!(m.counterclockcount, 4);
     }
 
     #[test]
-    fn check4deadevent_frees_heapdeletes_and_clears() {
+    fn check_for_dead_event_frees_heapdeletes_and_clears() {
         let mut m = mesh_with(&[], false);
-        let t = m.maketriangle(false, false).expect("tri");
+        let t = m.make_triangle(false, false).expect("tri");
         // a hand-built front: keys (0,1), (0,3), (0,4) in a 3-heap
         let mut events = vec![cell(0.0, 0.0, 0), cell(0.0, 0.0, 1), cell(0.0, 0.0, 2)];
         events[0].ykey = 1.0;
@@ -3004,8 +3004,8 @@ mod tests {
             tri: t.tri,
             orient: 0,
         };
-        m.setorgword(o0, event_word(1));
-        check4deadevent(
+        m.set_org_word(o0, event_word(1));
+        check_for_dead_event(
             &mut m,
             &o0,
             &mut freeevents,
@@ -3018,7 +3018,7 @@ mod tests {
         assert_eq!(events[1].eventptr, EventPtr::Free(None), "on the free list");
         assert_eq!(freeevents, Some(1));
         assert_eq!(heapsize, 2);
-        assert_eq!(m.orgword(o0), 0, "the pun cleared (triangle.c:5016)");
+        assert_eq!(m.org_word(o0), 0, "the pun cleared (triangle.c:5016)");
 
         // a chained free: event 2 rides the orientation-1 handle and
         // now links the previous head
@@ -3026,8 +3026,8 @@ mod tests {
             tri: t.tri,
             orient: 1,
         };
-        m.setorgword(o1, event_word(2));
-        check4deadevent(
+        m.set_org_word(o1, event_word(2));
+        check_for_dead_event(
             &mut m,
             &o1,
             &mut freeevents,
@@ -3039,10 +3039,10 @@ mod tests {
         assert_eq!(freeevents, Some(2));
         assert_eq!(heapsize, 1);
         assert_eq!(&heap[..1], &[0][..]);
-        assert_eq!(m.orgword(o1), 0);
+        assert_eq!(m.org_word(o1), 0);
 
         // a NULL pun slot: an exact no-op
-        check4deadevent(
+        check_for_dead_event(
             &mut m,
             &o0,
             &mut freeevents,
@@ -3059,11 +3059,11 @@ mod tests {
         // the null tree answers null with the searchtri untouched
         let (mut m, _t) = splay_key_mesh();
         let mut st = Otri {
-            tri: NULL,
+            tri: NULL_ROW,
             orient: 0,
         };
-        assert_eq!(splay(&mut m, NULL, (5.0, 1.0), &mut st), NULL);
-        assert_eq!(st.tri, NULL);
+        assert_eq!(splay(&mut m, NULL_ROW, (5.0, 1.0), &mut st), NULL_ROW);
+        assert_eq!(st.tri, NULL_ROW);
         assert_eq!(m.hyperbolacount, 0);
 
         // a single matching node: no rotation, the keyedge answers
@@ -3087,10 +3087,10 @@ mod tests {
         };
         let r = fresh_snode(&mut m, key, 1);
         let c = fresh_snode(&mut m, key, 1);
-        m.set_splay_rchild(r, c);
+        m.set_splay_right_child(r, c);
         assert_eq!(splay(&mut m, r, (5.0, 1.0), &mut st), c);
-        assert_eq!(m.splay_lchild(c), r, "the child took its parent");
-        assert_eq!(m.splay_rchild(r), NULL);
+        assert_eq!(m.splay_left_child(c), r, "the child took its parent");
+        assert_eq!(m.splay_right_child(r), NULL_ROW);
         assert_eq!(st, key);
         assert_eq!(m.hyperbolacount, 2, "root and child tests only");
 
@@ -3102,7 +3102,7 @@ mod tests {
             orient: 0,
         };
         let r = fresh_snode(&mut m, key, 99);
-        assert_eq!(splay(&mut m, r, (5.0, 1.0), &mut st), NULL);
+        assert_eq!(splay(&mut m, r, (5.0, 1.0), &mut st), NULL_ROW);
         assert_eq!(m.splaynodes.live_count(), 0);
         // the dead branch never touches searchtri; it keeps the value
         // the caller entered with (the key of the previous block)
@@ -3118,11 +3118,11 @@ mod tests {
         let r = fresh_snode(&mut m, key, 99);
         let left = fresh_snode(&mut m, key, 1);
         let right = fresh_snode(&mut m, key, 1);
-        m.set_splay_lchild(r, left);
-        m.set_splay_rchild(r, right);
+        m.set_splay_left_child(r, left);
+        m.set_splay_right_child(r, right);
         assert_eq!(splay(&mut m, r, (-3.0, 5.0), &mut st), right);
-        assert_eq!(m.splay_lchild(right), left);
-        assert_eq!(m.splay_rchild(left), NULL);
+        assert_eq!(m.splay_left_child(right), left);
+        assert_eq!(m.splay_right_child(left), NULL_ROW);
         assert_eq!(m.splaynodes.live_count(), 2, "the mismatch died");
 
         // merge case 4 (triangle.c:5114-5117): the left tree keeps its
@@ -3136,12 +3136,12 @@ mod tests {
         let left = fresh_snode(&mut m, key, 1);
         let leftright = fresh_snode(&mut m, key, 1);
         let right = fresh_snode(&mut m, key, 1);
-        m.set_splay_lchild(r, left);
-        m.set_splay_rchild(left, leftright);
-        m.set_splay_rchild(r, right);
+        m.set_splay_left_child(r, left);
+        m.set_splay_right_child(left, leftright);
+        m.set_splay_right_child(r, right);
         assert_eq!(splay(&mut m, r, (-3.0, 5.0), &mut st), left);
-        assert_eq!(m.splay_rchild(left), right);
-        assert_eq!(m.splay_lchild(right), leftright);
+        assert_eq!(m.splay_right_child(left), right);
+        assert_eq!(m.splay_left_child(right), leftright);
         assert_eq!(m.splaynodes.live_count(), 3);
 
         // the "Holy Toledo" merge (triangle.c:5118-5125): both returned
@@ -3156,9 +3156,9 @@ mod tests {
             tri: t.tri,
             orient: 0,
         };
-        let t2 = m.maketriangle(false, false).expect("tri");
-        m.setdest(t2, 2);
-        m.setapex(t2, 1);
+        let t2 = m.make_triangle(false, false).expect("tri");
+        m.set_dest(t2, 2);
+        m.set_apex(t2, 1);
         let keyb = Otri {
             tri: t2.tri,
             orient: 0,
@@ -3168,28 +3168,31 @@ mod tests {
         let leftright = fresh_snode(&mut m, keyb, 2);
         let right = fresh_snode(&mut m, keya, 1);
         let rightleft = fresh_snode(&mut m, keya, 1);
-        m.set_splay_lchild(r, left);
-        m.set_splay_rchild(left, leftright);
-        m.set_splay_rchild(r, right);
-        m.set_splay_lchild(right, rightleft);
+        m.set_splay_left_child(r, left);
+        m.set_splay_right_child(left, leftright);
+        m.set_splay_right_child(r, right);
+        m.set_splay_left_child(right, rightleft);
         assert_eq!(splay(&mut m, r, (5.0, 1.0), &mut st), left);
-        assert_eq!(m.splay_rchild(leftright), right);
-        assert_eq!(m.splay_rchild(left), leftright);
+        assert_eq!(m.splay_right_child(leftright), right);
+        assert_eq!(m.splay_right_child(left), leftright);
         assert_eq!(m.splaynodes.live_count(), 5 - 1);
     }
 
     #[test]
-    fn splayinsert_splits_the_root_per_hyperbola() {
+    fn splay_insert_splits_the_root_per_hyperbola() {
         // into an empty tree: the plain node, no hyperbola test at all
         let (mut m, t) = splay_key_mesh();
         let newkey = Otri {
             tri: t.tri,
             orient: 0,
         };
-        let n = splayinsert(&mut m, NULL, &newkey, (5.0, 1.0)).expect("oom");
-        assert_eq!(m.splay_keyedge(n), newkey);
-        assert_eq!(m.splay_keydest(n), 1, "dest(*newkey)");
-        assert_eq!((m.splay_lchild(n), m.splay_rchild(n)), (NULL, NULL));
+        let n = splay_insert(&mut m, NULL_ROW, &newkey, (5.0, 1.0)).expect("oom");
+        assert_eq!(m.splay_key_edge(n), newkey);
+        assert_eq!(m.splay_key_dest(n), 1, "dest(*newkey)");
+        assert_eq!(
+            (m.splay_left_child(n), m.splay_right_child(n)),
+            (NULL_ROW, NULL_ROW)
+        );
         assert_eq!(m.hyperbolacount, 0);
 
         // right of the root (triangle.c:5145-5148): the root becomes
@@ -3203,7 +3206,7 @@ mod tests {
             },
             1,
         );
-        let n = splayinsert(
+        let n = splay_insert(
             &mut m,
             r,
             &Otri {
@@ -3213,9 +3216,9 @@ mod tests {
             (5.0, 1.0),
         )
         .expect("oom");
-        assert_eq!(m.splay_lchild(n), r);
-        assert_eq!(m.splay_rchild(n), NULL);
-        assert_eq!(m.splay_rchild(r), NULL);
+        assert_eq!(m.splay_left_child(n), r);
+        assert_eq!(m.splay_right_child(n), NULL_ROW);
+        assert_eq!(m.splay_right_child(r), NULL_ROW);
         assert_eq!(m.hyperbolacount, 1);
 
         // left of the root (triangle.c:5149-5152): the mirror
@@ -3228,7 +3231,7 @@ mod tests {
             },
             1,
         );
-        let n = splayinsert(
+        let n = splay_insert(
             &mut m,
             r,
             &Otri {
@@ -3238,14 +3241,14 @@ mod tests {
             (-3.0, 5.0),
         )
         .expect("oom");
-        assert_eq!(m.splay_rchild(n), r);
-        assert_eq!(m.splay_lchild(n), NULL);
-        assert_eq!(m.splay_lchild(r), NULL);
+        assert_eq!(m.splay_right_child(n), r);
+        assert_eq!(m.splay_left_child(n), NULL_ROW);
+        assert_eq!(m.splay_left_child(r), NULL_ROW);
         assert_eq!(m.hyperbolacount, 1);
     }
 
     #[test]
-    fn circletopinsert_pins_the_searchpoint_arithmetic() {
+    fn circle_top_insert_pins_the_searchpoint_arithmetic() {
         // pa (8,1), pb (6,1), pc (4,2): the circle center's x is 7 -
         // the split point lands right of the front key edge
         let pts = [
@@ -3261,16 +3264,19 @@ mod tests {
         {
             // an empty tree: one node, no hyperbola test, one predicate
             let mut m = mesh_with(&pts, false);
-            let t2 = m.maketriangle(false, false).expect("tri");
-            m.setdest(t2, 1);
+            let t2 = m.make_triangle(false, false).expect("tri");
+            m.set_dest(t2, 1);
             let newkey = Otri {
                 tri: t2.tri,
                 orient: 0,
             };
-            let n = circletopinsert(&mut m, &b, NULL, &newkey, 3, 4, 5, 5.0).expect("oom");
-            assert_eq!(m.splay_keyedge(n), newkey);
-            assert_eq!(m.splay_keydest(n), 1);
-            assert_eq!((m.splay_lchild(n), m.splay_rchild(n)), (NULL, NULL));
+            let n = circle_top_insert(&mut m, &b, NULL_ROW, &newkey, 3, 4, 5, 5.0).expect("oom");
+            assert_eq!(m.splay_key_edge(n), newkey);
+            assert_eq!(m.splay_key_dest(n), 1);
+            assert_eq!(
+                (m.splay_left_child(n), m.splay_right_child(n)),
+                (NULL_ROW, NULL_ROW)
+            );
             assert_eq!(m.counterclockcount, 1);
             assert_eq!(m.hyperbolacount, 0);
         }
@@ -3278,9 +3284,9 @@ mod tests {
             // right of the root: the splay touches the root's edge once
             // and the insert splits right (searchpoint.x = 4 + 3 = 7)
             let mut m = mesh_with(&pts, false);
-            let t = m.maketriangle(false, false).expect("tri");
-            m.setdest(t, 1);
-            m.setapex(t, 2);
+            let t = m.make_triangle(false, false).expect("tri");
+            m.set_dest(t, 1);
+            m.set_apex(t, 2);
             let r = fresh_snode(
                 &mut m,
                 Otri {
@@ -3289,16 +3295,16 @@ mod tests {
                 },
                 1,
             );
-            let t2 = m.maketriangle(false, false).expect("tri");
-            m.setdest(t2, 1);
+            let t2 = m.make_triangle(false, false).expect("tri");
+            m.set_dest(t2, 1);
             let newkey = Otri {
                 tri: t2.tri,
                 orient: 0,
             };
-            let n = circletopinsert(&mut m, &b, r, &newkey, 3, 4, 5, 5.0).expect("oom");
-            assert_eq!(m.splay_lchild(n), r, "right of the root");
-            assert_eq!(m.splay_rchild(n), NULL);
-            assert_eq!(m.splay_rchild(r), NULL);
+            let n = circle_top_insert(&mut m, &b, r, &newkey, 3, 4, 5, 5.0).expect("oom");
+            assert_eq!(m.splay_left_child(n), r, "right of the root");
+            assert_eq!(m.splay_right_child(n), NULL_ROW);
+            assert_eq!(m.splay_right_child(r), NULL_ROW);
             assert_eq!(m.counterclockcount, 1);
             assert_eq!(m.hyperbolacount, 2);
         }
@@ -3306,9 +3312,9 @@ mod tests {
             // pa (-2,1), pb (-4,1), pc (0,0): searchpoint.x = -3, left
             // of the front key edge - the mirror split
             let mut m = mesh_with(&pts, false);
-            let t = m.maketriangle(false, false).expect("tri");
-            m.setdest(t, 1);
-            m.setapex(t, 2);
+            let t = m.make_triangle(false, false).expect("tri");
+            m.set_dest(t, 1);
+            m.set_apex(t, 2);
             let r = fresh_snode(
                 &mut m,
                 Otri {
@@ -3317,34 +3323,34 @@ mod tests {
                 },
                 1,
             );
-            let t2 = m.maketriangle(false, false).expect("tri");
-            m.setdest(t2, 1);
+            let t2 = m.make_triangle(false, false).expect("tri");
+            m.set_dest(t2, 1);
             let newkey = Otri {
                 tri: t2.tri,
                 orient: 0,
             };
-            let n = circletopinsert(&mut m, &b, r, &newkey, 6, 7, 1, 5.0).expect("oom");
-            assert_eq!(m.splay_rchild(n), r, "left of the root");
-            assert_eq!(m.splay_lchild(n), NULL);
-            assert_eq!(m.splay_lchild(r), NULL);
+            let n = circle_top_insert(&mut m, &b, r, &newkey, 6, 7, 1, 5.0).expect("oom");
+            assert_eq!(m.splay_right_child(n), r, "left of the root");
+            assert_eq!(m.splay_left_child(n), NULL_ROW);
+            assert_eq!(m.splay_left_child(r), NULL_ROW);
             assert_eq!(m.counterclockcount, 1);
             assert_eq!(m.hyperbolacount, 2);
         }
     }
 
     #[test]
-    fn frontlocate_walks_the_front_from_bottommost() {
+    fn front_locate_walks_the_front_from_bottommost() {
         let pts = [(0.0, 0.0), (2.0, 0.0), (5.0, 5.0), (-1.0, 5.0)];
         let mut m = mesh_with(&pts, false);
-        let t = m.maketriangle(false, false).expect("tri");
-        m.setdest(t, 1);
-        m.setapex(t, 2);
+        let t = m.make_triangle(false, false).expect("tri");
+        m.set_dest(t, 1);
+        m.set_apex(t, 2);
         let bottommost = Otri {
             tri: t.tri,
             orient: 0,
         };
         let mut st = Otri {
-            tri: NULL,
+            tri: NULL_ROW,
             orient: 0,
         };
         let mut farright = false;
@@ -3352,8 +3358,8 @@ mod tests {
         // steps into outer space, whose null row fails the hyperbola
         // test - the walk stops without wrapping the front
         assert_eq!(
-            frontlocate(&mut m, NULL, &bottommost, 3, &mut st, &mut farright),
-            NULL
+            front_locate(&mut m, NULL_ROW, &bottommost, 3, &mut st, &mut farright),
+            NULL_ROW
         );
         assert_eq!(
             st,
@@ -3367,12 +3373,12 @@ mod tests {
         // a search point left of the front edge: the loop body never
         // runs, the bottommost handle answers untouched
         let mut st2 = Otri {
-            tri: NULL,
+            tri: NULL_ROW,
             orient: 0,
         };
         assert_eq!(
-            frontlocate(&mut m, NULL, &bottommost, 4, &mut st2, &mut farright),
-            NULL
+            front_locate(&mut m, NULL_ROW, &bottommost, 4, &mut st2, &mut farright),
+            NULL_ROW
         );
         assert_eq!(st2, bottommost);
         assert!(!farright);
@@ -3382,12 +3388,12 @@ mod tests {
     }
 
     #[test]
-    fn sweeplinedelaunay_square_end_state() {
+    fn sweepline_delaunay_square_end_state() {
         let pts = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
         let mut m = mesh_with(&pts, false);
         set_bounds(&mut m, &pts);
         let b = behavior(false);
-        let hullsize = sweeplinedelaunay(&mut m, &b).expect("oom");
+        let hullsize = sweepline_delaunay(&mut m, &b).expect("oom");
         assert_eq!(hullsize, 4);
         let (hull_edges, live, counted) = end_state_checks(&m);
         assert_eq!((hull_edges, live, counted), (4, 2, 2));
@@ -3404,7 +3410,7 @@ mod tests {
         // counter byte for byte
         let mut m2 = mesh_with(&pts, false);
         set_bounds(&mut m2, &pts);
-        let hullsize2 = sweeplinedelaunay(&mut m2, &b).expect("oom");
+        let hullsize2 = sweepline_delaunay(&mut m2, &b).expect("oom");
         assert_eq!(hullsize, hullsize2);
         assert_eq!(m.hyperbolacount, m2.hyperbolacount);
         assert_eq!(m.circletopcount, m2.circletopcount);
@@ -3412,7 +3418,7 @@ mod tests {
     }
 
     #[test]
-    fn sweeplinedelaunay_grid9_is_delaunay_and_deterministic() {
+    fn sweepline_delaunay_grid9_is_delaunay_and_deterministic() {
         let pts = [
             (0.0, 0.0),
             (1.0, 0.0),
@@ -3427,7 +3433,7 @@ mod tests {
         let mut m = mesh_with(&pts, false);
         set_bounds(&mut m, &pts);
         let b = behavior(false);
-        let hullsize = sweeplinedelaunay(&mut m, &b).expect("oom");
+        let hullsize = sweepline_delaunay(&mut m, &b).expect("oom");
         assert_eq!(hullsize, 8);
         let (hull_edges, live, counted) = end_state_checks(&m);
         assert_eq!((hull_edges, live, counted), (8, 8, 8));
@@ -3442,7 +3448,7 @@ mod tests {
 
         let mut m2 = mesh_with(&pts, false);
         set_bounds(&mut m2, &pts);
-        let hullsize2 = sweeplinedelaunay(&mut m2, &b).expect("oom");
+        let hullsize2 = sweepline_delaunay(&mut m2, &b).expect("oom");
         assert_eq!(hullsize, hullsize2);
         assert_eq!(m.hyperbolacount, m2.hyperbolacount);
         assert_eq!(m.circletopcount, m2.circletopcount);
@@ -3450,17 +3456,17 @@ mod tests {
     }
 
     #[test]
-    fn sweeplinedelaunay_duplicate_accounting_and_tri_input() {
+    fn sweepline_delaunay_duplicate_accounting_and_tri_input() {
         let b = behavior(false);
         // a site-event duplicate mid-sweep: the duplicate is marked
         // undead at the C site (triangle.c:5322-5325) and skipped
         let pts = [(0.0, 0.0), (1.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
         let mut m = mesh_with(&pts, false);
         set_bounds(&mut m, &pts);
-        let hullsize = sweeplinedelaunay(&mut m, &b).expect("oom");
+        let hullsize = sweepline_delaunay(&mut m, &b).expect("oom");
         assert_eq!(hullsize, 4, "the four distinct sites form the square");
         assert_eq!(m.undeads, 1);
-        assert_eq!(m.vx_type(3), UNDEADVERTEX);
+        assert_eq!(m.vx_type(3), UNDEAD_VERTEX);
         let (hull_edges, live, _) = end_state_checks(&m);
         assert_eq!((hull_edges, live), (4, 2));
 
@@ -3471,12 +3477,12 @@ mod tests {
         let pts2 = [(1.0, 1.0), (1.0, 1.0)];
         let mut m2 = mesh_with(&pts2, false);
         set_bounds(&mut m2, &pts2);
-        let err = sweeplinedelaunay(&mut m2, &b).expect_err("all-identical input");
+        let err = sweepline_delaunay(&mut m2, &b).expect_err("all-identical input");
         assert!(
             matches!(err, crate::error::Error::Input(ref msg) if msg == "invalid input (TRI_INPUT)")
         );
         assert_eq!(m2.undeads, 1);
-        assert_eq!(m2.vx_type(2), UNDEADVERTEX);
+        assert_eq!(m2.vx_type(2), UNDEAD_VERTEX);
         // via the dispatcher the value flows out as C's hullsize oddity:
         // the two tube rows are alive, so the hull "size" is TRI_INPUT
         let b_sw = Behavior {
@@ -3496,7 +3502,7 @@ mod tests {
         let pts3 = [(0.0, 0.0), (0.0, 0.0), (1.0, 0.0)];
         let mut m4 = mesh_with(&pts3, false);
         set_bounds(&mut m4, &pts3);
-        let raw = sweeplinedelaunay(&mut m4, &b).expect("oom");
+        let raw = sweepline_delaunay(&mut m4, &b).expect("oom");
         assert_eq!(raw, 2);
         assert_eq!(m4.triangles.live_count(), 0);
         assert_eq!(m4.undeads, 1);

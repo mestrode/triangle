@@ -306,7 +306,7 @@ impl Options {
     /// where C takes a 'behavior*'. Called by every entry point.
     pub(crate) fn validate(self) -> Result<Behavior, Error> {
         let mut b = self.behavior();
-        b.behavior_update();
+        b.update_derived_fields();
         if b.fixedarea && b.maxarea <= 0.0 {
             // TRI_OPTIONS (triangle_helper.c:17-23).
             return Err(Error::Options(format!(
@@ -640,7 +640,7 @@ impl Behavior {
     /// of triangle_config.h:159 (the double truncation of both
     /// literals is identical); cos/sqrt call the same system libm on
     /// both sides of the differential run (ADR 0004 section 3).
-    pub(crate) fn behavior_update(&mut self) {
+    pub(crate) fn update_derived_fields(&mut self) {
         self.usesegments = self.poly || self.refine || self.quality || self.convex;
         self.goodangle = (self.minangle * PI / 180.0).cos();
         #[cfg(feature = "acute")]

@@ -9,25 +9,25 @@
 //! plus the sample index (D4: ids replace the raw addresses; identical
 //! arithmetic).
 //!
-//! Stage-1 note: consumers of these functions are algorithm/transform.rs (this PR:
-//! insertvertex) and later algorithm/segments.rs/algorithm/refine.rs; the current call graph
+//! Stage-1 note: consumers of these functions are algorithm/algorithm/transform.rs (this PR:
+//! insertvertex) and later algorithm/segments.rs/algorithm/algorithm/refine.rs; the current call graph
 //! sits below not-yet-landed modules, so the blanket below silences the
 //! ahead-of-use dead_code and is removed as the remaining consumers land.
 #![allow(dead_code)]
 
 use crate::mesh::handles::{Otri, DUMMY_SUB, DUMMY_TRI};
-use crate::mesh::util::{randomnation, vertex_coords};
+use crate::mesh::util::{random_below, vertex_coords};
 use crate::mesh::Mesh;
 use crate::options::Behavior;
-use crate::predicates::tri_counterclockwise;
+use crate::predicates::counterclockwise;
 
 /// C: TRIPERBLOCK (triangle_config.h:120): number of triangles allocated at
 /// once. locate()'s sampling schedule reads the constant exactly like C's
 /// macro (the triangle pool is configured with the same number).
-const TRIPERBLOCK: i64 = 4092;
+const TRI_PER_BLOCK: i64 = 4092;
 /// C: SAMPLEFACTOR (triangle_config.h:149): m->samples grows while
 /// SAMPLEFACTOR * samples^3 < triangles.
-const SAMPLEFACTOR: i64 = 11;
+const SAMPLE_FACTOR: i64 = 11;
 
 /// C: enum locateresult (triangle.h:97): INTRIANGLE, ONEDGE, ONVERTEX,
 /// OUTSIDE - the exact C discriminants (pinned by test below). Owned by this
@@ -61,7 +61,7 @@ pub(crate) enum LocateResult {
 /// this routine is designed for convex triangulations and will not
 /// generally work after the holes and concavities have been carved (C
 /// comment preserved).
-pub(crate) fn preciselocate(
+pub(crate) fn precise_locate(
     m: &mut Mesh,
     b: &Behavior,
     searchpoint: (f64, f64),
@@ -78,17 +78,17 @@ pub(crate) fn preciselocate(
     loop {
         // Check whether the apex is the point we seek.
         if m.vx_x(fapex) == searchpoint.0 && m.vx_y(fapex) == searchpoint.1 {
-            searchtri.lprevself();
+            searchtri.lprev_self();
             return LocateResult::OnVertex;
         }
         // Does the point lie on the other side of the line defined by the
         //   triangle edge opposite the triangle's destination?
         let destorient =
-            tri_counterclockwise(m, b, vertex_coords(m, forg), vertex_coords(m, fapex), sp);
+            counterclockwise(m, b, vertex_coords(m, forg), vertex_coords(m, fapex), sp);
         // Does the point lie on the other side of the line defined by the
         //   triangle edge opposite the triangle's origin?
         let orgorient =
-            tri_counterclockwise(m, b, vertex_coords(m, fapex), vertex_coords(m, fdest), sp);
+            counterclockwise(m, b, vertex_coords(m, fapex), vertex_coords(m, fdest), sp);
         let moveleft;
         if destorient > 0.0 {
             if orgorient > 0.0 {
@@ -109,11 +109,11 @@ pub(crate) fn preciselocate(
             // The point we seek must be on the boundary of or inside this
             //   triangle.
             if destorient == 0.0 {
-                searchtri.lprevself();
+                searchtri.lprev_self();
                 return LocateResult::OnEdge;
             }
             if orgorient == 0.0 {
-                searchtri.lnextself();
+                searchtri.lnext_self();
                 return LocateResult::OnEdge;
             }
             return LocateResult::InTriangle;
@@ -133,11 +133,11 @@ pub(crate) fn preciselocate(
         //   is taken on the rotated edge the walk leaves through, not on
         //   the incoming handle's primary edge.
         *searchtri = backtracktri;
-        m.symself(searchtri);
+        m.sym_self(searchtri);
 
         if m.checksegments && stopatsubsegment {
             // Check for walking through a subsegment.
-            let checkedge = m.tspivot(backtracktri);
+            let checkedge = m.tri_subseg(backtracktri);
             if checkedge.ss != DUMMY_SUB {
                 // Go back to the last triangle.
                 *searchtri = backtracktri;
@@ -187,7 +187,7 @@ pub(crate) fn locate(
     // If a recently encountered triangle has been recorded and has not been
     //   deallocated, test it as a good starting point.
     if let Some(recenttri) = m.recenttri {
-        if !m.deadtri(recenttri.tri) {
+        if !m.is_dead_tri(recenttri.tri) {
             torg = m.org(recenttri);
             if m.vx_x(torg) == searchpoint.0 && m.vx_y(torg) == searchpoint.1 {
                 *searchtri = recenttri;
@@ -206,7 +206,7 @@ pub(crate) fn locate(
     //   the number of triangles in the mesh.  The next bit of code assumes
     //   that the number of triangles increases monotonically (or at least
     //   doesn't decrease enough to matter).
-    while SAMPLEFACTOR * m.samples * m.samples * m.samples < m.triangles.live_count() as i64 {
+    while SAMPLE_FACTOR * m.samples * m.samples * m.samples < m.triangles.live_count() as i64 {
         m.samples += 1;
     }
 
@@ -214,7 +214,7 @@ pub(crate) fn locate(
     //   from each block of triangles (except the first)--until we meet the
     //   sample quota.  The ceiling means that blocks at the end might be
     //   neglected, but I don't care.
-    let samplesperblock = (m.samples * TRIPERBLOCK - 1) / m.triangles.high_water() as i64 + 1;
+    let samplesperblock = (m.samples * TRI_PER_BLOCK - 1) / m.triangles.high_water() as i64 + 1;
     // We'll draw ceiling(samples * itemsfirstblock / maxitems) random samples
     //   from the first block of triangles.
     let mut samplesleft = (m.samples * m.triangles.first_block_items() as i64 - 1)
@@ -240,8 +240,8 @@ pub(crate) fn locate(
             orient: 0,
         };
         loop {
-            sampletri.tri = firsttri + randomnation(m, population as u32) as u32;
-            if !m.deadtri(sampletri.tri) {
+            sampletri.tri = firsttri + random_below(m, population as u32) as u32;
+            if !m.is_dead_tri(sampletri.tri) {
                 torg = m.org(sampletri);
                 let dist = (searchpoint.0 - m.vx_x(torg)) * (searchpoint.0 - m.vx_x(torg))
                     + (searchpoint.1 - m.vx_y(torg)) * (searchpoint.1 - m.vx_y(torg));
@@ -264,7 +264,7 @@ pub(crate) fn locate(
             block += 1;
             samplesleft = samplesperblock;
             totalpopulation -= population;
-            population = TRIPERBLOCK;
+            population = TRI_PER_BLOCK;
         }
     }
 
@@ -276,15 +276,15 @@ pub(crate) fn locate(
         return LocateResult::OnVertex;
     }
     if m.vx_x(tdest) == searchpoint.0 && m.vx_y(tdest) == searchpoint.1 {
-        searchtri.lnextself();
+        searchtri.lnext_self();
         return LocateResult::OnVertex;
     }
     // Orient 'searchtri' to fit the preconditions of calling preciselocate().
-    let ahead = tri_counterclockwise(m, b, vertex_coords(m, torg), vertex_coords(m, tdest), sp);
+    let ahead = counterclockwise(m, b, vertex_coords(m, torg), vertex_coords(m, tdest), sp);
     if ahead < 0.0 {
         // Turn around so that 'searchpoint' is to the left of the
         //   edge specified by 'searchtri'.
-        m.symself(searchtri);
+        m.sym_self(searchtri);
     } else if ahead == 0.0 {
         // Check if 'searchpoint' is between 'torg' and 'tdest'.
         if (m.vx_x(torg) < searchpoint.0) == (searchpoint.0 < m.vx_x(tdest))
@@ -293,7 +293,7 @@ pub(crate) fn locate(
             return LocateResult::OnEdge;
         }
     }
-    preciselocate(m, b, searchpoint, searchtri, false)
+    precise_locate(m, b, searchpoint, searchtri, false)
 }
 
 #[cfg(test)]
@@ -320,10 +320,10 @@ mod tests {
         // triangles (org=center, dest=outer[k], apex=outer[k+1]), CCW
         let mut tris = vec![];
         for k in 0..n as usize {
-            let t = m.maketriangle(false, false).expect("alloc");
-            m.setorg(t, center);
-            m.setdest(t, outer[k]);
-            m.setapex(t, outer[(k + 1) % n as usize]);
+            let t = m.make_triangle(false, false).expect("alloc");
+            m.set_org(t, center);
+            m.set_dest(t, outer[k]);
+            m.set_apex(t, outer[(k + 1) % n as usize]);
             tris.push(t);
         }
         // bond the spoke edge (center, outer[k+1]): lprev edge of tri k to
@@ -340,7 +340,7 @@ mod tests {
     }
 
     #[test]
-    fn locateresult_discriminants_are_the_c_values() {
+    fn locate_result_discriminants_are_the_c_values() {
         assert_eq!(LocateResult::InTriangle as i32, 0); // C INTRIANGLE
         assert_eq!(LocateResult::OnEdge as i32, 1); // C ONEDGE
         assert_eq!(LocateResult::OnVertex as i32, 2); // C ONVERTEX
@@ -440,7 +440,7 @@ mod tests {
     }
 
     #[test]
-    fn preciselocate_walks_from_a_valid_start_only() {
+    fn precise_locate_walks_from_a_valid_start_only() {
         let (mut m, _center, _outer, tris) = fan(6);
         let b = Behavior::default_form();
         // start inside triangle 3 with the point inside triangle 4: the
@@ -453,7 +453,7 @@ mod tests {
         // orient the start handle so the point is strictly left of its edge
         // (the degenerate hull precondition case is locate()'s job)
         assert_eq!(
-            preciselocate(&mut m, &b, target, &mut st, false),
+            precise_locate(&mut m, &b, target, &mut st, false),
             LocateResult::InTriangle
         );
         assert_eq!(st.tri, tris[4].tri);
@@ -461,7 +461,7 @@ mod tests {
         let mut st = tris[2];
         // point far outside the wedge of triangle 2, outside the hull
         assert_eq!(
-            preciselocate(&mut m, &b, (0.0, -2.0), &mut st, false),
+            precise_locate(&mut m, &b, (0.0, -2.0), &mut st, false),
             LocateResult::Outside
         );
     }

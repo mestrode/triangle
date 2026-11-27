@@ -58,15 +58,15 @@
 #![allow(dead_code)]
 
 use crate::algorithm::locate::{locate, LocateResult};
-use crate::algorithm::transform::{insertsubseg, insertvertex, InsertVertexResult};
+use crate::algorithm::transform::{insert_subseg, insert_vertex, InsertVertexResult};
 use crate::error::{Error, SegmentRecoveryKind};
 use crate::mesh::handles::{decode, encode, Osub, Otri, DUMMY_SUB, DUMMY_TRI};
 use crate::mesh::pool::Oom;
-use crate::mesh::slots::{DEADVERTEX, INPUTVERTEX, SEGMENTVERTEX, UNDEADVERTEX};
+use crate::mesh::slots::{DEAD_VERTEX, INPUT_VERTEX, SEGMENT_VERTEX, UNDEAD_VERTEX};
 use crate::mesh::util::vertex_coords;
 use crate::mesh::Mesh;
 use crate::options::Behavior;
-use crate::predicates::{tri_counterclockwise, tri_incircle, Vertex};
+use crate::predicates::{counterclockwise, incircle, Vertex};
 
 // ---------------------------------------------------------------------------
 // SegmentChainError (the fix pass's narrow hot-chain error)
@@ -200,7 +200,7 @@ pub(crate) fn reconstruct(
     }
     m.eextras = attribs;
 
-    m.initializetrisubpools(
+    m.init_tri_and_subseg_pools(
         b.order,
         b.usesegments,
         b.vararea,
@@ -210,7 +210,7 @@ pub(crate) fn reconstruct(
 
     // Create the triangles.
     for _ in 1..=m.inelements {
-        let triangleloop = m.maketriangle(b.usesegments, b.vararea)?;
+        let triangleloop = m.make_triangle(b.usesegments, b.vararea)?;
         // Mark the triangle as living: C's raw tri[3] = (triangle) tri
         // self-scribble on the org slot, later overwritten by setorg.
         m.set_tri_vertex_word(triangleloop.tri, 0, triangleloop.tri as u64);
@@ -222,7 +222,7 @@ pub(crate) fn reconstruct(
 
         // Create the subsegments.
         for _ in 1..=m.insegments {
-            let subsegloop = m.makesubseg()?;
+            let subsegloop = m.make_subseg()?;
             // Mark the subsegment as living: C's raw ss[2] = (subseg) ss.
             m.set_sub_vertex_word(subsegloop.ss, 0, subsegloop.ss as u64);
         }
@@ -251,7 +251,7 @@ pub(crate) fn reconstruct(
     // Read the triangles from the .ele file, and link
     // together those that share an edge.
     let mut t = m.triangles.traversal();
-    let mut triangleloop_id = m.triangletraverse(&mut t);
+    let mut triangleloop_id = m.traverse_triangle(&mut t);
     elementnumber = b.firstnumber as i64;
     while let Some(tri_id) = triangleloop_id {
         let mut triangleloop = Otri {
@@ -276,8 +276,8 @@ pub(crate) fn reconstruct(
                 && (killvertexindex < b.firstnumber + m.invertices)
             {
                 // Delete the non-corner vertex if it's not already deleted.
-                let killvertex = m.getvertex(b.firstnumber, killvertexindex);
-                if m.vx_type(killvertex) != DEADVERTEX {
+                let killvertex = m.get_vertex(b.firstnumber, killvertexindex);
+                if m.vx_type(killvertex) != DEAD_VERTEX {
                     m.vx_dealloc(killvertex);
                 }
             }
@@ -295,13 +295,13 @@ pub(crate) fn reconstruct(
 
         if b.vararea {
             let area = trianglearealist[(elementnumber - b.firstnumber as i64) as usize];
-            m.set_tri_areabound(triangleloop.tri, area);
+            m.set_tri_area_bound(triangleloop.tri, area);
         }
         // Set the triangle's vertices.
         triangleloop.orient = 0;
-        m.setorg(triangleloop, m.getvertex(b.firstnumber, corner[0]));
-        m.setdest(triangleloop, m.getvertex(b.firstnumber, corner[1]));
-        m.setapex(triangleloop, m.getvertex(b.firstnumber, corner[2]));
+        m.set_org(triangleloop, m.get_vertex(b.firstnumber, corner[0]));
+        m.set_dest(triangleloop, m.get_vertex(b.firstnumber, corner[1]));
+        m.set_apex(triangleloop, m.get_vertex(b.firstnumber, corner[2]));
         // Try linking the triangle to others that share these vertices.
         for orient in 0..3u8 {
             triangleloop.orient = orient;
@@ -340,7 +340,7 @@ pub(crate) fn reconstruct(
                 }
             }
         }
-        triangleloop_id = m.triangletraverse(&mut t);
+        triangleloop_id = m.traverse_triangle(&mut t);
         elementnumber += 1;
     }
 
@@ -352,12 +352,12 @@ pub(crate) fn reconstruct(
         // to their neighboring triangles.
         boundmarker = 0;
         let mut st = m.subsegs.traversal();
-        let mut subsegloop_id = m.subsegtraverse(&mut st);
+        let mut subsegloop_id = m.traverse_subseg(&mut st);
         let mut segmentnumber = b.firstnumber;
         while let Some(ss_id) = subsegloop_id {
             let mut subsegloop = Osub {
                 ss: ss_id,
-                ssorient: 0,
+                orient: 0,
             };
             end[0] = segmentlist[vertexindex];
             vertexindex += 1;
@@ -375,26 +375,26 @@ pub(crate) fn reconstruct(
             }
 
             // Set the subsegment's vertices.
-            subsegloop.ssorient = 0;
-            let segmentorg = m.getvertex(b.firstnumber, end[0]);
-            let segmentdest = m.getvertex(b.firstnumber, end[1]);
-            m.setsorg(subsegloop, segmentorg);
-            m.setsdest(subsegloop, segmentdest);
-            m.setsegorg(subsegloop, segmentorg);
-            m.setsegdest(subsegloop, segmentdest);
+            subsegloop.orient = 0;
+            let segmentorg = m.get_vertex(b.firstnumber, end[0]);
+            let segmentdest = m.get_vertex(b.firstnumber, end[1]);
+            m.set_subseg_org(subsegloop, segmentorg);
+            m.set_subseg_dest(subsegloop, segmentdest);
+            m.set_segment_org(subsegloop, segmentorg);
+            m.set_segment_dest(subsegloop, segmentdest);
             m.set_sub_mark(subsegloop.ss, boundmarker);
             // Try linking the subsegment to triangles that share these
             // vertices.
-            for ssorient in 0..2u8 {
-                subsegloop.ssorient = ssorient;
+            for orient in 0..2u8 {
+                subsegloop.orient = orient;
                 // Take the number for the destination of subsegloop.
-                let aroundvertex = end[(1 - subsegloop.ssorient) as usize];
+                let aroundvertex = end[(1 - subsegloop.orient) as usize];
                 let ai = (aroundvertex - b.firstnumber) as usize;
                 // Look for triangles having this vertex.
                 let mut prevlink = PrevLink::Array(ai);
                 let mut nexttri = vertexarray[ai];
                 let mut checktri = decode(nexttri);
-                let shorg = m.sorg(subsegloop);
+                let shorg = m.subseg_org(subsegloop);
                 let mut notfound = true;
                 // Look for triangles having this edge.  (Same traversal
                 // shape as C, including the trailing prevlink advance on
@@ -410,7 +410,7 @@ pub(crate) fn reconstruct(
                             PrevLink::Tri(t, o) => m.set_tri_subseg_word(t, o as usize, unlink),
                         }
                         // Bond the subsegment to the triangle.
-                        m.tsbond(checktri, subsegloop);
+                        m.bond_tri_subseg(checktri, subsegloop);
                         // Check if this is a boundary edge.
                         let checkneighbor = m.sym(checktri);
                         if checkneighbor.tri == DUMMY_TRI {
@@ -418,7 +418,7 @@ pub(crate) fn reconstruct(
                             //   (because there's already one there), but it
                             //   sets the boundary markers of the existing
                             //   subsegment and its vertices.
-                            insertsubseg(m, b, checktri, 1)?;
+                            insert_subseg(m, b, checktri, 1)?;
                             hullsize += 1;
                         }
                         notfound = false;
@@ -429,7 +429,7 @@ pub(crate) fn reconstruct(
                     checktri = decode(nexttri);
                 }
             }
-            subsegloop_id = m.subsegtraverse(&mut st);
+            subsegloop_id = m.traverse_subseg(&mut st);
             segmentnumber += 1;
         }
     }
@@ -446,10 +446,10 @@ pub(crate) fn reconstruct(
             // information gets overwritten.
             nexttri = m.tri_subseg_word(checktri.tri, checktri.orient as usize);
             // No adjacent subsegment.  (This overwrites the stack info.)
-            m.tsdissolve(checktri);
+            m.dissolve_tri_subseg(checktri);
             let checkneighbor = m.sym(checktri);
             if checkneighbor.tri == DUMMY_TRI {
-                insertsubseg(m, b, checktri, 1)?;
+                insert_subseg(m, b, checktri, 1)?;
                 hullsize += 1;
             }
             checktri = decode(nexttri);
@@ -470,7 +470,7 @@ pub(crate) fn reconstruct(
 /// The origin of the returned 'searchtri' does not change. Returns
 /// whether the destination or apex of the found triangle is collinear
 /// with the two points in question.
-pub(crate) fn finddirection(
+pub(crate) fn find_direction(
     m: &mut Mesh,
     b: &Behavior,
     searchtri: &mut Otri,
@@ -482,7 +482,7 @@ pub(crate) fn finddirection(
     let mut rightvertex = m.dest(*searchtri);
     let mut leftvertex = m.apex(*searchtri);
     // Is 'searchpoint' to the left?
-    let mut leftccw = tri_counterclockwise(
+    let mut leftccw = counterclockwise(
         m,
         b,
         searchpoint_v,
@@ -491,7 +491,7 @@ pub(crate) fn finddirection(
     );
     let mut leftflag = leftccw > 0.0;
     // Is 'searchpoint' to the right?
-    let mut rightccw = tri_counterclockwise(
+    let mut rightccw = counterclockwise(
         m,
         b,
         vertex_coords(m, startvertex),
@@ -518,7 +518,7 @@ pub(crate) fn finddirection(
     let mut tries: i64 = 0;
     while leftflag && tries < maxtries {
         // Turn left until satisfied.
-        m.onextself(searchtri);
+        m.onext_self(searchtri);
         if searchtri.tri == DUMMY_TRI {
             // C: Unable to find a triangle leading from the origin to
             // the searchpoint.
@@ -528,7 +528,7 @@ pub(crate) fn finddirection(
         }
         leftvertex = m.apex(*searchtri);
         rightccw = leftccw;
-        leftccw = tri_counterclockwise(
+        leftccw = counterclockwise(
             m,
             b,
             searchpoint_v,
@@ -540,7 +540,7 @@ pub(crate) fn finddirection(
     }
     while rightflag && tries < maxtries {
         // Turn right until satisfied.
-        m.oprevself(searchtri);
+        m.oprev_self(searchtri);
         if searchtri.tri == DUMMY_TRI {
             return Err(SegmentChainError::Recovery(
                 SegmentRecoveryKind::FindDirection,
@@ -548,7 +548,7 @@ pub(crate) fn finddirection(
         }
         rightvertex = m.dest(*searchtri);
         leftccw = rightccw;
-        rightccw = tri_counterclockwise(
+        rightccw = counterclockwise(
             m,
             b,
             vertex_coords(m, startvertex),
@@ -584,7 +584,7 @@ pub(crate) fn finddirection(
 // C-parity: the split roundoff window is C's hand-written conjunction
 // (triangle.c:5927), kept verbatim.
 #[allow(clippy::manual_range_contains)]
-pub(crate) fn segmentintersection(
+pub(crate) fn segment_intersection(
     m: &mut Mesh,
     b: &Behavior,
     splittri: &mut Otri,
@@ -631,9 +631,9 @@ pub(crate) fn segmentintersection(
         );
     }
     m.vx_set_mark(newvertex, m.sub_mark(splitsubseg.ss));
-    m.vx_set_type(newvertex, INPUTVERTEX);
+    m.vx_set_type(newvertex, INPUT_VERTEX);
     // Insert the intersection vertex.  This should always succeed.
-    let success = insertvertex(
+    let success = insert_vertex(
         m,
         b,
         newvertex,
@@ -657,20 +657,20 @@ pub(crate) fn segmentintersection(
     }
 
     // Divide the segment into two, and correct the segment endpoints.
-    splitsubseg.ssymself();
-    let mut opposubseg = m.spivot(*splitsubseg);
-    m.sdissolve(*splitsubseg);
-    m.sdissolve(opposubseg);
+    splitsubseg.sym_self();
+    let mut opposubseg = m.pivot_subseg(*splitsubseg);
+    m.dissolve_subseg(*splitsubseg);
+    m.dissolve_subseg(opposubseg);
     loop {
-        m.setsegorg(*splitsubseg, newvertex);
-        m.snextself(splitsubseg);
+        m.set_segment_org(*splitsubseg, newvertex);
+        m.next_subseg_self(splitsubseg);
         if splitsubseg.ss == DUMMY_SUB {
             break;
         }
     }
     loop {
-        m.setsegorg(opposubseg, newvertex);
-        m.snextself(&mut opposubseg);
+        m.set_segment_org(opposubseg, newvertex);
+        m.next_subseg_self(&mut opposubseg);
         if opposubseg.ss == DUMMY_SUB {
             break;
         }
@@ -679,12 +679,12 @@ pub(crate) fn segmentintersection(
     // Inserting the vertex may have caused edge flips.  We wish to
     //   rediscover the edge connecting endpoint1 to the new
     //   intersection vertex.
-    let _collinear = finddirection(m, b, splittri, endpoint1_xy)?;
+    let _collinear = find_direction(m, b, splittri, endpoint1_xy)?;
 
     let rightvertex = m.dest(*splittri);
     let leftvertex = m.apex(*splittri);
     if (m.vx_x(leftvertex) == endpoint1_xy.0) && (m.vx_y(leftvertex) == endpoint1_xy.1) {
-        m.onextself(splittri);
+        m.onext_self(splittri);
     } else if (m.vx_x(rightvertex) != endpoint1_xy.0) || (m.vx_y(rightvertex) != endpoint1_xy.1) {
         // C: Topological inconsistency after splitting a segment.
         return Err(SegmentChainError::Recovery(SegmentRecoveryKind::Intersect));
@@ -709,7 +709,7 @@ pub(crate) fn segmentintersection(
 // C's explicit `return 1;` / `return 0;` / tail `return scoutsegment(...)`
 // statements are kept verbatim; eliding them is C-invisible control flow.
 #[allow(clippy::needless_return)]
-pub(crate) fn scoutsegment(
+pub(crate) fn scout_segment(
     m: &mut Mesh,
     b: &Behavior,
     searchtri: &mut Otri,
@@ -725,7 +725,7 @@ pub(crate) fn scoutsegment(
         return Err(SegmentChainError::Recovery(SegmentRecoveryKind::Scout));
     }
 
-    let collinear = finddirection(m, b, searchtri, (m.vx_x(endpoint2), m.vx_y(endpoint2)))?;
+    let collinear = find_direction(m, b, searchtri, (m.vx_x(endpoint2), m.vx_y(endpoint2)))?;
 
     let rightvertex = m.dest(*searchtri);
     let leftvertex = m.apex(*searchtri);
@@ -736,40 +736,40 @@ pub(crate) fn scoutsegment(
     {
         // The segment is already an edge in the mesh.
         if (m.vx_x(leftvertex) == e2x) && (m.vx_y(leftvertex) == e2y) {
-            searchtri.lprevself();
+            searchtri.lprev_self();
         }
         // Insert a subsegment, if there isn't already one there.
-        insertsubseg(m, b, *searchtri, newmark)?;
+        insert_subseg(m, b, *searchtri, newmark)?;
         return Ok(1);
     } else if collinear == FindDirectionResult::LeftCollinear {
         // We've collided with a vertex between the segment's endpoints.
         // Make the collinear vertex be the triangle's origin.
-        searchtri.lprevself();
-        insertsubseg(m, b, *searchtri, newmark)?;
+        searchtri.lprev_self();
+        insert_subseg(m, b, *searchtri, newmark)?;
         // Insert the remainder of the segment.
-        return scoutsegment(m, b, searchtri, endpoint2, newmark);
+        return scout_segment(m, b, searchtri, endpoint2, newmark);
     } else if collinear == FindDirectionResult::RightCollinear {
         // We've collided with a vertex between the segment's endpoints.
-        insertsubseg(m, b, *searchtri, newmark)?;
+        insert_subseg(m, b, *searchtri, newmark)?;
         // Make the collinear vertex be the triangle's origin.
-        searchtri.lnextself();
+        searchtri.lnext_self();
         // Insert the remainder of the segment.
-        return scoutsegment(m, b, searchtri, endpoint2, newmark);
+        return scout_segment(m, b, searchtri, endpoint2, newmark);
     } else {
         let mut crosstri = searchtri.lnext();
         // C: tspivot(crosstri, crosssubseg).
-        let mut crosssubseg = m.tspivot(crosstri);
+        let mut crosssubseg = m.tri_subseg(crosstri);
         // Check for a crossing segment.
         if crosssubseg.ss == DUMMY_SUB {
             return Ok(0);
         } else {
             // Insert a vertex at the intersection.
-            segmentintersection(m, b, &mut crosstri, &mut crosssubseg, endpoint2)?;
+            segment_intersection(m, b, &mut crosstri, &mut crosssubseg, endpoint2)?;
 
             *searchtri = crosstri;
-            insertsubseg(m, b, *searchtri, newmark)?;
+            insert_subseg(m, b, *searchtri, newmark)?;
             // Insert the remainder of the segment.
-            return scoutsegment(m, b, searchtri, endpoint2, newmark);
+            return scout_segment(m, b, searchtri, endpoint2, newmark);
         }
     }
 }
@@ -783,7 +783,7 @@ pub(crate) fn scoutsegment(
 /// midpoint, and recursively forcing in the two half-segments if
 /// necessary. Generates a sequence of subsegments connecting endpoint1
 /// to endpoint2; newmark is the boundary marker of the segment.
-pub(crate) fn conformingedge(
+pub(crate) fn conforming_edge(
     m: &mut Mesh,
     b: &Behavior,
     endpoint1: u32,
@@ -801,14 +801,14 @@ pub(crate) fn conformingedge(
         );
     }
     m.vx_set_mark(newvertex, newmark);
-    m.vx_set_type(newvertex, SEGMENTVERTEX);
+    m.vx_set_type(newvertex, SEGMENT_VERTEX);
     // No known triangle to search from.
     let mut searchtri1 = Otri {
         tri: DUMMY_TRI,
         orient: 0,
     };
     // Attempt to insert the new vertex.
-    let mut success = insertvertex(m, b, newvertex, &mut searchtri1, None, false, false, false)?;
+    let mut success = insert_vertex(m, b, newvertex, &mut searchtri1, None, false, false, false)?;
     if success == InsertVertexResult::DuplicateVertex {
         // Use the vertex that's already there.  (C writes it back into
         //   newvertex: org(searchtri1, newvertex); the value is
@@ -818,8 +818,8 @@ pub(crate) fn conformingedge(
     } else {
         if success == InsertVertexResult::ViolatingVertex {
             // By fluke, we've landed right on another segment.  Split it.
-            let mut brokensubseg = m.tspivot(searchtri1);
-            success = insertvertex(
+            let mut brokensubseg = m.tri_subseg(searchtri1);
+            success = insert_vertex(
                 m,
                 b,
                 newvertex,
@@ -849,23 +849,23 @@ pub(crate) fn conformingedge(
     //   'endpoint2' respectively.  First, we must get 'searchtri2' out
     //   of the way so it won't be invalidated during the insertion of
     //   the first half of the segment.
-    finddirection(
+    find_direction(
         m,
         b,
         &mut searchtri2,
         (m.vx_x(endpoint2), m.vx_y(endpoint2)),
     )?;
-    if scoutsegment(m, b, &mut searchtri1, endpoint1, newmark)? == 0 {
+    if scout_segment(m, b, &mut searchtri1, endpoint1, newmark)? == 0 {
         // The origin of searchtri1 may have changed if a collision with
         //   an intervening vertex on the segment occurred.
         let midvertex1 = m.org(searchtri1);
-        conformingedge(m, b, midvertex1, endpoint1, newmark)?;
+        conforming_edge(m, b, midvertex1, endpoint1, newmark)?;
     }
-    if scoutsegment(m, b, &mut searchtri2, endpoint2, newmark)? == 0 {
+    if scout_segment(m, b, &mut searchtri2, endpoint2, newmark)? == 0 {
         // The origin of searchtri2 may have changed if a collision
         //   with an intervening vertex on the segment occurred.
         let midvertex2 = m.org(searchtri2);
-        conformingedge(m, b, midvertex2, endpoint2, newmark)?;
+        conforming_edge(m, b, midvertex2, endpoint2, newmark)?;
     }
     Ok(())
 }
@@ -880,14 +880,14 @@ pub(crate) fn conformingedge(
 /// inserted; the local Delaunay condition is enforced only in the
 /// sector defined by fixuptri. 'leftside' indicates whether fixuptri is
 /// to the left of the segment being inserted.
-pub(crate) fn delaunayfixup(m: &mut Mesh, b: &Behavior, fixuptri: &mut Otri, leftside: bool) {
+pub(crate) fn delaunay_fixup(m: &mut Mesh, b: &Behavior, fixuptri: &mut Otri, leftside: bool) {
     let neartri = fixuptri.lnext();
     let mut fartri = m.sym(neartri);
     // Check if the edge opposite the origin of fixuptri can be flipped.
     if fartri.tri == DUMMY_TRI {
         return;
     }
-    let faredge = m.tspivot(neartri);
+    let faredge = m.tri_subseg(neartri);
     if faredge.ss != DUMMY_SUB {
         return;
     }
@@ -898,7 +898,7 @@ pub(crate) fn delaunayfixup(m: &mut Mesh, b: &Behavior, fixuptri: &mut Otri, lef
     let farvertex = m.apex(fartri);
     // Check whether the previous polygon vertex is a reflex vertex.
     if leftside {
-        if tri_counterclockwise(
+        if counterclockwise(
             m,
             b,
             vertex_coords(m, nearvertex),
@@ -910,7 +910,7 @@ pub(crate) fn delaunayfixup(m: &mut Mesh, b: &Behavior, fixuptri: &mut Otri, lef
             //   until a convex section is found.
             return;
         }
-    } else if tri_counterclockwise(
+    } else if counterclockwise(
         m,
         b,
         vertex_coords(m, farvertex),
@@ -922,7 +922,7 @@ pub(crate) fn delaunayfixup(m: &mut Mesh, b: &Behavior, fixuptri: &mut Otri, lef
         //   until a convex section is found.
         return;
     }
-    if tri_counterclockwise(
+    if counterclockwise(
         m,
         b,
         vertex_coords(m, rightvertex),
@@ -934,7 +934,7 @@ pub(crate) fn delaunayfixup(m: &mut Mesh, b: &Behavior, fixuptri: &mut Otri, lef
         //   reflex vertex.  As there are no reflex vertices, fixuptri
         //   isn't an inverted triangle either.  Hence, test the edge
         //   between the triangles to ensure it is locally Delaunay.
-        if tri_incircle(
+        if incircle(
             m,
             b,
             vertex_coords(m, leftvertex),
@@ -948,10 +948,10 @@ pub(crate) fn delaunayfixup(m: &mut Mesh, b: &Behavior, fixuptri: &mut Otri, lef
         // Not locally Delaunay; go on to an edge flip.
     } // else fartri is inverted; remove it from the stack by flipping.
     crate::algorithm::transform::flip(m, b, neartri);
-    fixuptri.lprevself(); // Restore the origin of fixuptri after the flip.
-                          // Recursively process the two triangles that result from the flip.
-    delaunayfixup(m, b, fixuptri, leftside);
-    delaunayfixup(m, b, &mut fartri, leftside);
+    fixuptri.lprev_self(); // Restore the origin of fixuptri after the flip.
+                           // Recursively process the two triangles that result from the flip.
+    delaunay_fixup(m, b, fixuptri, leftside);
+    delaunay_fixup(m, b, &mut fartri, leftside);
 }
 
 // ---------------------------------------------------------------------------
@@ -966,7 +966,7 @@ pub(crate) fn delaunayfixup(m: &mut Mesh, b: &Behavior, fixuptri: &mut Otri, lef
 // C-parity: the block-head declarations are C's initializer list kept
 // verbatim; each is assigned before use along C's control flow.
 #[allow(clippy::needless_late_init)]
-pub(crate) fn constrainededge(
+pub(crate) fn constrained_edge(
     m: &mut Mesh,
     b: &Behavior,
     starttri: &mut Otri,
@@ -1008,14 +1008,14 @@ pub(crate) fn constrainededge(
         if (m.vx_x(farvertex) == m.vx_x(endpoint2)) && (m.vx_y(farvertex) == m.vx_y(endpoint2)) {
             let mut fixuptri2 = m.oprev(fixuptri);
             // Enforce the Delaunay condition around endpoint2.
-            delaunayfixup(m, b, &mut fixuptri, false);
-            delaunayfixup(m, b, &mut fixuptri2, true);
+            delaunay_fixup(m, b, &mut fixuptri, false);
+            delaunay_fixup(m, b, &mut fixuptri2, true);
             done = true;
         } else {
             // Check whether farvertex is to the left or right of the
             //   segment being inserted, to decide which edge of fixuptri
             //   to dig through next.
-            let area = tri_counterclockwise(
+            let area = counterclockwise(
                 m,
                 b,
                 vertex_coords(m, endpoint1),
@@ -1028,8 +1028,8 @@ pub(crate) fn constrainededge(
                 collision = true;
                 let mut fixuptri2 = m.oprev(fixuptri);
                 // Enforce the Delaunay condition around farvertex.
-                delaunayfixup(m, b, &mut fixuptri, false);
-                delaunayfixup(m, b, &mut fixuptri2, true);
+                delaunay_fixup(m, b, &mut fixuptri, false);
+                delaunay_fixup(m, b, &mut fixuptri2, true);
                 done = true;
             } else {
                 if area > 0.0 {
@@ -1037,25 +1037,25 @@ pub(crate) fn constrainededge(
                     let mut fixuptri2 = m.oprev(fixuptri);
                     // Enforce the Delaunay condition around farvertex,
                     //   on the left side of the segment only.
-                    delaunayfixup(m, b, &mut fixuptri2, true);
+                    delaunay_fixup(m, b, &mut fixuptri2, true);
                     // Flip the edge that crosses the segment.  After
                     //   the edge is flipped, one of its endpoints is
                     //   the fan vertex, and the destination of fixuptri
                     //   is the fan vertex.
-                    fixuptri.lprevself();
+                    fixuptri.lprev_self();
                 } else {
                     // farvertex is to the right of the segment.
                     // Enforce the Delaunay condition around farvertex,
                     //   on the right side of the segment only.
-                    delaunayfixup(m, b, &mut fixuptri, false);
+                    delaunay_fixup(m, b, &mut fixuptri, false);
                     // Flip the edge that crosses the segment.  After
                     //   the edge is flipped, one of its endpoints is
                     //   the fan vertex, and the destination of fixuptri
                     //   is the fan vertex.
-                    m.oprevself(&mut fixuptri);
+                    m.oprev_self(&mut fixuptri);
                 }
                 // Check for two intersecting segments.
-                crosssubseg = m.tspivot(fixuptri);
+                crosssubseg = m.tri_subseg(fixuptri);
                 if crosssubseg.ss == DUMMY_SUB {
                     crate::algorithm::transform::flip(m, b, fixuptri); // May create inverted triangle at left.
                 } else {
@@ -1063,7 +1063,7 @@ pub(crate) fn constrainededge(
                     //   and endpoint2.
                     collision = true;
                     // Insert a vertex at the intersection.
-                    segmentintersection(m, b, &mut fixuptri, &mut crosssubseg, endpoint2)?;
+                    segment_intersection(m, b, &mut fixuptri, &mut crosssubseg, endpoint2)?;
                     done = true;
                 }
             }
@@ -1073,13 +1073,13 @@ pub(crate) fn constrainededge(
         }
     }
     // Insert a subsegment to make the segment permanent.
-    insertsubseg(m, b, fixuptri, newmark)?;
+    insert_subseg(m, b, fixuptri, newmark)?;
     // If there was a collision with an interceding vertex, install
     //   another segment connecting that vertex with endpoint2.
     if collision {
         // Insert the remainder of the segment.
-        if scoutsegment(m, b, &mut fixuptri, endpoint2, newmark)? == 0 {
-            constrainededge(m, b, &mut fixuptri, endpoint2, newmark)?;
+        if scout_segment(m, b, &mut fixuptri, endpoint2, newmark)? == 0 {
+            constrained_edge(m, b, &mut fixuptri, endpoint2, newmark)?;
         }
     }
     Ok(())
@@ -1093,7 +1093,7 @@ pub(crate) fn constrainededge(
 /// a triangulation: scout from each endpoint, then force the segment in
 /// either by recursive midpoint splitting (-D) or by the dig
 /// (-p, constrainededge).
-pub(crate) fn insertsegment(
+pub(crate) fn insert_segment(
     m: &mut Mesh,
     b: &Behavior,
     mut endpoint1: u32,
@@ -1120,7 +1120,7 @@ pub(crate) fn insertsegment(
             tri: DUMMY_TRI,
             orient: 0,
         };
-        m.symself(&mut searchtri1);
+        m.sym_self(&mut searchtri1);
         // Search for the segment's first endpoint by point location.
         if locate(
             m,
@@ -1138,7 +1138,7 @@ pub(crate) fn insertsegment(
     m.recenttri = Some(searchtri1);
     // Scout the beginnings of a path from the first endpoint
     //   toward the second.
-    if scoutsegment(m, b, &mut searchtri1, endpoint2, newmark)? != 0 {
+    if scout_segment(m, b, &mut searchtri1, endpoint2, newmark)? != 0 {
         // The segment was easily inserted.
         return Ok(());
     }
@@ -1163,7 +1163,7 @@ pub(crate) fn insertsegment(
             tri: DUMMY_TRI,
             orient: 0,
         };
-        m.symself(&mut searchtri2);
+        m.sym_self(&mut searchtri2);
         // Search for the segment's second endpoint by point location.
         if locate(
             m,
@@ -1181,7 +1181,7 @@ pub(crate) fn insertsegment(
     m.recenttri = Some(searchtri2);
     // Scout the beginnings of a path from the second endpoint
     //   toward the first.
-    if scoutsegment(m, b, &mut searchtri2, endpoint1, newmark)? != 0 {
+    if scout_segment(m, b, &mut searchtri2, endpoint1, newmark)? != 0 {
         // The segment was easily inserted.
         return Ok(());
     }
@@ -1191,10 +1191,10 @@ pub(crate) fn insertsegment(
 
     if b.splitseg {
         // Insert vertices to force the segment into the triangulation.
-        conformingedge(m, b, endpoint1, endpoint2_moved, newmark)?;
+        conforming_edge(m, b, endpoint1, endpoint2_moved, newmark)?;
     } else {
         // Insert the segment directly into the triangulation.
-        constrainededge(m, b, &mut searchtri1, endpoint2_moved, newmark)?;
+        constrained_edge(m, b, &mut searchtri1, endpoint2_moved, newmark)?;
     }
     Ok(())
 }
@@ -1205,22 +1205,22 @@ pub(crate) fn insertsegment(
 
 /// C: markhull (triangle.c:6517-6552). Cover the convex hull of a
 /// triangulation with subsegments.
-pub(crate) fn markhull(m: &mut Mesh, b: &Behavior) -> Result<(), Oom> {
+pub(crate) fn mark_hull(m: &mut Mesh, b: &Behavior) -> Result<(), Oom> {
     // Find a triangle handle on the hull.
     let mut hulltri = Otri {
         tri: DUMMY_TRI,
         orient: 0,
     };
-    m.symself(&mut hulltri);
+    m.sym_self(&mut hulltri);
     // Remember where we started so we know when to stop.
     let starttri = hulltri;
     // Go once counterclockwise around the convex hull.
     loop {
         // Create a subsegment if there isn't already one here.
-        insertsubseg(m, b, hulltri, 1)?;
+        insert_subseg(m, b, hulltri, 1)?;
         // To find the next hull edge, go clockwise around the next
         //   vertex.
-        hulltri.lnextself();
+        hulltri.lnext_self();
         let mut nexttri = m.oprev(hulltri);
         while nexttri.tri != DUMMY_TRI {
             hulltri = nexttri;
@@ -1242,7 +1242,7 @@ pub(crate) fn markhull(m: &mut Mesh, b: &Behavior) -> Result<(), Oom> {
 // C-parity: the markerlist index walk mirrors C's `for (i = 0; ...)`
 // segment loop verbatim.
 #[allow(clippy::needless_range_loop)]
-pub(crate) fn formskeleton(
+pub(crate) fn form_skeleton(
     m: &mut Mesh,
     b: &Behavior,
     segmentlist: &[i32],
@@ -1264,7 +1264,7 @@ pub(crate) fn formskeleton(
         // If segments are to be inserted, compute a mapping
         //   from vertices to triangles.
         if m.insegments > 0 {
-            crate::algorithm::quality::makevertexmap(m, b);
+            crate::algorithm::quality::make_vertex_map(m, b);
         }
 
         let mut boundmarker = 0i32;
@@ -1286,15 +1286,15 @@ pub(crate) fn formskeleton(
                 // C: Invalid second endpoint of segment.
             } else {
                 // Find the vertices numbered 'end1' and 'end2'.
-                let endpoint1 = m.getvertex(b.firstnumber, end1);
-                let endpoint2 = m.getvertex(b.firstnumber, end2);
+                let endpoint1 = m.get_vertex(b.firstnumber, end1);
+                let endpoint2 = m.get_vertex(b.firstnumber, end2);
                 if (m.vx_x(endpoint1) == m.vx_x(endpoint2))
                     && (m.vx_y(endpoint1) == m.vx_y(endpoint2))
                 {
                     // C: Endpoints of segment are coincident (the
                     //   _DEBUG printf compiles out; C skips silently).
                 } else {
-                    insertsegment(m, b, endpoint1, endpoint2, boundmarker)?;
+                    insert_segment(m, b, endpoint1, endpoint2, boundmarker)?;
                 }
             }
         }
@@ -1303,7 +1303,7 @@ pub(crate) fn formskeleton(
     }
     if b.convex || !b.poly {
         // Enclose the convex hull with subsegments.
-        markhull(m, b)?;
+        mark_hull(m, b)?;
     }
     Ok(())
 }
@@ -1315,13 +1315,13 @@ pub(crate) fn formskeleton(
 /// C: infecthull (triangle.c:6642-6712). Virally infect all of the
 /// triangles of the convex hull that are not protected by subsegments.
 /// Where there are subsegments, set boundary markers as appropriate.
-pub(crate) fn infecthull(m: &mut Mesh, _b: &Behavior) -> Result<(), Oom> {
+pub(crate) fn infect_hull(m: &mut Mesh, _b: &Behavior) -> Result<(), Oom> {
     // Find a triangle handle on the hull.
     let mut hulltri = Otri {
         tri: DUMMY_TRI,
         orient: 0,
     };
-    m.symself(&mut hulltri);
+    m.sym_self(&mut hulltri);
     // Remember where we started so we know when to stop.
     let starttri = hulltri;
     // Go once counterclockwise around the convex hull.
@@ -1329,7 +1329,7 @@ pub(crate) fn infecthull(m: &mut Mesh, _b: &Behavior) -> Result<(), Oom> {
         // Ignore triangles that are already infected.
         if !m.infected(hulltri) {
             // Is the triangle protected by a subsegment?
-            let hullsubseg = m.tspivot(hulltri);
+            let hullsubseg = m.tri_subseg(hulltri);
             if hullsubseg.ss == DUMMY_SUB {
                 // The triangle is not protected; infect it.
                 if !m.infected(hulltri) {
@@ -1354,7 +1354,7 @@ pub(crate) fn infecthull(m: &mut Mesh, _b: &Behavior) -> Result<(), Oom> {
         }
         // To find the next hull edge, go clockwise around the next
         //   vertex.
-        hulltri.lnextself();
+        hulltri.lnext_self();
         let mut nexttri = m.oprev(hulltri);
         while nexttri.tri != DUMMY_TRI {
             hulltri = nexttri;
@@ -1398,7 +1398,7 @@ pub(crate) fn plague(m: &mut Mesh, _b: &Behavior) -> Result<(), Oom> {
             let neighbor = m.sym(testtri);
             // Check for a subsegment between the triangle and its
             //   neighbor.
-            let neighborsubseg = m.tspivot(testtri);
+            let neighborsubseg = m.tri_subseg(testtri);
             // Check if the neighbor is nonexistent or already infected.
             if neighbor.tri == DUMMY_TRI || m.infected(neighbor) {
                 if neighborsubseg.ss != DUMMY_SUB {
@@ -1411,7 +1411,7 @@ pub(crate) fn plague(m: &mut Mesh, _b: &Behavior) -> Result<(), Oom> {
                         //   deallocated again later when the infected
                         //   neighbor is visited.
                         m.uninfect(neighbor);
-                        m.tsdissolve(neighbor);
+                        m.dissolve_tri_subseg(neighbor);
                         m.infect(neighbor);
                     }
                 }
@@ -1428,7 +1428,7 @@ pub(crate) fn plague(m: &mut Mesh, _b: &Behavior) -> Result<(), Oom> {
                 } else {
                     // The neighbor is protected by a subsegment.
                     // Remove this triangle from the subsegment.
-                    m.stdissolve(neighborsubseg);
+                    m.dissolve_subseg_tri(neighborsubseg);
                     // The subsegment becomes a boundary.  Set markers
                     //   accordingly.
                     if m.sub_mark(neighborsubseg.ss) == 0 {
@@ -1470,7 +1470,7 @@ pub(crate) fn plague(m: &mut Mesh, _b: &Behavior) -> Result<(), Oom> {
             if testvertex != 0 {
                 let mut killorg = true;
                 // Mark the corner of the triangle as having been tested.
-                m.setorg(testtri, 0);
+                m.set_org(testtri, 0);
                 // Walk counterclockwise about the vertex.
                 let mut neighbor = m.onext(testtri);
                 // Stop upon reaching a boundary or the starting triangle.
@@ -1478,13 +1478,13 @@ pub(crate) fn plague(m: &mut Mesh, _b: &Behavior) -> Result<(), Oom> {
                     if m.infected(neighbor) {
                         // Mark the corner of this triangle as having
                         //   been tested.
-                        m.setorg(neighbor, 0);
+                        m.set_org(neighbor, 0);
                     } else {
                         // A live triangle.  The vertex survives.
                         killorg = false;
                     }
                     // Walk counterclockwise about the vertex.
-                    m.onextself(&mut neighbor);
+                    m.onext_self(&mut neighbor);
                 }
                 // If we reached a boundary, we must walk clockwise as
                 //   well.
@@ -1496,17 +1496,17 @@ pub(crate) fn plague(m: &mut Mesh, _b: &Behavior) -> Result<(), Oom> {
                         if m.infected(neighbor) {
                             // Mark the corner of this triangle as having
                             //   been tested.
-                            m.setorg(neighbor, 0);
+                            m.set_org(neighbor, 0);
                         } else {
                             // A live triangle.  The vertex survives.
                             killorg = false;
                         }
                         // Walk clockwise about the vertex.
-                        m.oprevself(&mut neighbor);
+                        m.oprev_self(&mut neighbor);
                     }
                 }
                 if killorg {
-                    m.vx_set_type(testvertex, UNDEADVERTEX);
+                    m.vx_set_type(testvertex, UNDEAD_VERTEX);
                     m.undeads += 1;
                 }
             }
@@ -1546,7 +1546,7 @@ pub(crate) fn plague(m: &mut Mesh, _b: &Behavior) -> Result<(), Oom> {
 /// C: regionplague (triangle.c:6886-6950). Spread regional attributes
 /// and/or area constraints (from a .poly file) throughout a
 /// segment-bounded region: infect, spread, uninfect.
-pub(crate) fn regionplague(
+pub(crate) fn region_plague(
     m: &mut Mesh,
     b: &Behavior,
     attribute: f64,
@@ -1577,7 +1577,7 @@ pub(crate) fn regionplague(
         }
         if b.vararea {
             // Set an area constraint.
-            m.set_tri_areabound(testtri.tri, area);
+            m.set_tri_area_bound(testtri.tri, area);
         }
         // Check each of the triangle's three neighbors.
         for orient in 0..3u8 {
@@ -1586,7 +1586,7 @@ pub(crate) fn regionplague(
             let neighbor = m.sym(testtri);
             // Check for a subsegment between the triangle and its
             //   neighbor.
-            let neighborsubseg = m.tspivot(testtri);
+            let neighborsubseg = m.tri_subseg(testtri);
             // Make sure the neighbor exists, is not already infected,
             //   and isn't protected by a subsegment.
             if neighbor.tri != DUMMY_TRI && !m.infected(neighbor) && neighborsubseg.ss == DUMMY_SUB
@@ -1627,7 +1627,7 @@ pub(crate) fn regionplague(
 /// constraints. (The C flat holelist/regionlist strides mirror to the
 /// typed Hole/Region records of the frozen input surface; the counts
 /// derive from the record lengths.)
-pub(crate) fn carveholes(
+pub(crate) fn carve_holes(
     m: &mut Mesh,
     b: &Behavior,
     holelist: &[crate::input::Hole],
@@ -1660,7 +1660,7 @@ pub(crate) fn carveholes(
     if !b.convex {
         // Mark as infected any unprotected triangles on the boundary.
         //   This is one way by which concavities are created.
-        infecthull(m, b)?;
+        infect_hull(m, b)?;
     }
 
     if holes > 0 && !b.noholes {
@@ -1675,13 +1675,13 @@ pub(crate) fn carveholes(
                     tri: DUMMY_TRI,
                     orient: 0,
                 };
-                m.symself(&mut searchtri);
+                m.sym_self(&mut searchtri);
                 // Ensure that the hole is to the left of this boundary
                 //   edge; otherwise, locate() will falsely report that
                 //   the hole falls within the starting triangle.
                 let searchorg = m.org(searchtri);
                 let searchdest = m.dest(searchtri);
-                if tri_counterclockwise(
+                if counterclockwise(
                     m,
                     b,
                     vertex_coords(m, searchorg),
@@ -1730,14 +1730,14 @@ pub(crate) fn carveholes(
                     tri: DUMMY_TRI,
                     orient: 0,
                 };
-                m.symself(&mut searchtri);
+                m.sym_self(&mut searchtri);
                 // Ensure that the region point is to the left of this
                 //   boundary edge; otherwise, locate() will falsely
                 //   report that the region point falls within the
                 //   starting triangle.
                 let searchorg = m.org(searchtri);
                 let searchdest = m.dest(searchtri);
-                if tri_counterclockwise(
+                if counterclockwise(
                     m,
                     b,
                     vertex_coords(m, searchorg),
@@ -1768,7 +1768,7 @@ pub(crate) fn carveholes(
             // Assign every triangle a regional attribute of zero.
             //   (Same direct slot store as regionplague.)
             let mut t = m.triangles.traversal();
-            while let Some(tri) = m.triangletraverse(&mut t) {
+            while let Some(tri) = m.traverse_triangle(&mut t) {
                 m.set_tri_real(tri, m.tri_shape.elemattribindex + m.eextras as usize, 0.0);
             }
         }
@@ -1776,13 +1776,13 @@ pub(crate) fn carveholes(
             if regiontris[i].tri != DUMMY_TRI {
                 // Make sure the triangle under consideration still
                 //   exists.  It may have been eaten by the virus.
-                if !m.deadtri(regiontris[i].tri) {
+                if !m.is_dead_tri(regiontris[i].tri) {
                     // Put one triangle in the virus pool.
                     m.infect(regiontris[i]);
                     m.viri_push_tri(regiontris[i].tri)?;
                     // Apply one region's attribute and/or area
                     //   constraint.
-                    regionplague(m, b, regionlist[i].attribute, regionlist[i].max_area)?;
+                    region_plague(m, b, regionlist[i].attribute, regionlist[i].max_area)?;
                     // The virus pool should be empty now.
                 }
             }
@@ -1811,7 +1811,7 @@ mod tests {
     use super::*;
     use crate::algorithm::delaunay::delaunay;
     use crate::input::Hole;
-    use crate::mesh::handles::NULL;
+    use crate::mesh::handles::NULL_ROW;
 
     /// The Behavior for the test at hand, composed exactly like the
     /// landed modules' test helpers.
@@ -1843,18 +1843,18 @@ mod tests {
         v
     }
 
-    /// The algorithm/transform.rs pair: t1 = {org a, dest b, apex c} and
+    /// The algorithm/algorithm/transform.rs pair: t1 = {org a, dest b, apex c} and
     /// t2 = {org b, dest a, apex d} bonded across the shared edge a-b
     /// (c and d on opposite sides), the smallest well-bonded poly mesh.
     fn pair(m: &mut Mesh, usesegments: bool, a: u32, b: u32, c: u32, d: u32) -> (Otri, Otri) {
-        let t1 = m.maketriangle(usesegments, false).expect("tri");
-        m.setorg(t1, a);
-        m.setdest(t1, b);
-        m.setapex(t1, c);
-        let t2 = m.maketriangle(usesegments, false).expect("tri");
-        m.setorg(t2, b);
-        m.setdest(t2, a);
-        m.setapex(t2, d);
+        let t1 = m.make_triangle(usesegments, false).expect("tri");
+        m.set_org(t1, a);
+        m.set_dest(t1, b);
+        m.set_apex(t1, c);
+        let t2 = m.make_triangle(usesegments, false).expect("tri");
+        m.set_org(t2, b);
+        m.set_dest(t2, a);
+        m.set_apex(t2, d);
         m.bond(
             Otri {
                 tri: t1.tri,
@@ -1884,9 +1884,9 @@ mod tests {
                                   // triangle_api.c:208-217: hullsize from the delaunay result, the
                                   // three infvertex nulls, checksegments under usesegments.
         m.hullsize = hulledges;
-        m.infvertex1 = NULL;
-        m.infvertex2 = NULL;
-        m.infvertex3 = NULL;
+        m.infvertex1 = NULL_ROW;
+        m.infvertex2 = NULL_ROW;
+        m.infvertex3 = NULL_ROW;
         if b.usesegments {
             m.checksegments = true;
         }
@@ -1897,7 +1897,7 @@ mod tests {
     fn vertex_at(m: &Mesh, x: f64, y: f64) -> Option<u32> {
         let mut vt = m.vertices.traversal();
         while let Some(v) = m.vertices.traverse_next(&mut vt) {
-            if m.vx_type(v) != DEADVERTEX && m.vx_x(v) == x && m.vx_y(v) == y {
+            if m.vx_type(v) != DEAD_VERTEX && m.vx_x(v) == x && m.vx_y(v) == y {
                 return Some(v);
             }
         }
@@ -1910,7 +1910,7 @@ mod tests {
         let mut count = 0u64;
         let mut t = m.triangles.traversal();
         while let Some(tri) = m.triangles.traverse_next(&mut t) {
-            if m.deadtri(tri) {
+            if m.is_dead_tri(tri) {
                 continue;
             }
             for orient in 0..3u8 {
@@ -1927,7 +1927,7 @@ mod tests {
         let mut subs = vec![];
         let mut st = m.subsegs.traversal();
         while let Some(ss) = m.subsegs.traverse_next(&mut st) {
-            if !m.deadsubseg(ss) {
+            if !m.is_dead_subseg(ss) {
                 subs.push(ss);
             }
         }
@@ -1939,7 +1939,7 @@ mod tests {
         let mut tris = vec![];
         let mut t = m.triangles.traversal();
         while let Some(tri) = m.triangles.traverse_next(&mut t) {
-            if !m.deadtri(tri) {
+            if !m.is_dead_tri(tri) {
                 tris.push(tri);
             }
         }
@@ -1947,7 +1947,7 @@ mod tests {
     }
 
     #[test]
-    fn finddirectionresult_discriminants_are_the_c_values() {
+    fn find_direction_result_discriminants_are_the_c_values() {
         assert_eq!(FindDirectionResult::Within as i32, 0); // C WITHIN
         assert_eq!(FindDirectionResult::LeftCollinear as i32, 1); // C LEFTCOLLINEAR
         assert_eq!(FindDirectionResult::RightCollinear as i32, 2); // C RIGHTCOLLINEAR
@@ -1957,7 +1957,7 @@ mod tests {
     /// a, dest b, apex c. All predicate signs below are hand-derived
     /// from tri_counterclockwise's formula at the exact call sites.
     #[test]
-    fn finddirection_covers_all_result_cases() {
+    fn find_direction_covers_all_result_cases() {
         let mut m = Mesh::new(&behavior(true), 8, 2, 0, 0).expect("mesh init");
         let a = vxy(&mut m, 0.0, 0.0);
         let b = vxy(&mut m, 1.0, 0.0);
@@ -1979,21 +1979,21 @@ mod tests {
         // ccw(a,P,b) = -0.2 < 0 (rightflag false) -> no walk, WITHIN.
         let mut st = t1_0;
         assert_eq!(
-            finddirection(&mut m, &bb, &mut st, (0.2, 0.2)).expect("finddirection"),
+            find_direction(&mut m, &bb, &mut st, (0.2, 0.2)).expect("finddirection"),
             FindDirectionResult::Within
         );
 
         // P(2, 0) collinear through dest b: ccw(a,P,b) = 0 -> RIGHTCOLLINEAR.
         let mut st = t1_0;
         assert_eq!(
-            finddirection(&mut m, &bb, &mut st, (2.0, 0.0)).expect("finddirection"),
+            find_direction(&mut m, &bb, &mut st, (2.0, 0.0)).expect("finddirection"),
             FindDirectionResult::RightCollinear
         );
 
         // P(0, 2) collinear through apex c: ccw(P,a,c) = 0 -> LEFTCOLLINEAR.
         let mut st = t1_0;
         assert_eq!(
-            finddirection(&mut m, &bb, &mut st, (0.0, 2.0)).expect("finddirection"),
+            find_direction(&mut m, &bb, &mut st, (0.0, 2.0)).expect("finddirection"),
             FindDirectionResult::LeftCollinear
         );
 
@@ -2002,7 +2002,7 @@ mod tests {
         // (org a, dest d: ccw(a,P,d) = -0.45 < 0) -> WITHIN after the turn.
         let mut st = t1_0;
         assert_eq!(
-            finddirection(&mut m, &bb, &mut st, (0.5, -0.1)).expect("finddirection"),
+            find_direction(&mut m, &bb, &mut st, (0.5, -0.1)).expect("finddirection"),
             FindDirectionResult::Within
         );
         assert_eq!(st, t2_1);
@@ -2017,7 +2017,7 @@ mod tests {
         // *status pin.
         let mut st = t2_1;
         assert!(matches!(
-            finddirection(&mut m, &bb, &mut st, (-0.5, 0.1)),
+            find_direction(&mut m, &bb, &mut st, (-0.5, 0.1)),
             Err(SegmentChainError::Recovery(
                 SegmentRecoveryKind::FindDirection
             ))
@@ -2025,11 +2025,11 @@ mod tests {
     }
 
     #[test]
-    fn finddirection_finds_then_evaluates_on_a_larger_fan() {
+    fn find_direction_finds_then_evaluates_on_a_larger_fan() {
         // Three triangles around the origin: a full-circle fan (no hull
         // edges), the walk from any of them finds any searchpoint by
         // turning. Fan: center(0,0), rim at 1/n-scaled angles, hand-bonded
-        // ring (the algorithm/locate.rs fan pattern, with -p rows).
+        // ring (the algorithm/algorithm/locate.rs fan pattern, with -p rows).
         let b = behavior(true);
         let mut m = Mesh::new(&b, 9, 2, 0, 0).expect("mesh init");
         let center = vxy(&mut m, 0.0, 0.0);
@@ -2041,10 +2041,10 @@ mod tests {
         }
         let mut tris = vec![];
         for k in 0..n as usize {
-            let t = m.maketriangle(true, false).expect("tri");
-            m.setorg(t, center);
-            m.setdest(t, rim[k]);
-            m.setapex(t, rim[(k + 1) % n as usize]);
+            let t = m.make_triangle(true, false).expect("tri");
+            m.set_org(t, center);
+            m.set_dest(t, rim[k]);
+            m.set_apex(t, rim[(k + 1) % n as usize]);
             tris.push(t);
         }
         for k in 0..n as usize {
@@ -2074,7 +2074,7 @@ mod tests {
             // any searchpoint strictly inside the fan polygon turns and
             // settles WITHIN, origin = center preserved.
             let mut st = start;
-            let res = finddirection(&mut m, &b, &mut st, (0.0, 0.7)).expect("finddirection");
+            let res = find_direction(&mut m, &b, &mut st, (0.0, 0.7)).expect("finddirection");
             // the walk rotates around center; (0,0.7) lies between the
             // 90-degree rim spokes... rim[1] is at 120 degrees,
             // rim[2] at 240; the segment from each org heads there or
@@ -2097,7 +2097,7 @@ mod tests {
     /// etx = a - d = (-0.5, 1), ety = 1;
     /// split = (ey*etx - ex*ety)/denom = ((-2)(-0.5) - (-0.5)(1))/2 = 0.75.
     #[test]
-    fn segmentintersection_splits_at_hand_derived_point() {
+    fn segment_intersection_splits_at_hand_derived_point() {
         let b = Behavior {
             steiner: 5,
             ..behavior(true)
@@ -2113,13 +2113,13 @@ mod tests {
             tri: t1.tri,
             orient: 0,
         };
-        insertsubseg(&mut m, &b, shared, 7).expect("insertsubseg");
+        insert_subseg(&mut m, &b, shared, 7).expect("insertsubseg");
         assert_eq!(m.subsegs.live_count(), 1);
 
         let mut splittri = shared;
-        let mut splitsubseg = m.tspivot(splittri);
+        let mut splitsubseg = m.tri_subseg(splittri);
         assert_ne!(splitsubseg.ss, DUMMY_SUB);
-        segmentintersection(&mut m, &b, &mut splittri, &mut splitsubseg, d)
+        segment_intersection(&mut m, &b, &mut splittri, &mut splitsubseg, d)
             .expect("segmentintersection");
 
         // the new vertex: torg + split * (tdest - torg) = (0.75, 0), exact
@@ -2128,7 +2128,7 @@ mod tests {
         let nx = vertex_at(&m, 0.75, 0.0).expect("split vertex");
         assert_ne!(m.vx_2tri(nx), 0);
         assert_eq!(m.steinerleft, 4); // 5 -> 4
-        assert_eq!(m.vx_type(nx), INPUTVERTEX);
+        assert_eq!(m.vx_type(nx), INPUT_VERTEX);
         assert_eq!(m.vx_mark(nx), 7);
         // the subsegment splits into the two halves {a, n} and {n, b},
         // both newvertex-org'ed by the endpoint-correction loops (C:
@@ -2136,8 +2136,8 @@ mod tests {
         assert_eq!(m.subsegs.live_count(), 2);
         let mut halves = vec![];
         for ss in live_subsegs(&m) {
-            let sub = Osub { ss, ssorient: 0 };
-            let (o, dd) = (m.segorg(sub), m.segdest(sub));
+            let sub = Osub { ss, orient: 0 };
+            let (o, dd) = (m.segment_org(sub), m.segment_dest(sub));
             assert!(o == nx || dd == nx);
             halves.push((o.min(dd), o.max(dd)));
         }
@@ -2155,7 +2155,7 @@ mod tests {
     }
 
     #[test]
-    fn segmentintersection_parallel_and_offsegment_short_paths() {
+    fn segment_intersection_parallel_and_offsegment_short_paths() {
         // parallel: the headed segment apex c -> (2,1) runs parallel to
         // the split edge a-b: denom = ty*ex - tx*ey = 0*2 - 1*0 = 0 ->
         // TRI_SEG_INTERSECT, no alloc.
@@ -2173,15 +2173,15 @@ mod tests {
                 tri: t1.tri,
                 orient: 0,
             };
-            insertsubseg(&mut m, &b, shared, 7).expect("insertsubseg");
+            insert_subseg(&mut m, &b, shared, 7).expect("insertsubseg");
             let mut splittri = shared;
-            let mut splitsubseg = m.tspivot(splittri);
+            let mut splitsubseg = m.tri_subseg(splittri);
             let before = m.vertices.live_count();
             // The parallel/off-segment failures raise
             // SegmentChainError::Recovery(Intersect) at the site - the
             // outcome pin replaces the *status pin.
             assert!(matches!(
-                segmentintersection(&mut m, &b, &mut splittri, &mut splitsubseg, far),
+                segment_intersection(&mut m, &b, &mut splittri, &mut splitsubseg, far),
                 Err(SegmentChainError::Recovery(SegmentRecoveryKind::Intersect))
             ));
             assert_eq!(m.vertices.live_count(), before);
@@ -2206,16 +2206,16 @@ mod tests {
                 tri: t1.tri,
                 orient: 0,
             };
-            insertsubseg(&mut m, &b, shared, 7).expect("insertsubseg");
+            insert_subseg(&mut m, &b, shared, 7).expect("insertsubseg");
             let mut splittri = shared;
-            let mut splitsubseg = m.tspivot(splittri);
+            let mut splitsubseg = m.tri_subseg(splittri);
             let before = m.vertices.live_count();
             let before_subs = m.subsegs.live_count();
             // The parallel/off-segment failures raise
             // SegmentChainError::Recovery(Intersect) at the site - the
             // outcome pin replaces the *status pin.
             assert!(matches!(
-                segmentintersection(&mut m, &b, &mut splittri, &mut splitsubseg, far),
+                segment_intersection(&mut m, &b, &mut splittri, &mut splitsubseg, far),
                 Err(SegmentChainError::Recovery(SegmentRecoveryKind::Intersect))
             ));
             assert_eq!(m.vertices.live_count(), before);
@@ -2227,7 +2227,7 @@ mod tests {
     /// the diamond pair: both are mesh edges already, so scoutsegment
     /// installs the subsegment directly (C return 1 branch).
     #[test]
-    fn insertsegment_hull_edge_and_interior_diagonal() {
+    fn insert_segment_hull_edge_and_interior_diagonal() {
         let mut m = Mesh::new(&behavior(true), 8, 2, 0, 0).expect("mesh init");
         let b = behavior(true);
         let a = vxy(&mut m, 0.0, 0.0);
@@ -2237,12 +2237,12 @@ mod tests {
         pair(&mut m, true, a, bb, c, d);
         // formskeleton's C flow: makevertexmap supplies insertsegment's
         // vertex2tri start triangles on every PSLG mesh.
-        crate::algorithm::quality::makevertexmap(&mut m, &b);
+        crate::algorithm::quality::make_vertex_map(&mut m, &b);
         m.checksegments = true;
 
         // hull edge a-c (t1's orient-2 rim edge): subsegment installed by
         // the first scoutsegment, marks propagated to the endpoints.
-        insertsegment(&mut m, &b, a, c, 6).expect("insertsegment");
+        insert_segment(&mut m, &b, a, c, 6).expect("insertsegment");
         assert_eq!(m.subsegs.live_count(), 1);
         assert_eq!(m.vx_mark(a), 6);
         assert_eq!(m.vx_mark(c), 6);
@@ -2251,16 +2251,16 @@ mod tests {
         // the subsegment bonds the hull edge from its one mesh side.
         let s = Osub {
             ss: seg1,
-            ssorient: 0,
+            orient: 0,
         };
-        let sites: Vec<(u32, u32)> = vec![(m.segorg(s), m.segdest(s))];
+        let sites: Vec<(u32, u32)> = vec![(m.segment_org(s), m.segment_dest(s))];
         assert!(sites == vec![(c, a)] || sites == vec![(a, c)]);
 
         // interior diagonal a-b: the shared edge of the pair; a second
         // direct install from BOTH endpoints' scouts is prevented by the
         // existing-subsegment check in insertsubseg, and scoutsegment's
         // second endpoint also just installs/keeps one subsegment.
-        insertsegment(&mut m, &b, a, bb, 5).expect("insertsegment");
+        insert_segment(&mut m, &b, a, bb, 5).expect("insertsegment");
         assert_eq!(m.subsegs.live_count(), 2);
         assert_eq!(m.triangles.live_count(), 2); // no dig, no split
                                                  // recenttri carries the endpoint2 locate result (the api's
@@ -2276,7 +2276,7 @@ mod tests {
     /// with -D (splitseg) conformingedge inserts the binary-exact
     /// midpoint (0.25, 0) ON the shared edge, then scouts both halves.
     #[test]
-    fn conformingedge_splitseg_walk() {
+    fn conforming_edge_splitseg_walk() {
         let b = Behavior {
             splitseg: true,
             steiner: 5,
@@ -2288,7 +2288,7 @@ mod tests {
         let c = vxy(&mut m, 0.0, 1.0);
         let d = vxy(&mut m, 0.5, -1.0);
         let (t1, _t2) = pair(&mut m, true, a, bb, c, d);
-        crate::algorithm::quality::makevertexmap(&mut m, &b);
+        crate::algorithm::quality::make_vertex_map(&mut m, &b);
         // Mirror the -p driver's dummytri[0] linkage (written by
         // removeghosts, triangle.c:4507; reconstruct never writes it):
         // conformingedge's from-scratch insertvertex locates through the
@@ -2303,11 +2303,11 @@ mod tests {
         );
         m.checksegments = true;
 
-        insertsegment(&mut m, &b, c, d, 9).expect("insertsegment");
+        insert_segment(&mut m, &b, c, d, 9).expect("insertsegment");
 
         // midpoint of c(0,1)-d(0.5,-1): (0.25, 0) exact; one Steiner used.
         let mid = vertex_at(&m, 0.25, 0.0).expect("midpoint vertex");
-        assert_eq!(m.vx_type(mid), SEGMENTVERTEX);
+        assert_eq!(m.vx_type(mid), SEGMENT_VERTEX);
         assert_eq!(m.vx_mark(mid), 9);
         assert_eq!(m.steinerleft, 4);
         // the edge a-b split both triangles: 2 -> 4.
@@ -2319,8 +2319,8 @@ mod tests {
         assert_eq!(subs.len(), 2);
         let mut halves = vec![];
         for ss in subs {
-            let s = Osub { ss, ssorient: 0 };
-            let (org, dst) = (m.segorg(s), m.segdest(s));
+            let s = Osub { ss, orient: 0 };
+            let (org, dst) = (m.segment_org(s), m.segment_dest(s));
             assert!(org == mid || dst == mid);
             assert!(org == c || org == d || dst == c || dst == d);
             assert_eq!(m.sub_mark(ss), 9);
@@ -2338,7 +2338,7 @@ mod tests {
     /// the c-d subsegment. Triangle count, hull size and vertex count
     /// are all invariant under the dig.
     #[test]
-    fn constrainededge_flip_dig_walk() {
+    fn constrained_edge_flip_dig_walk() {
         let mut m = Mesh::new(&behavior(true), 8, 2, 0, 0).expect("mesh init");
         let b = behavior(true);
         let a = vxy(&mut m, 0.0, 0.0);
@@ -2346,10 +2346,10 @@ mod tests {
         let c = vxy(&mut m, 0.0, 1.0);
         let d = vxy(&mut m, 0.5, -1.0);
         pair(&mut m, true, a, bb, c, d);
-        crate::algorithm::quality::makevertexmap(&mut m, &b);
+        crate::algorithm::quality::make_vertex_map(&mut m, &b);
         m.checksegments = true;
 
-        insertsegment(&mut m, &b, c, d, 8).expect("insertsegment");
+        insert_segment(&mut m, &b, c, d, 8).expect("insertsegment");
 
         // the dig preserves the pools: 2 triangles, 4 hull edges, 4
         // vertices; the a-b edge gave way to the c-d segment edge.
@@ -2360,10 +2360,10 @@ mod tests {
         assert_eq!(subs.len(), 1);
         let s = Osub {
             ss: subs[0],
-            ssorient: 0,
+            orient: 0,
         };
-        let org = m.segorg(s);
-        let dst = m.segdest(s);
+        let org = m.segment_org(s);
+        let dst = m.segment_dest(s);
         assert!(org == c && dst == d || org == d && dst == c);
         assert_eq!(m.sub_mark(subs[0]), 8);
         assert_eq!(m.vx_mark(c), 8);
@@ -2395,9 +2395,9 @@ mod tests {
     /// makevertexmap runs first (all four vertex2tri words set), each
     /// segment installs directly, markers propagate first-touch.
     #[test]
-    fn formskeleton_square_pslg() {
+    fn form_skeleton_square_pslg() {
         let (mut m, b) = delaunay_square(true);
-        formskeleton(
+        form_skeleton(
             &mut m,
             &b,
             &[1, 2, 2, 3, 3, 4, 4, 1],
@@ -2434,12 +2434,12 @@ mod tests {
     /// hullsize 4 -> 0; all four vertices orphan (UNDEADVERTEX,
     /// undeads 4); pools: tris 2 -> 0.
     #[test]
-    fn infecthull_and_plague_eat_the_bare_square() {
+    fn infect_hull_and_plague_eat_the_bare_square() {
         let (mut m, b) = delaunay_square(true);
         let triangles_before = m.triangles.live_count();
         assert_eq!(triangles_before, 2);
 
-        infecthull(&mut m, &b).expect("infecthull");
+        infect_hull(&mut m, &b).expect("infecthull");
         // both triangles sit on the hull: viri rows == infected count 2.
         assert_eq!(m.viri.live_count(), 2);
         let mut infected = 0;
@@ -2462,7 +2462,7 @@ mod tests {
         assert_eq!(m.hullsize, 0);
         assert_eq!(m.undeads, 4);
         for v in 1..=4u32 {
-            assert_eq!(m.vx_type(v), UNDEADVERTEX);
+            assert_eq!(m.vx_type(v), UNDEAD_VERTEX);
         }
     }
 
@@ -2557,7 +2557,7 @@ mod tests {
         let (m, _b) = ring_mesh(false);
         // 10 elements: rows 2..=11, all alive, in input order with the
         // input corners (t1 = A B F = vertices 1 2 6).
-        assert!(!m.deadtri(2) && !m.deadtri(11));
+        assert!(!m.is_dead_tri(2) && !m.is_dead_tri(11));
         let t1 = Otri { tri: 2, orient: 0 };
         assert_eq!(m.org(t1), 1);
         assert_eq!(m.dest(t1), 2);
@@ -2571,7 +2571,7 @@ mod tests {
         assert_eq!(boundary_edges(&m), 4);
         // all 8 input vertices live, typed INPUTVERTEX by the pool.
         for v in 1..=8u32 {
-            assert_eq!(m.vx_type(v), INPUTVERTEX);
+            assert_eq!(m.vx_type(v), INPUT_VERTEX);
         }
     }
 
@@ -2588,19 +2588,19 @@ mod tests {
     /// dyer's side to dummy) and -1 from the second (the edge is a
     /// boundary by then): net +4, hullsize 4 -> 8. No vertex orphans.
     #[test]
-    fn carveholes_ring_hole() {
+    fn carve_holes_ring_hole() {
         let (mut m, b) = ring_mesh(false);
-        carveholes(&mut m, &b, &[Hole { x: 2.0, y: 2.0 }], &[]).expect("carveholes");
+        carve_holes(&mut m, &b, &[Hole { x: 2.0, y: 2.0 }], &[]).expect("carveholes");
         assert_eq!(m.triangles.live_count(), 8);
         assert_eq!(m.subsegs.live_count(), 8);
         assert_eq!(m.viri.live_count(), 0);
         assert_eq!(m.undeads, 0);
         assert_eq!(m.hullsize, 8); // 4 + 4, the C accounting above
                                    // the two inner triangles (rows 10 and 11: elements 9, 10) died.
-        assert!(m.deadtri(10));
-        assert!(m.deadtri(11));
+        assert!(m.is_dead_tri(10));
+        assert!(m.is_dead_tri(11));
         for tri in 2..=9u32 {
-            assert!(!m.deadtri(tri));
+            assert!(!m.is_dead_tri(tri));
         }
         // infecthull ran first (convex false): the outer ring segments
         // carry mark 1 and marked their endpoints; plague's protected
@@ -2610,7 +2610,7 @@ mod tests {
         }
         for v in 1..=8u32 {
             assert_eq!(m.vx_mark(v), 1);
-            assert_eq!(m.vx_type(v), INPUTVERTEX);
+            assert_eq!(m.vx_type(v), INPUT_VERTEX);
         }
         // all four inner-ring vertices kept a live triangle: no orphans.
         assert_eq!(m.undeads, 0);
@@ -2624,10 +2624,10 @@ mod tests {
     /// pre-spread zeroing left 0.0 on the two inner triangles;
     /// eextras increments by 1 afterwards exactly at triangle.c:7097.
     #[test]
-    fn carveholes_region_attribute_spreads_to_the_band() {
+    fn carve_holes_region_attribute_spreads_to_the_band() {
         let (mut m, b) = ring_mesh(false);
         let attrib_word = m.tri_shape.elemattribindex + m.eextras as usize;
-        carveholes(
+        carve_holes(
             &mut m,
             &b,
             &[],
@@ -2659,9 +2659,9 @@ mod tests {
     /// stamps 0.5 on the band only; the inner triangles keep the
     /// arealist values reconstruct wrote per element (9.0 and 10.0).
     #[test]
-    fn carveholes_region_area_constraint() {
+    fn carve_holes_region_area_constraint() {
         let (mut m, b) = ring_mesh(true);
-        carveholes(
+        carve_holes(
             &mut m,
             &b,
             &[],
@@ -2675,12 +2675,12 @@ mod tests {
         .expect("carveholes");
         assert_eq!(m.triangles.live_count(), 10);
         for tri in 2..=9u32 {
-            assert_eq!(m.tri_areabound(tri), 0.5);
+            assert_eq!(m.tri_area_bound(tri), 0.5);
         }
         // reconstruct wrote arealist[elementnumber - 1]: elements 9, 10
         // (rows 10, 11) keep 9.0 and 10.0.
-        assert_eq!(m.tri_areabound(10), 9.0);
-        assert_eq!(m.tri_areabound(11), 10.0);
+        assert_eq!(m.tri_area_bound(10), 9.0);
+        assert_eq!(m.tri_area_bound(11), 10.0);
         assert_eq!(m.eextras, 1);
     }
 
@@ -2690,7 +2690,7 @@ mod tests {
     /// (the LEFTCOLLINEAR/RIGHTCOLLINEAR recursion), the boundary mark
     /// propagates, and scoutsteps accounts two scouts.
     #[test]
-    fn insertsegment_collinear_midvertex_chain() {
+    fn insert_segment_collinear_midvertex_chain() {
         let mut m = Mesh::new(&behavior(true), 9, 2, 0, 0).expect("mesh init");
         let b = behavior(true);
         let a = vxy(&mut m, 0.0, 0.0);
@@ -2698,14 +2698,14 @@ mod tests {
         let mpt = vxy(&mut m, 2.0, 0.0);
         let top = vxy(&mut m, 0.5, 1.0);
         // t1 = {A, B, top}, t2 = {B, M, top} sharing edge B-top.
-        let t1 = m.maketriangle(true, false).expect("tri");
-        m.setorg(t1, a);
-        m.setdest(t1, v1);
-        m.setapex(t1, top);
-        let t2 = m.maketriangle(true, false).expect("tri");
-        m.setorg(t2, v1);
-        m.setdest(t2, mpt);
-        m.setapex(t2, top);
+        let t1 = m.make_triangle(true, false).expect("tri");
+        m.set_org(t1, a);
+        m.set_dest(t1, v1);
+        m.set_apex(t1, top);
+        let t2 = m.make_triangle(true, false).expect("tri");
+        m.set_org(t2, v1);
+        m.set_dest(t2, mpt);
+        m.set_apex(t2, top);
         // bond the shared edge: t1's orient-1 (B->top) with t2's orient-2
         // (top->B).
         m.bond(
@@ -2718,17 +2718,17 @@ mod tests {
                 orient: 2,
             },
         );
-        crate::algorithm::quality::makevertexmap(&mut m, &b);
+        crate::algorithm::quality::make_vertex_map(&mut m, &b);
         m.checksegments = true;
 
-        insertsegment(&mut m, &b, a, mpt, 3).expect("insertsegment");
+        insert_segment(&mut m, &b, a, mpt, 3).expect("insertsegment");
         // two collinear half-segments: A-B and B-M.
         assert_eq!(m.subsegs.live_count(), 2);
         let subs = live_subsegs(&m);
         let mut endsets = vec![];
         for ss in subs {
-            let s = Osub { ss, ssorient: 0 };
-            let (o, dd) = (m.segorg(s), m.segdest(s));
+            let s = Osub { ss, orient: 0 };
+            let (o, dd) = (m.segment_org(s), m.segment_dest(s));
             endsets.push((o.min(dd), o.max(dd)));
         }
         endsets.sort();
@@ -2743,7 +2743,7 @@ mod tests {
     }
 
     #[test]
-    fn scoutsegment_outcome_scout_pins_the_raising_site() {
+    fn scout_segment_outcome_scout_pins_the_raising_site() {
         // Replaces the funnel test's SegScout arm pin: the scoutsteps
         // budget site (triangle.c:6016-6017) raises
         // SegmentChainError::Recovery(Scout) exactly where C sets *status
@@ -2761,7 +2761,7 @@ mod tests {
             tri: t1.tri,
             orient: 0,
         };
-        let out = scoutsegment(&mut m, &b, &mut searchtri, c, 7);
+        let out = scout_segment(&mut m, &b, &mut searchtri, c, 7);
         assert!(matches!(
             out,
             Err(SegmentChainError::Recovery(SegmentRecoveryKind::Scout))
@@ -2769,7 +2769,7 @@ mod tests {
     }
 
     #[test]
-    fn insertsegment_outcome_insert_pins_the_raising_site() {
+    fn insert_segment_outcome_insert_pins_the_raising_site() {
         // Replaces the funnel test's SegInsert arm pin: the endpoint
         // locate site (triangle.c:6446; the port's first-endpoint
         // branch) raises SegmentChainError::Recovery(Insert) where C sets
@@ -2794,7 +2794,7 @@ mod tests {
             }),
         );
         let outside = vxy(&mut m, 100.0, 100.0);
-        let out = insertsegment(&mut m, &b, outside, a, 5);
+        let out = insert_segment(&mut m, &b, outside, a, 5);
         assert!(matches!(
             out,
             Err(SegmentChainError::Recovery(SegmentRecoveryKind::Insert))
@@ -2802,7 +2802,7 @@ mod tests {
     }
 
     #[test]
-    fn segmentintersection_outcome_cycle_pins_the_raising_site() {
+    fn segment_intersection_outcome_cycle_pins_the_raising_site() {
         // Replaces the funnel test's Cycle arm pin: the cyclefail
         // check after insertvertex (triangle.c:5931) raises
         // SegmentChainError::Recovery(Cycle). Nothing on this path resets
@@ -2825,11 +2825,11 @@ mod tests {
             tri: t1.tri,
             orient: 0,
         };
-        insertsubseg(&mut m, &b, shared, 7).expect("insertsubseg");
+        insert_subseg(&mut m, &b, shared, 7).expect("insertsubseg");
         let mut splittri = shared;
-        let mut splitsubseg = m.tspivot(splittri);
+        let mut splitsubseg = m.tri_subseg(splittri);
         m.cyclefail = true;
-        let out = segmentintersection(&mut m, &b, &mut splittri, &mut splitsubseg, d);
+        let out = segment_intersection(&mut m, &b, &mut splittri, &mut splitsubseg, d);
         assert!(matches!(
             out,
             Err(SegmentChainError::Recovery(SegmentRecoveryKind::Cycle))

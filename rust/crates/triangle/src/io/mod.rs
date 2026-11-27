@@ -39,7 +39,7 @@ use crate::error::Error;
 use crate::formatter::{d, ld, write_d, write_d4, write_g, write_ld4};
 use crate::input::{Hole, MeshInput, Point2, Region};
 use crate::mesh::handles::{Osub, Otri, DUMMY_SUB, DUMMY_TRI};
-use crate::mesh::slots::UNDEADVERTEX;
+use crate::mesh::slots::UNDEAD_VERTEX;
 use crate::mesh::Mesh;
 use crate::options::Behavior;
 
@@ -51,7 +51,7 @@ use crate::options::Behavior;
 /// their boundary markers (the setvertexmark store inside the walk,
 /// triangle_io.c:64-65) and write the .node file. The writers inline
 /// their own numbering exactly like C; numbernodes gains no consumer.
-pub(crate) fn file_writenodes(
+pub(crate) fn file_write_nodes(
     m: &mut Mesh,
     b: &Behavior,
     nodefile: &mut dyn Write,
@@ -83,9 +83,9 @@ pub(crate) fn file_writenodes(
     let mut line = String::new();
     let mut vertexnumber = b.firstnumber;
     let mut t = m.vertices.traversal();
-    while let Some(vertexloop) = m.vertextraverse(&mut t) {
+    while let Some(vertexloop) = m.traverse_vertex(&mut t) {
         // C: the jettison gate (triangle_io.c:49).
-        if !b.jettison || m.vx_type(vertexloop) != UNDEADVERTEX {
+        if !b.jettison || m.vx_type(vertexloop) != UNDEAD_VERTEX {
             // Vertex number, x and y coordinates (51-52:
             // "%4d    %.17g  %.17g").
             line.clear();
@@ -122,7 +122,7 @@ pub(crate) fn file_writenodes(
 
 /// file_writeelements (triangle_io.c:78-125): the .ele writer. Reads
 /// the vertex numbers writenodes left on the markers.
-pub(crate) fn file_writeelements(
+pub(crate) fn file_write_elements(
     m: &mut Mesh,
     b: &Behavior,
     elefile: &mut dyn Write,
@@ -143,7 +143,7 @@ pub(crate) fn file_writeelements(
     let mut line = String::new();
     let mut elementnumber: i64 = b.firstnumber as i64;
     let mut t = m.triangles.traversal();
-    while let Some(tri) = m.triangletraverse(&mut t) {
+    while let Some(tri) = m.traverse_triangle(&mut t) {
         let triangleloop = Otri { tri, orient: 0 };
         let p1 = m.org(triangleloop);
         let p2 = m.dest(triangleloop);
@@ -189,7 +189,7 @@ pub(crate) fn file_writeelements(
 /// file_writepoly (triangle_io.c:133-195): the .poly writer. The hole
 /// and region lists come from the caller exactly like C's holelist /
 /// regionlist parameters (triangle_api.c:447-449).
-pub(crate) fn file_writepoly(
+pub(crate) fn file_write_poly(
     m: &mut Mesh,
     b: &Behavior,
     polyfile: &mut dyn Write,
@@ -223,10 +223,10 @@ pub(crate) fn file_writepoly(
     let mut line = String::new();
     let mut subsegnumber: i64 = b.firstnumber as i64;
     let mut t = m.subsegs.traversal();
-    while let Some(ss) = m.subsegtraverse(&mut t) {
-        let subsegloop = Osub { ss, ssorient: 0 };
-        let endpoint1 = m.sorg(subsegloop);
-        let endpoint2 = m.sdest(subsegloop);
+    while let Some(ss) = m.traverse_subseg(&mut t) {
+        let subsegloop = Osub { ss, orient: 0 };
+        let endpoint1 = m.subseg_org(subsegloop);
+        let endpoint2 = m.subseg_dest(subsegloop);
         // Segment number, indices of its two endpoints, and possibly
         // a marker (161-167).
         line.clear();
@@ -285,7 +285,7 @@ pub(crate) fn file_writepoly(
 }
 
 /// file_writeedges (triangle_io.c:203-262): the .edge writer.
-pub(crate) fn file_writeedges(
+pub(crate) fn file_write_edges(
     m: &mut Mesh,
     b: &Behavior,
     edgefile: &mut dyn Write,
@@ -305,7 +305,7 @@ pub(crate) fn file_writeedges(
     let mut line = String::new();
     let mut edgenumber: i64 = b.firstnumber as i64;
     let mut t = m.triangles.traversal();
-    while let Some(tri) = m.triangletraverse(&mut t) {
+    while let Some(tri) = m.traverse_triangle(&mut t) {
         for orient in 0..3u8 {
             let triangleloop = Otri { tri, orient };
             let trisym = m.sym(triangleloop);
@@ -338,7 +338,7 @@ pub(crate) fn file_writeedges(
                     // boundary marker. If there's no subsegment, the
                     // boundary marker is zero (240-254).
                     let marker = if b.usesegments {
-                        let checkmark = m.tspivot(triangleloop);
+                        let checkmark = m.tri_subseg(triangleloop);
                         if checkmark.ss == DUMMY_SUB {
                             0
                         } else {
@@ -368,7 +368,7 @@ pub(crate) fn file_writeedges(
 /// subsegs scratch - only the array writer at triangle.c:8078,
 /// 8119-8129 restores), so the port does not either: the element
 /// numbers stay over the overlay, and the dummy's -1 stays.
-pub(crate) fn file_writeneighbors(
+pub(crate) fn file_write_neighbors(
     m: &mut Mesh,
     b: &Behavior,
     neighborfile: &mut dyn Write,
@@ -395,7 +395,7 @@ pub(crate) fn file_writeneighbors(
     // first walk, elementnumber from b->firstnumber.
     let mut elementnumber: i64 = b.firstnumber as i64;
     let mut t = m.triangles.traversal();
-    while let Some(tri) = m.triangletraverse(&mut t) {
+    while let Some(tri) = m.traverse_triangle(&mut t) {
         m.set_tri_int(tri, numberindex, elementnumber as i32);
         elementnumber += 1;
     }
@@ -410,7 +410,7 @@ pub(crate) fn file_writeneighbors(
     let mut line = String::new();
     let mut elementnumber: i64 = b.firstnumber as i64;
     let mut t = m.triangles.traversal();
-    while let Some(tri) = m.triangletraverse(&mut t) {
+    while let Some(tri) = m.traverse_triangle(&mut t) {
         let neighbor1 = m.tri_int(m.sym(Otri { tri, orient: 1 }).tri, numberindex);
         let neighbor2 = m.tri_int(m.sym(Otri { tri, orient: 2 }).tri, numberindex);
         let neighbor3 = m.tri_int(m.sym(Otri { tri, orient: 0 }).tri, numberindex);
@@ -481,7 +481,7 @@ pub(crate) fn file_write_eps(
 
 /// INPUTLINESIZE (triangle_config.h:114): fgets reads at most
 /// INPUTLINESIZE - 1 bytes per call.
-const INPUTLINESIZE: usize = 1024;
+const INPUT_LINE_SIZE: usize = 1024;
 
 /// The fgets substrate: a byte reader with C's fgets semantics over
 /// any std::io::Read (C's FILE* - the port's readers never need
@@ -512,7 +512,7 @@ impl<R: Read> LineFile<R> {
                 }
                 Ok(_) => {
                     out.push(byte[0]);
-                    if byte[0] == b'\n' || out.len() == INPUTLINESIZE - 1 {
+                    if byte[0] == b'\n' || out.len() == INPUT_LINE_SIZE - 1 {
                         return Some(out);
                     }
                 }
@@ -547,7 +547,7 @@ fn is_c_space(c: u8) -> bool {
 /// considered nonempty if it contains something that looks like a
 /// number; comments (prefaced by '#') are skipped by the do-while
 /// rescan. None where C returns NULL (checked by the caller).
-pub(crate) fn readline<R: Read>(infile: &mut LineFile<R>) -> Option<Line> {
+pub(crate) fn read_line<R: Read>(infile: &mut LineFile<R>) -> Option<Line> {
     loop {
         let bytes = infile.fgets()?;
         // A NUL byte ends the scan-visible content of C's buffer.
@@ -581,7 +581,7 @@ impl Line {
     /// anything else that doesn't look like a number, a comment, or
     /// the end of the line. A '#' truncates the line ('\0' store at
     /// 413-415).
-    fn findfield(&mut self) {
+    fn find_field(&mut self) {
         let mut p = self.pos;
         // Skip the current field. Stop upon reaching whitespace
         // (407-411).
@@ -978,7 +978,7 @@ fn parse_hex_float(b: &[u8]) -> f64 {
 /// (default 0.0 per missing field), the marker list (default 0) and
 /// the attribute count; firstnode is captured at i == 0 from the
 /// first vertex's number field (479-481).
-pub(crate) fn file_readnodes_internal<R: Read>(
+pub(crate) fn file_read_nodes_internal<R: Read>(
     file: &mut LineFile<R>,
     io: &mut MeshInput,
     poly: bool,
@@ -987,25 +987,25 @@ pub(crate) fn file_readnodes_internal<R: Read>(
     // Read number of vertices, number of dimensions, number of vertex
     // attributes, and number of boundary markers (450-465), with C's
     // default fills for missing fields.
-    let Some(mut line) = readline(file) else {
+    let Some(mut line) = read_line(file) else {
         return Err(Error::Io(std::io::Error::other(
             "file read failure (TRI_FILE_READ)",
         )));
     };
     let invertices = line.strtol() as i32;
-    line.findfield();
+    line.find_field();
     let mesh_dim = if line.at_end() {
         2
     } else {
         line.strtol() as i32
     };
-    line.findfield();
+    line.find_field();
     let nextras = if line.at_end() {
         0
     } else {
         line.strtol() as i32
     };
-    line.findfield();
+    line.find_field();
     let nodemarkers = if line.at_end() {
         0
     } else {
@@ -1035,7 +1035,7 @@ pub(crate) fn file_readnodes_internal<R: Read>(
 
     // Read the vertices (493-531).
     for i in 0..invertices {
-        let Some(mut line) = readline(file) else {
+        let Some(mut line) = read_line(file) else {
             return Err(Error::Io(std::io::Error::other(
                 "file read failure (TRI_FILE_READ)",
             )));
@@ -1043,14 +1043,14 @@ pub(crate) fn file_readnodes_internal<R: Read>(
         if i == 0 {
             *firstnode = line.strtol() as i32;
         }
-        line.findfield();
+        line.find_field();
         if line.at_end() {
             // TODO: error: Vertex (b->firstnumber + i) has no x
             // coordinate (502).
             return Err(Error::Input("invalid input (TRI_FAILURE)".to_string()));
         }
         let x = line.strtod();
-        line.findfield();
+        line.find_field();
         if line.at_end() {
             // TODO: error: Vertex (b->firstnumber + i) has no y
             // coordinate (507).
@@ -1061,7 +1061,7 @@ pub(crate) fn file_readnodes_internal<R: Read>(
         // Read the vertex attributes (512-519): a missing field
         // stores 0.0.
         for _ in 0..nextras.max(0) {
-            line.findfield();
+            line.find_field();
             if line.at_end() {
                 io.point_attributes.push(0.0);
             } else {
@@ -1071,7 +1071,7 @@ pub(crate) fn file_readnodes_internal<R: Read>(
         if nodemarkers != 0 {
             // Read a vertex marker (520-528): a missing field stores
             // 0.
-            line.findfield();
+            line.find_field();
             if line.at_end() {
                 io.point_markers.push(0);
             } else {
@@ -1084,19 +1084,19 @@ pub(crate) fn file_readnodes_internal<R: Read>(
 
 /// file_readsegments_internal (triangle_io.c:546-607): read the
 /// segments of a .poly file.
-pub(crate) fn file_readsegments_internal<R: Read>(
+pub(crate) fn file_read_segments_internal<R: Read>(
     file: &mut LineFile<R>,
     io: &mut MeshInput,
 ) -> Result<(), Error> {
     // Read number of segments and number of boundary markers
     // (560-572).
-    let Some(mut line) = readline(file) else {
+    let Some(mut line) = read_line(file) else {
         return Err(Error::Io(std::io::Error::other(
             "file read failure (TRI_FILE_READ)",
         )));
     };
     let insegments = line.strtol() as i32;
-    line.findfield();
+    line.find_field();
     let segmentmarkers = if line.at_end() {
         0
     } else {
@@ -1105,19 +1105,19 @@ pub(crate) fn file_readsegments_internal<R: Read>(
 
     // Read the segments (581-601).
     for _ in 0..insegments {
-        let Some(mut line) = readline(file) else {
+        let Some(mut line) = read_line(file) else {
             return Err(Error::Io(std::io::Error::other(
                 "file read failure (TRI_FILE_READ)",
             )));
         };
-        line.findfield();
+        line.find_field();
         if line.at_end() {
             // TODO: error: Segment (firstnumber + i) has no endpoints
             // (586).
             return Err(Error::Input("invalid input (TRI_FAILURE)".to_string()));
         }
         let endpoint1 = line.strtol() as i32;
-        line.findfield();
+        line.find_field();
         if line.at_end() {
             // TODO: error: Segment (firstnumber + i) is missing its
             // second endpoint (592).
@@ -1127,7 +1127,7 @@ pub(crate) fn file_readsegments_internal<R: Read>(
         io.segments.push([endpoint1, endpoint2]);
         if segmentmarkers != 0 {
             // A missing marker field stores 0 (596-600).
-            line.findfield();
+            line.find_field();
             if line.at_end() {
                 io.segment_markers.push(0);
             } else {
@@ -1143,12 +1143,12 @@ pub(crate) fn file_readsegments_internal<R: Read>(
 /// .poly file. A missing area field copies the attribute value
 /// exactly like C (regionlist[index] = regionlist[index - 1],
 /// triangle_io.c:694-695); a missing regions line is TRI_OK.
-pub(crate) fn file_readholes_internal<R: Read>(
+pub(crate) fn file_read_holes_internal<R: Read>(
     file: &mut LineFile<R>,
     io: &mut MeshInput,
 ) -> Result<(), Error> {
     // Read the holes (629-647).
-    let Some(mut line) = readline(file) else {
+    let Some(mut line) = read_line(file) else {
         return Err(Error::Io(std::io::Error::other(
             "file read failure (TRI_FILE_READ)",
         )));
@@ -1156,19 +1156,19 @@ pub(crate) fn file_readholes_internal<R: Read>(
     let holes = line.strtol() as i32;
     if holes > 0 {
         for _ in 0..holes {
-            let Some(mut line) = readline(file) else {
+            let Some(mut line) = read_line(file) else {
                 return Err(Error::Io(std::io::Error::other(
                     "file read failure (TRI_FILE_READ)",
                 )));
             };
-            line.findfield();
+            line.find_field();
             if line.at_end() {
                 // TODO: error: Hole (b->firstnumber + (i >> 1)) has
                 // no x coordinate (644).
                 return Err(Error::Input("invalid input (TRI_FAILURE)".to_string()));
             }
             let x = line.strtod();
-            line.findfield();
+            line.find_field();
             if line.at_end() {
                 // TODO: error: Hole ... has no y coordinate (650).
                 return Err(Error::Input("invalid input (TRI_FAILURE)".to_string()));
@@ -1181,38 +1181,38 @@ pub(crate) fn file_readholes_internal<R: Read>(
     // Read the area constraints (659-705; behind #ifndef CDT_ONLY in
     // C, unconditional here - the port builds the full shape). A
     // missing line ends the file cleanly.
-    let Some(mut line) = readline(file) else {
+    let Some(mut line) = read_line(file) else {
         return Ok(());
     };
     let regions = line.strtol() as i32;
     if regions > 0 {
         for _ in 0..regions {
-            let Some(mut line) = readline(file) else {
+            let Some(mut line) = read_line(file) else {
                 return Err(Error::Io(std::io::Error::other(
                     "file read failure (TRI_FILE_READ)",
                 )));
             };
-            line.findfield();
+            line.find_field();
             if line.at_end() {
                 // TODO: error: Region (b->firstnumber + i) has no x
                 // coordinate (673).
                 return Err(Error::Input("invalid input (TRI_FAILURE)".to_string()));
             }
             let x = line.strtod();
-            line.findfield();
+            line.find_field();
             if line.at_end() {
                 // TODO: error: Region ... has no y coordinate (679).
                 return Err(Error::Input("invalid input (TRI_FAILURE)".to_string()));
             }
             let y = line.strtod();
-            line.findfield();
+            line.find_field();
             if line.at_end() {
                 // TODO: error: Region ... has no region attribute or
                 // area constraint (685).
                 return Err(Error::Input("invalid input (TRI_FAILURE)".to_string()));
             }
             let attribute = line.strtod();
-            line.findfield();
+            line.find_field();
             let max_area = if line.at_end() {
                 // The missing-area branch copies the attribute value
                 // (694-695).
@@ -1232,42 +1232,42 @@ pub(crate) fn file_readholes_internal<R: Read>(
 }
 
 /// file_readnodes (triangle_io.c:712-716).
-pub(crate) fn file_readnodes<R: Read>(
+pub(crate) fn file_read_nodes<R: Read>(
     nodefile: &mut LineFile<R>,
     io: &mut MeshInput,
     firstnode: &mut i32,
 ) -> Result<(), Error> {
-    file_readnodes_internal(nodefile, io, false, firstnode)
+    file_read_nodes_internal(nodefile, io, false, firstnode)
 }
 
 /// file_readpoly (triangle_io.c:723-736).
-pub(crate) fn file_readpoly<R: Read>(
+pub(crate) fn file_read_poly<R: Read>(
     polyfile: &mut LineFile<R>,
     io: &mut MeshInput,
     firstnode: &mut i32,
 ) -> Result<(), Error> {
-    file_readnodes_internal(polyfile, io, true, firstnode)?;
-    file_readsegments_internal(polyfile, io)?;
-    file_readholes_internal(polyfile, io)
+    file_read_nodes_internal(polyfile, io, true, firstnode)?;
+    file_read_segments_internal(polyfile, io)?;
+    file_read_holes_internal(polyfile, io)
 }
 
 /// file_readelements (triangle_io.c:744-803): read mesh elements from
 /// an .ele file. numberofcorners is pinned to 3 regardless of the
 /// file's corner count (769); incorners < 3 is C's TODO failure
 /// (763-765).
-pub(crate) fn file_readelements<R: Read>(
+pub(crate) fn file_read_elements<R: Read>(
     file: &mut LineFile<R>,
     io: &mut MeshInput,
 ) -> Result<(), Error> {
     // Read number of triangles, number of vertices per triangle, and
     // number of triangle attributes from .ele file (757-771).
-    let Some(mut line) = readline(file) else {
+    let Some(mut line) = read_line(file) else {
         return Err(Error::Io(std::io::Error::other(
             "file read failure (TRI_FILE_READ)",
         )));
     };
     let inelements = line.strtol() as i32;
-    line.findfield();
+    line.find_field();
     if !line.at_end() {
         let incorners = line.strtol() as i32;
         if incorners < 3 {
@@ -1276,7 +1276,7 @@ pub(crate) fn file_readelements<R: Read>(
             return Err(Error::Input("invalid input (TRI_FAILURE)".to_string()));
         }
     }
-    line.findfield();
+    line.find_field();
     let eextras = if line.at_end() {
         0
     } else {
@@ -1290,13 +1290,13 @@ pub(crate) fn file_readelements<R: Read>(
 
     // Read the triangles from the .ele file (779-799).
     for _ in 0..inelements {
-        let Some(mut line) = readline(file) else {
+        let Some(mut line) = read_line(file) else {
             return Err(Error::Io(std::io::Error::other(
                 "file read failure (TRI_FILE_READ)",
             )));
         };
         for _ in 0..3 {
-            line.findfield();
+            line.find_field();
             if line.at_end() {
                 // TODO: error: Triangle (elementnumber) is missing
                 // vertex (j + 1) (787).
@@ -1307,7 +1307,7 @@ pub(crate) fn file_readelements<R: Read>(
         // Read the triangle's attributes (790-797): a missing field
         // stores 0.0 (C stores the int 0).
         for _ in 0..eextras.max(0) {
-            line.findfield();
+            line.find_field();
             if line.at_end() {
                 io.element_attributes.push(0.0);
             } else {
@@ -1321,12 +1321,12 @@ pub(crate) fn file_readelements<R: Read>(
 /// file_readelementsarea (triangle_io.c:828-876): read element areas
 /// from an .area file. The element count must agree with the .ele
 /// read (857-861); a missing field stores -1.0 (865-867).
-pub(crate) fn file_readelementsarea<R: Read>(
+pub(crate) fn file_read_elements_area<R: Read>(
     file: &mut LineFile<R>,
     io: &mut MeshInput,
 ) -> Result<(), Error> {
     // Check for consistency with the .ele file (841-861).
-    let Some(mut line) = readline(file) else {
+    let Some(mut line) = read_line(file) else {
         return Err(Error::Io(std::io::Error::other(
             "file read failure (TRI_FILE_READ)",
         )));
@@ -1348,12 +1348,12 @@ pub(crate) fn file_readelementsarea<R: Read>(
 
     // Read the triangles from the .area file (871-875).
     for _ in 0..numelements {
-        let Some(mut line) = readline(file) else {
+        let Some(mut line) = read_line(file) else {
             return Err(Error::Io(std::io::Error::other(
                 "file read failure (TRI_FILE_READ)",
             )));
         };
-        line.findfield();
+        line.find_field();
         if line.at_end() {
             // No constraint on this triangle (866).
             io.triangle_areas.push(-1.0);
@@ -1398,14 +1398,14 @@ mod tests {
         let d = m.vx_alloc().expect("vx");
         m.set_vx_x(d, 0.0);
         m.set_vx_y(d, 1.0);
-        let t1 = m.maketriangle(b.usesegments, b.vararea).expect("tri");
-        m.setorg(t1, a);
-        m.setdest(t1, e);
-        m.setapex(t1, c);
-        let t2 = m.maketriangle(b.usesegments, b.vararea).expect("tri");
-        m.setorg(t2, a);
-        m.setdest(t2, c);
-        m.setapex(t2, d);
+        let t1 = m.make_triangle(b.usesegments, b.vararea).expect("tri");
+        m.set_org(t1, a);
+        m.set_dest(t1, e);
+        m.set_apex(t1, c);
+        let t2 = m.make_triangle(b.usesegments, b.vararea).expect("tri");
+        m.set_org(t2, a);
+        m.set_dest(t2, c);
+        m.set_apex(t2, d);
         m.bond(
             Otri {
                 tri: t1.tri,
@@ -1422,41 +1422,41 @@ mod tests {
     // -- the parse seam, pinned by construction from C's semantics --
 
     #[test]
-    fn readline_skips_comments_and_finds_numbers() {
+    fn read_line_skips_comments_and_finds_numbers() {
         let src = "# comment only\n  \nabc\n1 2 3\n  4.5\n";
         let mut f = LineFile::new(Cursor::new(src.as_bytes().to_vec()));
-        let line = readline(&mut f).expect("line 1");
+        let line = read_line(&mut f).expect("line 1");
         assert_eq!(&line.buf[line.pos..], b"1 2 3\n");
-        let line = readline(&mut f).expect("line 2");
+        let line = read_line(&mut f).expect("line 2");
         assert_eq!(&line.buf[line.pos..], b"4.5\n");
-        assert!(readline(&mut f).is_none(), "EOF -> NULL");
+        assert!(read_line(&mut f).is_none(), "EOF -> NULL");
     }
 
     #[test]
-    fn findfield_walks_fields_and_truncates_comments() {
+    fn find_field_walks_fields_and_truncates_comments() {
         let mut f = LineFile::new(Cursor::new(b"1 0.5\t0.25 7 # tail\n".to_vec()));
-        let mut line = readline(&mut f).expect("line");
+        let mut line = read_line(&mut f).expect("line");
         assert_eq!(line.strtol(), 1);
-        line.findfield();
+        line.find_field();
         assert!(!line.at_end());
         assert_eq!(line.strtod(), 0.5);
-        line.findfield();
+        line.find_field();
         assert_eq!(line.strtod(), 0.25);
-        line.findfield();
+        line.find_field();
         assert_eq!(line.strtol(), 7);
         // The '#' truncated the line: the next field is '\0'.
-        line.findfield();
+        line.find_field();
         assert!(line.at_end());
     }
 
     #[test]
-    fn findfield_skips_extra_separators_like_c() {
+    fn find_field_skips_extra_separators_like_c() {
         // C's second loop does not stop at whitespace: a run of
         // separators is jumped entirely.
         let mut f = LineFile::new(Cursor::new(b"5   6\n".to_vec()));
-        let mut line = readline(&mut f).expect("line");
+        let mut line = read_line(&mut f).expect("line");
         assert_eq!(line.strtol(), 5);
-        line.findfield();
+        line.find_field();
         assert_eq!(line.strtol(), 6);
     }
 
@@ -1464,7 +1464,7 @@ mod tests {
     fn strtol_base_zero_grammar() {
         let mk = |txt: &str| {
             let mut f = LineFile::new(Cursor::new(txt.as_bytes().to_vec()));
-            readline(&mut f).expect("line")
+            read_line(&mut f).expect("line")
         };
         let mut l = mk("42");
         assert_eq!(l.strtol(), 42);
@@ -1472,7 +1472,7 @@ mod tests {
         assert_eq!(l.strtol(), -17);
         let mut l = mk("0x1f 5");
         assert_eq!(l.strtol(), 31);
-        l.findfield();
+        l.find_field();
         assert_eq!(l.strtol(), 5);
         let mut l = mk("010 8");
         // Octal: "010" is 8, and the '8' ends the prefix.
@@ -1507,7 +1507,7 @@ mod tests {
     fn strtod_decimal_grammar_and_partial_exponents() {
         let mk = |txt: &str| {
             let mut f = LineFile::new(Cursor::new(txt.as_bytes().to_vec()));
-            readline(&mut f).expect("line")
+            read_line(&mut f).expect("line")
         };
         let mut l = mk("0.5");
         assert_eq!(l.strtod(), 0.5);
@@ -1568,7 +1568,7 @@ mod tests {
     fn strtod_hex_floats_like_glibc() {
         let mk = |txt: &str| {
             let mut f = LineFile::new(Cursor::new(txt.as_bytes().to_vec()));
-            readline(&mut f).expect("line")
+            read_line(&mut f).expect("line")
         };
         let mut l = mk("0x1.8p3");
         assert_eq!(l.strtod(), 12.0);
@@ -1580,20 +1580,20 @@ mod tests {
         // 2 + 2^-52 is exactly halfway between 2.0 and
         // 2 + 2^-51: round-half-to-even picks 2.0.
         assert_eq!(l.strtod(), 2.0);
-        l.findfield();
+        l.find_field();
         assert_eq!(l.strtol(), 5);
         let mut l = mk("0x.8p1");
         assert_eq!(l.strtod(), 1.0);
     }
 
     #[test]
-    fn fgets_caps_at_inputlinesize_and_keeps_remainder() {
+    fn fgets_caps_at_input_line_size_and_keeps_remainder() {
         // A line longer than INPUTLINESIZE - 1 continues on the next
         // fgets, exactly like C.
-        let long = "1".repeat(INPUTLINESIZE + 20) + "\n2\n";
+        let long = "1".repeat(INPUT_LINE_SIZE + 20) + "\n2\n";
         let mut f = LineFile::new(Cursor::new(long.into_bytes()));
         let first = f.fgets().expect("first");
-        assert_eq!(first.len(), INPUTLINESIZE - 1);
+        assert_eq!(first.len(), INPUT_LINE_SIZE - 1);
         let second = f.fgets().expect("second");
         assert_eq!(second.last(), Some(&b'\n'));
         // A final line without a newline still reads.
@@ -1608,7 +1608,7 @@ mod tests {
         let mut f = LineFile::new(Cursor::new(src.as_bytes().to_vec()));
         let mut io = MeshInput::default();
         let mut firstnode = 0;
-        file_readpoly(&mut f, &mut io, &mut firstnode).expect("readpoly");
+        file_read_poly(&mut f, &mut io, &mut firstnode).expect("readpoly");
         (io, firstnode)
     }
 
@@ -1664,13 +1664,13 @@ mod tests {
         let mut f = LineFile::new(Cursor::new(src.as_bytes().to_vec()));
         let mut io = MeshInput::default();
         let mut firstnode = 0;
-        file_readpoly(&mut f, &mut io, &mut firstnode).expect("readpoly");
+        file_read_poly(&mut f, &mut io, &mut firstnode).expect("readpoly");
         assert!(io.points.is_empty());
         assert!(io.segments.is_empty());
         // Then file_readnodes fills the same input.
         let src = "3 2 0 1\n9 0 0 1\n10 1 0 1\n11 0 1 1\n";
         let mut f = LineFile::new(Cursor::new(src.as_bytes().to_vec()));
-        file_readnodes(&mut f, &mut io, &mut firstnode).expect("readnodes");
+        file_read_nodes(&mut f, &mut io, &mut firstnode).expect("readnodes");
         assert_eq!(firstnode, 9);
         assert_eq!(io.points.len(), 3);
         assert_eq!(io.point_markers, vec![1, 1, 1]);
@@ -1682,12 +1682,12 @@ mod tests {
         let mut io = MeshInput::default();
         let mut firstnode = 0;
         assert!(matches!(
-            file_readnodes(&mut f, &mut io, &mut firstnode),
+            file_read_nodes(&mut f, &mut io, &mut firstnode),
             Err(Error::Input(msg)) if msg == "invalid input (TRI_FAILURE)"
         ));
         let mut f = LineFile::new(Cursor::new(b"3 3 0 0\n".to_vec()));
         assert!(matches!(
-            file_readnodes(&mut f, &mut io, &mut firstnode),
+            file_read_nodes(&mut f, &mut io, &mut firstnode),
             Err(Error::Input(msg)) if msg == "invalid input (TRI_FAILURE)"
         ));
         // A premature EOF is TRI_FILE_READ.
@@ -1695,7 +1695,7 @@ mod tests {
         // A premature EOF raises Error::Io at the seam with the
         // funnel arm's exact payload.
         assert!(matches!(
-            file_readnodes(&mut f, &mut io, &mut firstnode),
+            file_read_nodes(&mut f, &mut io, &mut firstnode),
             Err(Error::Io(e)) if e.to_string() == "file read failure (TRI_FILE_READ)"
         ));
     }
@@ -1707,7 +1707,7 @@ mod tests {
         let src = "2 6 0\n1 2 3 4 5 6 7\n2 3 1 4 5 6 8\n";
         let mut f = LineFile::new(Cursor::new(src.as_bytes().to_vec()));
         let mut io = MeshInput::default();
-        file_readelements(&mut f, &mut io).expect("readelements");
+        file_read_elements(&mut f, &mut io).expect("readelements");
         assert_eq!(io.corners_per_element, 3);
         assert_eq!(io.elements, vec![2, 3, 4, 3, 1, 4]);
         assert!(io.element_attributes.is_empty());
@@ -1718,7 +1718,7 @@ mod tests {
         let src = "2 3 1\n1 2 3 4 9.5\n2 3 1 4\n";
         let mut f = LineFile::new(Cursor::new(src.as_bytes().to_vec()));
         let mut io = MeshInput::default();
-        file_readelements(&mut f, &mut io).expect("readelements");
+        file_read_elements(&mut f, &mut io).expect("readelements");
         assert_eq!(io.attributes_per_element, 1);
         assert_eq!(io.elements, vec![2, 3, 4, 3, 1, 4]);
         // A missing attribute field stores 0.0 (C stores the int 0).
@@ -1731,7 +1731,7 @@ mod tests {
         let mut f = LineFile::new(Cursor::new(src.as_bytes().to_vec()));
         let mut io = MeshInput::default();
         assert!(matches!(
-            file_readelements(&mut f, &mut io),
+            file_read_elements(&mut f, &mut io),
             Err(Error::Input(msg)) if msg == "invalid input (TRI_FAILURE)"
         ));
     }
@@ -1748,25 +1748,25 @@ mod tests {
         let src = "2 2\n1 0.25\n2\n";
         let mut f = LineFile::new(Cursor::new(src.as_bytes().to_vec()));
         assert!(matches!(
-            file_readelementsarea(&mut f, &mut io),
+            file_read_elements_area(&mut f, &mut io),
             Err(Error::Input(msg)) if msg == "invalid input (TRI_FAILURE)"
         ));
         assert!(io.triangle_areas.is_empty());
         // Matching count: a missing field stores -1.0 (866).
         let src = "3 2\n1 0.25\n2\n3\n";
         let mut f = LineFile::new(Cursor::new(src.as_bytes().to_vec()));
-        file_readelementsarea(&mut f, &mut io).expect("area");
+        file_read_elements_area(&mut f, &mut io).expect("area");
         assert_eq!(io.triangle_areas, vec![0.25, -1.0, -1.0]);
     }
 
     // -- the writers, pinned by construction from the printf spec --
 
     #[test]
-    fn file_writenodes_numbers_and_writes_bytes() {
+    fn file_write_nodes_numbers_and_writes_bytes() {
         let b = behavior_with(|_| {});
         let (mut m, _t1, _t2, _v) = square_two_triangles(&b, 0);
         let mut out: Vec<u8> = Vec::new();
-        file_writenodes(&mut m, &b, &mut out).expect("writenodes");
+        file_write_nodes(&mut m, &b, &mut out).expect("writenodes");
         assert_eq!(
             String::from_utf8(out).expect("ascii"),
             "4  2  0  1\n\
@@ -1778,21 +1778,21 @@ mod tests {
         // The numbering sits over the marks (triangle_io.c:64-65).
         let mut t = m.vertices.traversal();
         let mut number = 1;
-        while let Some(v) = m.vertextraverse(&mut t) {
+        while let Some(v) = m.traverse_vertex(&mut t) {
             assert_eq!(m.vx_mark(v), number);
             number += 1;
         }
     }
 
     #[test]
-    fn file_writenodes_zero_based_and_no_bounds() {
+    fn file_write_nodes_zero_based_and_no_bounds() {
         let b = behavior_with(|o| {
             o.zero_based();
             o.no_bounds();
         });
         let (mut m, _t1, _t2, _v) = square_two_triangles(&b, 0);
         let mut out: Vec<u8> = Vec::new();
-        file_writenodes(&mut m, &b, &mut out).expect("writenodes");
+        file_write_nodes(&mut m, &b, &mut out).expect("writenodes");
         assert_eq!(
             String::from_utf8(out).expect("ascii"),
             "4  2  0  0\n\
@@ -1804,13 +1804,13 @@ mod tests {
     }
 
     #[test]
-    fn file_writeelements_reads_the_writenodes_numbers() {
+    fn file_write_elements_reads_the_write_nodes_numbers() {
         let b = behavior_with(|_| {});
         let (mut m, _t1, _t2, _v) = square_two_triangles(&b, 0);
         let mut sink: Vec<u8> = Vec::new();
-        file_writenodes(&mut m, &b, &mut sink).expect("writenodes");
+        file_write_nodes(&mut m, &b, &mut sink).expect("writenodes");
         let mut out: Vec<u8> = Vec::new();
-        file_writeelements(&mut m, &b, &mut out).expect("writeelements");
+        file_write_elements(&mut m, &b, &mut out).expect("writeelements");
         assert_eq!(
             String::from_utf8(out).expect("ascii"),
             "2  3  0\n\
@@ -1820,7 +1820,7 @@ mod tests {
     }
 
     #[test]
-    fn file_writepoly_writes_segments_holes_and_regions() {
+    fn file_write_poly_writes_segments_holes_and_regions() {
         let b = behavior_with(|o| {
             o.pslg();
         });
@@ -1830,14 +1830,14 @@ mod tests {
         // the ioarrays writer's fixture precedent); writenodes
         // has numbered the vertices 1-4 before the poly writer
         // reads their marks.
-        let s = m.makesubseg().expect("subseg");
-        m.setsorg(s, v[0]);
-        m.setsdest(s, v[1]);
-        m.tsbond(Otri { tri: t1, orient: 0 }, s);
+        let s = m.make_subseg().expect("subseg");
+        m.set_subseg_org(s, v[0]);
+        m.set_subseg_dest(s, v[1]);
+        m.bond_tri_subseg(Otri { tri: t1, orient: 0 }, s);
         let mut sink: Vec<u8> = Vec::new();
-        file_writenodes(&mut m, &b, &mut sink).expect("writenodes");
+        file_write_nodes(&mut m, &b, &mut sink).expect("writenodes");
         let mut out: Vec<u8> = Vec::new();
-        file_writepoly(
+        file_write_poly(
             &mut m,
             &b,
             &mut out,
@@ -1863,14 +1863,14 @@ mod tests {
     }
 
     #[test]
-    fn file_writeedges_walks_the_hull_and_interior_once() {
+    fn file_write_edges_walks_the_hull_and_interior_once() {
         let b = behavior_with(|_| {});
         let (mut m, _t1, _t2, _v) = square_two_triangles(&b, 0);
         m.edges = 5; // (3 * items + hullsize) / 2 for the square.
         let mut sink: Vec<u8> = Vec::new();
-        file_writenodes(&mut m, &b, &mut sink).expect("writenodes");
+        file_write_nodes(&mut m, &b, &mut sink).expect("writenodes");
         let mut out: Vec<u8> = Vec::new();
-        file_writeedges(&mut m, &b, &mut out).expect("writeedges");
+        file_write_edges(&mut m, &b, &mut out).expect("writeedges");
         assert_eq!(
             String::from_utf8(out).expect("ascii"),
             "5  1\n\
@@ -1883,15 +1883,15 @@ mod tests {
     }
 
     #[test]
-    fn file_writeneighbors_overlays_without_restore() {
+    fn file_write_neighbors_overlays_without_restore() {
         let b = behavior_with(|o| {
             o.neighbors();
         });
         let (mut m, t1, t2, _v) = square_two_triangles(&b, 0);
         let mut sink: Vec<u8> = Vec::new();
-        file_writenodes(&mut m, &b, &mut sink).expect("writenodes");
+        file_write_nodes(&mut m, &b, &mut sink).expect("writenodes");
         let mut out: Vec<u8> = Vec::new();
-        file_writeneighbors(&mut m, &b, &mut out).expect("writeneighbors");
+        file_write_neighbors(&mut m, &b, &mut out).expect("writeneighbors");
         assert_eq!(
             String::from_utf8(out).expect("ascii"),
             "2  3\n\
@@ -1910,6 +1910,6 @@ mod tests {
 
 // R4 module reorganization (docs/architecture-spec.md section 5): the
 // I/O phase lives under io/ - the in-memory array transfer and the
-// writers (arrays.rs), and the EPS renderer (eps.rs).
+// writers (arrays.rs), and the EPS renderer (io/eps.rs).
 pub(crate) mod arrays;
 pub(crate) mod eps;

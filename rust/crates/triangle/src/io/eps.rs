@@ -40,7 +40,7 @@ use std::io::Write;
 
 use crate::formatter::g as fmt_g;
 use crate::mesh::handles::{Osub, Otri, DUMMY_TRI};
-use crate::mesh::slots::UNDEADVERTEX;
+use crate::mesh::slots::UNDEAD_VERTEX;
 use crate::mesh::Mesh;
 
 /// C's rect (triangle.h: the metric rectangle eps_update_metrics
@@ -191,7 +191,7 @@ pub(crate) fn eps_draw_edges(
     )?;
 
     let mut t = m.triangles.traversal();
-    while let Some(tri) = m.triangletraverse(&mut t) {
+    while let Some(tri) = m.traverse_triangle(&mut t) {
         for orient in 0..3u8 {
             let e = Otri { tri, orient };
             let trisym = m.sym(e);
@@ -231,10 +231,10 @@ pub(crate) fn eps_draw_segments(
     eps_set_stroke(file, 0.27, 0.5, 0.7, 0.8)?;
 
     let mut t = m.subsegs.traversal();
-    while let Some(ss) = m.subsegtraverse(&mut t) {
-        let e = Osub { ss, ssorient: 0 };
-        let p = m.sorg(e);
-        let q = m.sdest(e);
+    while let Some(ss) = m.traverse_subseg(&mut t) {
+        let e = Osub { ss, orient: 0 };
+        let p = m.subseg_org(e);
+        let q = m.subseg_dest(e);
         write!(
             file,
             "{} {} {} {} L\n",
@@ -267,8 +267,8 @@ pub(crate) fn eps_draw_points(
     )?;
 
     let mut t = m.vertices.traversal();
-    while let Some(v) = m.vertextraverse(&mut t) {
-        if m.vx_type(v) != UNDEADVERTEX {
+    while let Some(v) = m.traverse_vertex(&mut t) {
+        if m.vx_type(v) != UNDEAD_VERTEX {
             write!(
                 file,
                 "{} {} P\n",
@@ -383,14 +383,14 @@ mod tests {
         let d = m.vx_alloc().expect("vx");
         m.set_vx_x(d, 0.0);
         m.set_vx_y(d, 1.0);
-        let t1 = m.maketriangle(b.usesegments, b.vararea).expect("tri");
-        m.setorg(t1, a);
-        m.setdest(t1, e);
-        m.setapex(t1, c);
-        let t2 = m.maketriangle(b.usesegments, b.vararea).expect("tri");
-        m.setorg(t2, a);
-        m.setdest(t2, c);
-        m.setapex(t2, d);
+        let t1 = m.make_triangle(b.usesegments, b.vararea).expect("tri");
+        m.set_org(t1, a);
+        m.set_dest(t1, e);
+        m.set_apex(t1, c);
+        let t2 = m.make_triangle(b.usesegments, b.vararea).expect("tri");
+        m.set_org(t2, a);
+        m.set_dest(t2, c);
+        m.set_apex(t2, d);
         m.bond(
             Otri {
                 tri: t1.tri,

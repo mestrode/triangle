@@ -13,7 +13,7 @@
 //! slot and is never decoded. D6: every C handle macro becomes a method on
 //! the explicit register type; the hidden macro locals (ptr/sptr)
 //! disappear. The pure ring rotations live here (no memory touched, no
-//! re-encoding); the storage-touching methods live in mesh/slots.rs (the
+//! re-encoding); the storage-touching methods live in mesh/mesh/slots.rs (the
 //! chokepoint). C names survive until idiomatization rung 4.
 //!
 //! Invariants enforced here (ADR 0002 section 3, debug builds only):
@@ -23,7 +23,7 @@
 //! virus bit); null discipline (b) - the all-zero word is never
 //! decoded, exactly as C never decodes a NULL slot. The row-id side of
 //! the range invariant needs pool state and is enforced at the
-//! chokepoint decode sites (mesh/slots.rs) and the pool seam (mesh/pool.rs).
+//! chokepoint decode sites (mesh/mesh/slots.rs) and the pool seam (mesh/mesh/pool.rs).
 //! Release builds compile no check.
 //!
 //! Stage-1 note: items here are consumed by the not-yet-transliterated
@@ -33,7 +33,7 @@
 
 /// The null row id: the all-zero word keeps the C NULL meaning. C: a NULL
 /// `triangle*`/`subseg*` slot value, never decoded.
-pub(crate) const NULL: u32 = 0;
+pub(crate) const NULL_ROW: u32 = 0;
 /// The sentinel row id of the triangle pool: `dummytri`, the triangle that
 /// fills "outer space" (C: a hand-aligned allocation outside the pools;
 /// deviation D3 turns it into a reserved pool row).
@@ -43,8 +43,8 @@ pub(crate) const DUMMY_TRI: u32 = 1;
 pub(crate) const DUMMY_SUB: u32 = 1;
 
 /// Orientation arithmetic tables (C: plus1mod3/minus1mod3, triangle.c:224).
-pub(crate) const PLUS1MOD3: [u8; 3] = [1, 2, 0];
-pub(crate) const MINUS1MOD3: [u8; 3] = [2, 0, 1];
+pub(crate) const PLUS_ONE_MOD_3: [u8; 3] = [1, 2, 0];
+pub(crate) const MINUS_ONE_MOD_3: [u8; 3] = [2, 0, 1];
 
 /// An oriented triangle: the unpacked register mirror of C `struct otri`
 /// (triangle.h:239-243). A triangle row id plus an orientation denoting an
@@ -67,7 +67,7 @@ pub(crate) struct Otri {
 pub(crate) struct Osub {
     pub(crate) ss: u32,
     /// Ranges from 0 to 1.
-    pub(crate) ssorient: u8,
+    pub(crate) orient: u8,
 }
 
 /// C: encode() (triangle.h:703-708): compress an oriented triangle into one
@@ -100,15 +100,15 @@ pub(crate) fn decode(word: u64) -> Otri {
 /// C: sencode(): compress an oriented subsegment into one word. The low two
 /// bits are masked exactly like C's ~3 (triangle.h:925-933): ssorient at
 /// bit 0, bit 1 permanently spare - the mirror of C's pointer-alignment
-/// bit that the viral-infection flag (mesh/slots.rs infect, triangle.h:875)
+/// bit that the viral-infection flag (mesh/mesh/slots.rs infect, triangle.h:875)
 /// occupies on triangle word 6 (D1; ADR 0002 amendment, issue #22).
 ///
 /// Invariant (ADR 0002 section 3 a): ssorient is in range (debug_assert,
 /// < 2).
 #[inline]
-pub(crate) fn sencode(osub: Osub) -> u64 {
-    debug_assert!(osub.ssorient < 2, "subsegment orientation out of range");
-    ((osub.ss as u64) << 2) | osub.ssorient as u64
+pub(crate) fn encode_subseg(osub: Osub) -> u64 {
+    debug_assert!(osub.orient < 2, "subsegment orientation out of range");
+    ((osub.ss as u64) << 2) | osub.orient as u64
 }
 
 /// C: sdecode(): expand a word into an oriented subsegment. Null discipline
@@ -119,11 +119,11 @@ pub(crate) fn sencode(osub: Osub) -> u64 {
 /// Invariants (ADR 0002 section 3): null discipline (b) debug_asserted;
 /// ssorient is one masked bit, in range (a) by construction.
 #[inline]
-pub(crate) fn sdecode(word: u64) -> Osub {
+pub(crate) fn decode_subseg(word: u64) -> Osub {
     debug_assert!(word != 0, "null slot must never be decoded (C never does)");
     Osub {
         ss: (word >> 2) as u32,
-        ssorient: (word & 0b1) as u8,
+        orient: (word & 0b1) as u8,
     }
 }
 
@@ -135,14 +135,14 @@ impl Otri {
     pub(crate) fn lnext(self) -> Otri {
         Otri {
             tri: self.tri,
-            orient: PLUS1MOD3[self.orient as usize],
+            orient: PLUS_ONE_MOD_3[self.orient as usize],
         }
     }
 
     /// C: lnextself(): the in-place mirror of lnext.
     #[inline]
-    pub(crate) fn lnextself(&mut self) {
-        self.orient = PLUS1MOD3[self.orient as usize];
+    pub(crate) fn lnext_self(&mut self) {
+        self.orient = PLUS_ONE_MOD_3[self.orient as usize];
     }
 
     /// C: lprev(): the previous edge (clockwise) of a triangle.
@@ -150,14 +150,14 @@ impl Otri {
     pub(crate) fn lprev(self) -> Otri {
         Otri {
             tri: self.tri,
-            orient: MINUS1MOD3[self.orient as usize],
+            orient: MINUS_ONE_MOD_3[self.orient as usize],
         }
     }
 
     /// C: lprevself(): the in-place mirror of lprev.
     #[inline]
-    pub(crate) fn lprevself(&mut self) {
-        self.orient = MINUS1MOD3[self.orient as usize];
+    pub(crate) fn lprev_self(&mut self) {
+        self.orient = MINUS_ONE_MOD_3[self.orient as usize];
     }
 
     // C: otricopy() / otriequal() dissolve into Copy/PartialEq on the
@@ -167,17 +167,17 @@ impl Otri {
 impl Osub {
     /// C: ssym(): toggle the orientation of a subsegment (pure).
     #[inline]
-    pub(crate) fn ssym(self) -> Osub {
+    pub(crate) fn sym(self) -> Osub {
         Osub {
             ss: self.ss,
-            ssorient: 1 - self.ssorient,
+            orient: 1 - self.orient,
         }
     }
 
     /// C: ssymself(): the in-place mirror of ssym.
     #[inline]
-    pub(crate) fn ssymself(&mut self) {
-        self.ssorient = 1 - self.ssorient;
+    pub(crate) fn sym_self(&mut self) {
+        self.orient = 1 - self.orient;
     }
 
     // C: subsegcopy() / subsegequal() dissolve into Copy/PartialEq (D6).
@@ -208,20 +208,20 @@ mod tests {
     }
 
     #[test]
-    fn sencode_sdecode_roundtrips_at_extremes() {
+    fn encode_subseg_decode_subseg_roundtrips_at_extremes() {
         for ss in [DUMMY_SUB, 2, 508, u32::MAX] {
-            for ssorient in 0u8..2 {
-                let s = Osub { ss, ssorient };
-                assert_eq!(sdecode(sencode(s)), s);
+            for orient in 0u8..2 {
+                let s = Osub { ss, orient };
+                assert_eq!(decode_subseg(encode_subseg(s)), s);
             }
         }
         let s = Osub {
             ss: u32::MAX,
-            ssorient: 1,
+            orient: 1,
         };
-        assert_eq!(sencode(s), ((u32::MAX as u64) << 2) | 1);
+        assert_eq!(encode_subseg(s), ((u32::MAX as u64) << 2) | 1);
         // bit 1 stays spare in every stored subsegment word (the C virus bit)
-        assert_eq!(sencode(s) & 2, 0);
+        assert_eq!(encode_subseg(s) & 2, 0);
     }
 
     #[test]
@@ -230,15 +230,15 @@ mod tests {
         // is the null row with orientation 0: the C NULL slot value.
         assert_eq!(
             encode(Otri {
-                tri: NULL,
+                tri: NULL_ROW,
                 orient: 0
             }),
             0
         );
         assert_eq!(
-            sencode(Osub {
-                ss: NULL,
-                ssorient: 0
+            encode_subseg(Osub {
+                ss: NULL_ROW,
+                orient: 0
             }),
             0
         );
@@ -253,7 +253,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "null slot must never be decoded")]
     fn sdecoding_the_null_word_is_a_discipline_violation() {
-        let _ = sdecode(0);
+        let _ = decode_subseg(0);
     }
 
     #[test]
@@ -284,7 +284,7 @@ mod tests {
         }
         // in-place mirrors
         let mut s = o;
-        s.lnextself();
+        s.lnext_self();
         assert_eq!(
             s,
             Otri {
@@ -292,18 +292,18 @@ mod tests {
                 orient: 1
             }
         );
-        s.lprevself();
+        s.lprev_self();
         assert_eq!(s, o);
     }
 
     #[test]
-    fn ssym_toggles_the_subsegment_orientation() {
-        let s = Osub { ss: 9, ssorient: 0 };
-        assert_eq!(s.ssym(), Osub { ss: 9, ssorient: 1 });
-        assert_eq!(s.ssym().ssym(), s);
-        let mut t = Osub { ss: 5, ssorient: 1 };
-        t.ssymself();
-        assert_eq!(t.ssorient, 0);
+    fn sym_toggles_the_subsegment_orientation() {
+        let s = Osub { ss: 9, orient: 0 };
+        assert_eq!(s.sym(), Osub { ss: 9, orient: 1 });
+        assert_eq!(s.sym().sym(), s);
+        let mut t = Osub { ss: 5, orient: 1 };
+        t.sym_self();
+        assert_eq!(t.orient, 0);
         assert_eq!(t.ss, 5);
     }
 }
