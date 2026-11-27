@@ -14,7 +14,7 @@
 
 use std::cmp::Ordering;
 
-use crate::error::InternalStatus;
+use crate::error::{Error, SegmentRecoveryKind};
 use crate::handles::{decode, sdecode, Osub, Otri, DUMMY_SUB, DUMMY_TRI, NULL};
 use crate::mesh::Mesh;
 use crate::options::Behavior;
@@ -67,16 +67,11 @@ pub(crate) fn precisionerror() {
 /// vertices may encroach upon other subsegments, which are also
 /// repaired. 'triflaws' specifies whether to take note of new bad
 /// triangles that result from inserting vertices to repair encroached
-/// subsegments. C's 'int *status' out-param routes through the
-/// established '&mut InternalStatus' funnel (D8): the negative writes
-/// are TRI_SEG_SPLIT (triangle.c:7342, 7355) and TRI_CYCLE
+/// subsegments. C's 'int *status' out-param is dissolved (rung 2,
+/// D8): the negative writes raise Error::SegmentRecovery in place -
+/// TRI_SEG_SPLIT (triangle.c:7342, 7355) and TRI_CYCLE
 /// (triangle.c:7349).
-pub(crate) fn splitencsegs(
-    m: &mut Mesh,
-    b: &Behavior,
-    triflaws: bool,
-    status: &mut InternalStatus,
-) -> Result<(), Oom> {
+pub(crate) fn splitencsegs(m: &mut Mesh, b: &Behavior, triflaws: bool) -> Result<(), Error> {
     // Note that steinerleft == -1 if an unlimited number of Steiner
     // points is allowed (triangle.c:7202-7203).
     while (m.badsubsegs.live_count() > 0) && (m.steinerleft != 0) {
@@ -270,8 +265,7 @@ pub(crate) fn splitencsegs(
                     // C: TODO: Precision error: splitencsegs() - Ran out
                     // of precision at (newvertex)
                     // (triangle.c:7340-7341).
-                    *status = InternalStatus::SegSplit;
-                    return Ok(());
+                    return Err(Error::SegmentRecovery(SegmentRecoveryKind::Split));
                 }
                 // Insert the splitting vertex. This should always
                 // succeed (triangle.c:7345).
@@ -286,16 +280,14 @@ pub(crate) fn splitencsegs(
                     false,
                 )?;
                 if m.cyclefail {
-                    *status = InternalStatus::Cycle;
-                    return Ok(());
+                    return Err(Error::SegmentRecovery(SegmentRecoveryKind::Cycle));
                 }
                 if (success != InsertVertexResult::SuccessfulVertex)
                     && (success != InsertVertexResult::EncroachingVertex)
                 {
                     // C: TODO: Internal error: splitencsegs() - Failure
                     // to split a segment (triangle.c:7353-7354).
-                    *status = InternalStatus::SegSplit;
-                    return Ok(());
+                    return Err(Error::SegmentRecovery(SegmentRecoveryKind::Split));
                 }
                 if m.steinerleft > 0 {
                     m.steinerleft -= 1;
@@ -335,9 +327,9 @@ pub(crate) fn tallyfaces(m: &mut Mesh, b: &Behavior) -> Result<(), Oom> {
 /// triangle's circumcenter (or, under the aCute build without an area
 /// constraint, at findNewSPLocation's pick), insert it, and maintain the
 /// Delaunay property. C is void; the port's Err carries the pool OOM
-/// bridge and the findNewSPLocation call's Oom through the same
-/// funnel (D16, superseded by stage-1 acute C #43).
-pub(crate) fn splittriangle(m: &mut Mesh, b: &Behavior, badtri: u32) -> Result<(), InternalStatus> {
+/// bridge and the findNewSPLocation call's Oom through From<Oom> for
+/// Error (D26's rung-2 shape; D16, superseded by stage-1 acute C #43).
+pub(crate) fn splittriangle(m: &mut Mesh, b: &Behavior, badtri: u32) -> Result<(), Error> {
     let mut badotri = decode(m.bad_tri_poortri(badtri));
     let borg = m.org(badotri);
     let bdest = m.dest(badotri);
@@ -354,7 +346,7 @@ pub(crate) fn splittriangle(m: &mut Mesh, b: &Behavior, badtri: u32) -> Result<(
         let mut errorflag = 0;
         // Create a new vertex at the triangle's circumcenter
         // (triangle.c:7430).
-        let newvertex = m.vx_alloc().map_err(InternalStatus::from)?;
+        let newvertex = m.vx_alloc().map_err(Error::from)?;
         // C: #ifndef NO_ACUTE (triangle.c:7432-7441), mirrored as the
         // crate's 'acute' feature - the inverted compile switch,
         // exactly like quality.rs's testtriangle maxangle block.
@@ -381,12 +373,13 @@ pub(crate) fn splittriangle(m: &mut Mesh, b: &Behavior, badtri: u32) -> Result<(
                 // newvertex, &xi, &eta, 1, badotri) (triangle.c:7437):
                 // the row stays allocated through the call exactly as
                 // C keeps it, the interpolants return as the tuple
-                // (D26), and the Oom of the funneled deletevertex
-                // inside routes through InternalStatus (D8).
+                // (D26), and the Oom of the deletevertex inside
+                // routes through From<Oom> for Error (D26's rung-2
+                // shape).
                 let (xi_v, eta_v) = crate::acute::findNewSPLocation(
                     m, b, borg, bdest, bapex, newvertex, true, badotri,
                 )
-                .map_err(InternalStatus::from)?;
+                .map_err(Error::from)?;
                 xi = xi_v;
                 eta = eta_v;
             }
@@ -450,7 +443,7 @@ pub(crate) fn splittriangle(m: &mut Mesh, b: &Behavior, badtri: u32) -> Result<(
             // triangle, and maintain the Delaunay property of the
             // triangulation (triangle.c:7476-7477).
             let success = insertvertex(m, b, newvertex, &mut badotri, None, true, true, true)
-                .map_err(InternalStatus::from)?;
+                .map_err(Error::from)?;
             if success == InsertVertexResult::SuccessfulVertex {
                 if m.steinerleft > 0 {
                     m.steinerleft -= 1;
@@ -485,18 +478,15 @@ pub(crate) fn splittriangle(m: &mut Mesh, b: &Behavior, badtri: u32) -> Result<(
 
 /// C: enforcequality (triangle.c:7527-7610). Remove all the encroached
 /// subsegments and bad triangles from the triangulation. C's 'int
-/// *status' out-param routes through '&mut InternalStatus' (D8). The
+/// *status' out-param is dissolved (rung 2, D8): the TRI_CYCLE write
+/// (triangle.c:7574) raises Error::SegmentRecovery in place. The
 /// three poolinit resets (triangle.c:7533-7534, 7555-7556, 7565-7566)
 /// mirror as the slots.rs restarts: the pools take their geometry
 /// eagerly at construction (ADR 0003 section 4), and restart reproduces
 /// poolinit's reset of the allocation state - the timing no allocation,
 /// id, reuse, or traversal can observe, and what a re-refinement must
 /// see again.
-pub(crate) fn enforcequality(
-    m: &mut Mesh,
-    b: &Behavior,
-    status: &mut InternalStatus,
-) -> Result<(), InternalStatus> {
+pub(crate) fn enforcequality(m: &mut Mesh, b: &Behavior) -> Result<(), Error> {
     // Initialize the pool of encroached subsegments
     // (triangle.c:7532).
     m.bad_sub_seg_restart();
@@ -516,10 +506,7 @@ pub(crate) fn enforcequality(
 
     // Fix encroached subsegments without noting bad triangles
     // (triangle.c:7545).
-    splitencsegs(m, b, false, status)?;
-    if (*status as i32) < 0 {
-        return Ok(());
-    }
+    splitencsegs(m, b, false)?;
 
     // At this point, if we haven't run out of Steiner points, the
     // triangulation should be (conforming) Delaunay
@@ -556,8 +543,7 @@ pub(crate) fn enforcequality(
             };
             splittriangle(m, b, badtri)?;
             if m.cyclefail {
-                *status = InternalStatus::Cycle;
-                return Ok(());
+                return Err(Error::SegmentRecovery(SegmentRecoveryKind::Cycle));
             }
             if m.badsubsegs.live_count() > 0 {
                 // Put bad triangle back in queue for another try later
@@ -566,10 +552,7 @@ pub(crate) fn enforcequality(
                 // Fix any encroached subsegments that resulted. Record
                 // any new bad triangles that result
                 // (triangle.c:7580-7581).
-                splitencsegs(m, b, true, status)?;
-                if (*status as i32) < 0 {
-                    return Ok(());
-                }
+                splitencsegs(m, b, true)?;
             } else {
                 // Return the bad triangle to the pool
                 // (triangle.c:7585).
@@ -827,9 +810,7 @@ mod tests {
         tallyencs(&mut m, &b).expect("tallyencs");
         assert_eq!(m.badsubsegs.live_count(), 1);
         let tri_live = m.triangles.live_count();
-        let mut status = InternalStatus::Ok;
-        splitencsegs(&mut m, &b, false, &mut status).expect("splitencsegs");
-        assert_eq!(status, InternalStatus::Ok);
+        splitencsegs(&mut m, &b, false).expect("splitencsegs");
         // The queue drained: every enqueued row was processed and
         // dealloc'd.
         assert_eq!(m.badsubsegs.live_count(), 0);
@@ -850,6 +831,61 @@ mod tests {
         assert_eq!(m.steinerleft, -1);
         // No bad triangles were noted (triflabs is off here).
         assert_eq!(m.badtriangles.live_count(), 0);
+    }
+
+    #[test]
+    fn splitencsegs_outcome_split_pins_the_raising_site() {
+        // Replaces the funnel test's SegSplit arm pin: the raising
+        // site (the endpoint check, triangle.c:7337-7342) constructs
+        // Error::SegmentRecovery(Split) in place. The fixture
+        // hand-enqueues a subsegment whose endpoints have identical
+        // coordinates - exactly the row checkseg4encroach writes
+        // (quality.rs) - so the split interpolation lands the new
+        // vertex on eorg and the endpoint check fires before any
+        // insertion.
+        let b = behavior_q(20.0);
+        let mut m = mesh(&b);
+        let a = vxy(&mut m, 0.5, 0.5);
+        let e = vxy(&mut m, 0.5, 0.5); // identical coordinates
+        let c = vxy(&mut m, 1.5, 1.5);
+        let d = vxy(&mut m, 1.5, -1.5);
+        let t1 = m.maketriangle(true, false).expect("tri alloc");
+        m.setorg(t1, a);
+        m.setdest(t1, e);
+        m.setapex(t1, c);
+        let t2 = m.maketriangle(true, false).expect("tri alloc");
+        m.setorg(t2, e);
+        m.setdest(t2, a);
+        m.setapex(t2, d);
+        m.bond(
+            Otri {
+                tri: t1.tri,
+                orient: 0,
+            },
+            Otri {
+                tri: t2.tri,
+                orient: 0,
+            },
+        );
+        let shared = Otri {
+            tri: t1.tri,
+            orient: 0,
+        };
+        insertsubseg(&mut m, &b, shared, 7).expect("insertsubseg");
+        let sub = m.tspivot(shared);
+        let row = m.bad_subseg_alloc().expect("badsubseg row");
+        m.set_bad_sub_seg_enc(row, crate::handles::sencode(sub));
+        m.set_bad_sub_seg_org(row, m.sorg(sub));
+        m.set_bad_sub_seg_dest(row, m.sdest(sub));
+        assert_eq!(m.badsubsegs.live_count(), 1);
+        let out = splitencsegs(&mut m, &b, false);
+        assert!(matches!(
+            out,
+            Err(Error::SegmentRecovery(SegmentRecoveryKind::Split))
+        ));
+        // The raising site returns before badsubsegdealloc, so the
+        // row stays live exactly as C's does (triangle.c:7342).
+        assert_eq!(m.badsubsegs.live_count(), 1);
     }
 
     #[test]
@@ -936,9 +972,7 @@ mod tests {
         .expect("insertsubseg");
         tallyencs(&mut m, &b).expect("tallyencs");
         assert_eq!(m.badsubsegs.live_count(), 1);
-        let mut status = InternalStatus::Ok;
-        splitencsegs(&mut m, &b, false, &mut status).expect("splitencsegs");
-        assert_eq!(status, InternalStatus::Ok);
+        splitencsegs(&mut m, &b, false).expect("splitencsegs");
         // The free lens vertex was deleted and its row reused (LIFO) by
         // the segment split vertex.
         assert_eq!(m.vx_real(c, 0), 1.0);
@@ -1012,9 +1046,7 @@ mod tests {
         .expect("insertsubseg");
         tallyencs(&mut m, &b).expect("tallyencs");
         assert_eq!(m.badsubsegs.live_count(), 1);
-        let mut status = InternalStatus::Ok;
-        splitencsegs(&mut m, &b, false, &mut status).expect("splitencsegs");
-        assert_eq!(status, InternalStatus::Ok);
+        splitencsegs(&mut m, &b, false).expect("splitencsegs");
         assert_eq!(m.badsubsegs.live_count(), 0);
         let nv = find_vertex(&m, 3.0, 0.0, 1e-9).expect("concentric split vertex");
         assert_eq!(m.vx_mark(nv), 3);
@@ -1079,9 +1111,7 @@ mod tests {
         .expect("insertsubseg");
         tallyencs(&mut m, &b).expect("tallyencs");
         assert_eq!(m.badsubsegs.live_count(), 1);
-        let mut status = InternalStatus::Ok;
-        splitencsegs(&mut m, &b, false, &mut status).expect("splitencsegs");
-        assert_eq!(status, InternalStatus::Ok);
+        splitencsegs(&mut m, &b, false).expect("splitencsegs");
         assert_eq!(m.badsubsegs.live_count(), 0);
         let nv = find_vertex(&m, 2.0, 0.0, 1e-9).expect("concentric split vertex");
         assert_eq!(m.vx_mark(nv), 3);
@@ -1174,9 +1204,7 @@ mod tests {
         }
         delaunay(&mut m, &b).expect("delaunay");
         assert_eq!(m.triangles.live_count(), 2);
-        let mut status = InternalStatus::Ok;
-        enforcequality(&mut m, &b, &mut status).expect("enforcequality");
-        assert_eq!(status, InternalStatus::Ok);
+        enforcequality(&mut m, &b).expect("enforcequality");
         assert!(m.triangles.live_count() > 2);
         assert_eq!(m.badtriangles.live_count(), 0);
         assert_eq!(m.badsubsegs.live_count(), 0);
@@ -1203,9 +1231,7 @@ mod tests {
         }
         delaunay(&mut m, &b).expect("delaunay");
         let before = m.triangles.live_count();
-        let mut status = InternalStatus::Ok;
-        enforcequality(&mut m, &b, &mut status).expect("enforcequality");
-        assert_eq!(status, InternalStatus::Ok);
+        enforcequality(&mut m, &b).expect("enforcequality");
         assert!(m.triangles.live_count() > before);
         assert_eq!(m.badtriangles.live_count(), 0);
         assert_eq!(m.badsubsegs.live_count(), 0);
@@ -1226,9 +1252,7 @@ mod tests {
         }
         delaunay(&mut m, &b).expect("delaunay");
         let before = m.triangles.live_count();
-        let mut status = InternalStatus::Ok;
-        enforcequality(&mut m, &b, &mut status).expect("enforcequality");
-        assert_eq!(status, InternalStatus::Ok);
+        enforcequality(&mut m, &b).expect("enforcequality");
         assert!(m.triangles.live_count() > before);
         assert_eq!(m.badtriangles.live_count(), 0);
         assert_eq!(m.badsubsegs.live_count(), 0);

@@ -11,12 +11,14 @@
 //!   837; triangle_api.c fopen NULL -> TRI_FILE_OPEN at 498, 514, 530,
 //!   546) dissolve: the port's api.rs wrappers own the open, and
 //!   File::open's error carries straight into Error::Io (the
-//!   TRI_FILE_OPEN equivalence of the D8 funnel).
+//!   TRI_FILE_OPEN equivalence class; D31).
 //! - C's unchecked fprintf return values in the writers surface as
 //!   io::Result in the port (register row: the writers' seam). Every
-//!   reader failure keeps C's code: TRI_FILE_READ (fgets NULL) and the
-//!   raw -1 TODO returns both keep their InternalStatus codes and map
-//!   through the existing D8 funnel (Failure -> Error::Input).
+//!   reader failure raises at the seam since rung 2: TRI_FILE_READ
+//!   (a fgets NULL) raises Error::Io with the same io::Error payload
+//!   the stage-1 funnel arm carried (D31's equivalence class), and
+//!   the raw -1 TODO returns raise Error::Input with the funnel
+//!   arm's exact TRI_FAILURE payload text.
 //! - fgets mirrors over a byte buffer with INPUTLINESIZE semantics
 //!   (triangle_config.h:114); read errors fold to NULL exactly like
 //!   C's fgets, so a mid-file I/O failure reads as end-of-file.
@@ -33,7 +35,7 @@
 
 use std::io::{BufReader, Read, Write};
 
-use crate::error::InternalStatus;
+use crate::error::Error;
 use crate::formatter::{d, ld, write_d, write_d4, write_g, write_ld4};
 use crate::handles::{Osub, Otri, DUMMY_SUB, DUMMY_TRI};
 use crate::input::{Hole, MeshInput, Point2, Region};
@@ -981,12 +983,14 @@ pub(crate) fn file_readnodes_internal<R: Read>(
     io: &mut MeshInput,
     poly: bool,
     firstnode: &mut i32,
-) -> Result<(), InternalStatus> {
+) -> Result<(), Error> {
     // Read number of vertices, number of dimensions, number of vertex
     // attributes, and number of boundary markers (450-465), with C's
     // default fills for missing fields.
     let Some(mut line) = readline(file) else {
-        return Err(InternalStatus::FileRead);
+        return Err(Error::Io(std::io::Error::other(
+            "file read failure (TRI_FILE_READ)",
+        )));
     };
     let invertices = line.strtol() as i32;
     line.findfield();
@@ -1019,12 +1023,12 @@ pub(crate) fn file_readnodes_internal<R: Read>(
     if invertices < 3 {
         // TODO: error: Input must have at least three input vertices
         // (481).
-        return Err(InternalStatus::Failure);
+        return Err(Error::Input("invalid input (TRI_FAILURE)".to_string()));
     }
     if mesh_dim != 2 {
         // TODO: error: Triangle only works with two-dimensional
         // meshes (484).
-        return Err(InternalStatus::Failure);
+        return Err(Error::Input("invalid input (TRI_FAILURE)".to_string()));
     }
     // C: if (nextras == 0) { //b->weighted = 0; } - a dead comment.
     io.attributes_per_point = nextras.max(0) as usize;
@@ -1032,7 +1036,9 @@ pub(crate) fn file_readnodes_internal<R: Read>(
     // Read the vertices (493-531).
     for i in 0..invertices {
         let Some(mut line) = readline(file) else {
-            return Err(InternalStatus::FileRead);
+            return Err(Error::Io(std::io::Error::other(
+                "file read failure (TRI_FILE_READ)",
+            )));
         };
         if i == 0 {
             *firstnode = line.strtol() as i32;
@@ -1041,14 +1047,14 @@ pub(crate) fn file_readnodes_internal<R: Read>(
         if line.at_end() {
             // TODO: error: Vertex (b->firstnumber + i) has no x
             // coordinate (502).
-            return Err(InternalStatus::Failure);
+            return Err(Error::Input("invalid input (TRI_FAILURE)".to_string()));
         }
         let x = line.strtod();
         line.findfield();
         if line.at_end() {
             // TODO: error: Vertex (b->firstnumber + i) has no y
             // coordinate (507).
-            return Err(InternalStatus::Failure);
+            return Err(Error::Input("invalid input (TRI_FAILURE)".to_string()));
         }
         let y = line.strtod();
         io.points.push(Point2 { x, y });
@@ -1081,11 +1087,13 @@ pub(crate) fn file_readnodes_internal<R: Read>(
 pub(crate) fn file_readsegments_internal<R: Read>(
     file: &mut LineFile<R>,
     io: &mut MeshInput,
-) -> Result<(), InternalStatus> {
+) -> Result<(), Error> {
     // Read number of segments and number of boundary markers
     // (560-572).
     let Some(mut line) = readline(file) else {
-        return Err(InternalStatus::FileRead);
+        return Err(Error::Io(std::io::Error::other(
+            "file read failure (TRI_FILE_READ)",
+        )));
     };
     let insegments = line.strtol() as i32;
     line.findfield();
@@ -1098,20 +1106,22 @@ pub(crate) fn file_readsegments_internal<R: Read>(
     // Read the segments (581-601).
     for _ in 0..insegments {
         let Some(mut line) = readline(file) else {
-            return Err(InternalStatus::FileRead);
+            return Err(Error::Io(std::io::Error::other(
+                "file read failure (TRI_FILE_READ)",
+            )));
         };
         line.findfield();
         if line.at_end() {
             // TODO: error: Segment (firstnumber + i) has no endpoints
             // (586).
-            return Err(InternalStatus::Failure);
+            return Err(Error::Input("invalid input (TRI_FAILURE)".to_string()));
         }
         let endpoint1 = line.strtol() as i32;
         line.findfield();
         if line.at_end() {
             // TODO: error: Segment (firstnumber + i) is missing its
             // second endpoint (592).
-            return Err(InternalStatus::Failure);
+            return Err(Error::Input("invalid input (TRI_FAILURE)".to_string()));
         }
         let endpoint2 = line.strtol() as i32;
         io.segments.push([endpoint1, endpoint2]);
@@ -1136,28 +1146,32 @@ pub(crate) fn file_readsegments_internal<R: Read>(
 pub(crate) fn file_readholes_internal<R: Read>(
     file: &mut LineFile<R>,
     io: &mut MeshInput,
-) -> Result<(), InternalStatus> {
+) -> Result<(), Error> {
     // Read the holes (629-647).
     let Some(mut line) = readline(file) else {
-        return Err(InternalStatus::FileRead);
+        return Err(Error::Io(std::io::Error::other(
+            "file read failure (TRI_FILE_READ)",
+        )));
     };
     let holes = line.strtol() as i32;
     if holes > 0 {
         for _ in 0..holes {
             let Some(mut line) = readline(file) else {
-                return Err(InternalStatus::FileRead);
+                return Err(Error::Io(std::io::Error::other(
+                    "file read failure (TRI_FILE_READ)",
+                )));
             };
             line.findfield();
             if line.at_end() {
                 // TODO: error: Hole (b->firstnumber + (i >> 1)) has
                 // no x coordinate (644).
-                return Err(InternalStatus::Failure);
+                return Err(Error::Input("invalid input (TRI_FAILURE)".to_string()));
             }
             let x = line.strtod();
             line.findfield();
             if line.at_end() {
                 // TODO: error: Hole ... has no y coordinate (650).
-                return Err(InternalStatus::Failure);
+                return Err(Error::Input("invalid input (TRI_FAILURE)".to_string()));
             }
             let y = line.strtod();
             io.holes.push(Hole { x, y });
@@ -1174,26 +1188,28 @@ pub(crate) fn file_readholes_internal<R: Read>(
     if regions > 0 {
         for _ in 0..regions {
             let Some(mut line) = readline(file) else {
-                return Err(InternalStatus::FileRead);
+                return Err(Error::Io(std::io::Error::other(
+                    "file read failure (TRI_FILE_READ)",
+                )));
             };
             line.findfield();
             if line.at_end() {
                 // TODO: error: Region (b->firstnumber + i) has no x
                 // coordinate (673).
-                return Err(InternalStatus::Failure);
+                return Err(Error::Input("invalid input (TRI_FAILURE)".to_string()));
             }
             let x = line.strtod();
             line.findfield();
             if line.at_end() {
                 // TODO: error: Region ... has no y coordinate (679).
-                return Err(InternalStatus::Failure);
+                return Err(Error::Input("invalid input (TRI_FAILURE)".to_string()));
             }
             let y = line.strtod();
             line.findfield();
             if line.at_end() {
                 // TODO: error: Region ... has no region attribute or
                 // area constraint (685).
-                return Err(InternalStatus::Failure);
+                return Err(Error::Input("invalid input (TRI_FAILURE)".to_string()));
             }
             let attribute = line.strtod();
             line.findfield();
@@ -1220,7 +1236,7 @@ pub(crate) fn file_readnodes<R: Read>(
     nodefile: &mut LineFile<R>,
     io: &mut MeshInput,
     firstnode: &mut i32,
-) -> Result<(), InternalStatus> {
+) -> Result<(), Error> {
     file_readnodes_internal(nodefile, io, false, firstnode)
 }
 
@@ -1229,7 +1245,7 @@ pub(crate) fn file_readpoly<R: Read>(
     polyfile: &mut LineFile<R>,
     io: &mut MeshInput,
     firstnode: &mut i32,
-) -> Result<(), InternalStatus> {
+) -> Result<(), Error> {
     file_readnodes_internal(polyfile, io, true, firstnode)?;
     file_readsegments_internal(polyfile, io)?;
     file_readholes_internal(polyfile, io)
@@ -1242,11 +1258,13 @@ pub(crate) fn file_readpoly<R: Read>(
 pub(crate) fn file_readelements<R: Read>(
     file: &mut LineFile<R>,
     io: &mut MeshInput,
-) -> Result<(), InternalStatus> {
+) -> Result<(), Error> {
     // Read number of triangles, number of vertices per triangle, and
     // number of triangle attributes from .ele file (757-771).
     let Some(mut line) = readline(file) else {
-        return Err(InternalStatus::FileRead);
+        return Err(Error::Io(std::io::Error::other(
+            "file read failure (TRI_FILE_READ)",
+        )));
     };
     let inelements = line.strtol() as i32;
     line.findfield();
@@ -1255,7 +1273,7 @@ pub(crate) fn file_readelements<R: Read>(
         if incorners < 3 {
             // TODO: error: Triangles must have at least 3 vertices
             // (763-765).
-            return Err(InternalStatus::Failure);
+            return Err(Error::Input("invalid input (TRI_FAILURE)".to_string()));
         }
     }
     line.findfield();
@@ -1273,14 +1291,16 @@ pub(crate) fn file_readelements<R: Read>(
     // Read the triangles from the .ele file (779-799).
     for _ in 0..inelements {
         let Some(mut line) = readline(file) else {
-            return Err(InternalStatus::FileRead);
+            return Err(Error::Io(std::io::Error::other(
+                "file read failure (TRI_FILE_READ)",
+            )));
         };
         for _ in 0..3 {
             line.findfield();
             if line.at_end() {
                 // TODO: error: Triangle (elementnumber) is missing
                 // vertex (j + 1) (787).
-                return Err(InternalStatus::Failure);
+                return Err(Error::Input("invalid input (TRI_FAILURE)".to_string()));
             }
             io.elements.push(line.strtol() as i32);
         }
@@ -1304,10 +1324,12 @@ pub(crate) fn file_readelements<R: Read>(
 pub(crate) fn file_readelementsarea<R: Read>(
     file: &mut LineFile<R>,
     io: &mut MeshInput,
-) -> Result<(), InternalStatus> {
+) -> Result<(), Error> {
     // Check for consistency with the .ele file (841-861).
     let Some(mut line) = readline(file) else {
-        return Err(InternalStatus::FileRead);
+        return Err(Error::Io(std::io::Error::other(
+            "file read failure (TRI_FILE_READ)",
+        )));
     };
     // C reads io->numberoftriangles, which file_readelements set
     // from the .ele header; the owned list derives it (corners_per_element
@@ -1321,13 +1343,15 @@ pub(crate) fn file_readelementsarea<R: Read>(
     if areaelements != numelements as i32 {
         // TODO: error: area file disagrees on number of triangles
         // (858-861).
-        return Err(InternalStatus::Failure);
+        return Err(Error::Input("invalid input (TRI_FAILURE)".to_string()));
     }
 
     // Read the triangles from the .area file (871-875).
     for _ in 0..numelements {
         let Some(mut line) = readline(file) else {
-            return Err(InternalStatus::FileRead);
+            return Err(Error::Io(std::io::Error::other(
+                "file read failure (TRI_FILE_READ)",
+            )));
         };
         line.findfield();
         if line.at_end() {
@@ -1657,21 +1681,23 @@ mod tests {
         let mut f = LineFile::new(Cursor::new(b"2 2 0 0\n".to_vec()));
         let mut io = MeshInput::default();
         let mut firstnode = 0;
-        assert_eq!(
+        assert!(matches!(
             file_readnodes(&mut f, &mut io, &mut firstnode),
-            Err(InternalStatus::Failure)
-        );
+            Err(Error::Input(msg)) if msg == "invalid input (TRI_FAILURE)"
+        ));
         let mut f = LineFile::new(Cursor::new(b"3 3 0 0\n".to_vec()));
-        assert_eq!(
+        assert!(matches!(
             file_readnodes(&mut f, &mut io, &mut firstnode),
-            Err(InternalStatus::Failure)
-        );
+            Err(Error::Input(msg)) if msg == "invalid input (TRI_FAILURE)"
+        ));
         // A premature EOF is TRI_FILE_READ.
         let mut f = LineFile::new(Cursor::new(b"3 2 0 0\n1 0 0\n".to_vec()));
-        assert_eq!(
+        // A premature EOF raises Error::Io at the seam with the
+        // funnel arm's exact payload.
+        assert!(matches!(
             file_readnodes(&mut f, &mut io, &mut firstnode),
-            Err(InternalStatus::FileRead)
-        );
+            Err(Error::Io(e)) if e.to_string() == "file read failure (TRI_FILE_READ)"
+        ));
     }
 
     #[test]
@@ -1704,10 +1730,10 @@ mod tests {
         let src = "1 2 0\n";
         let mut f = LineFile::new(Cursor::new(src.as_bytes().to_vec()));
         let mut io = MeshInput::default();
-        assert_eq!(
+        assert!(matches!(
             file_readelements(&mut f, &mut io),
-            Err(InternalStatus::Failure)
-        );
+            Err(Error::Input(msg)) if msg == "invalid input (TRI_FAILURE)"
+        ));
     }
 
     #[test]
@@ -1721,10 +1747,10 @@ mod tests {
         // C's TODO failure.
         let src = "2 2\n1 0.25\n2\n";
         let mut f = LineFile::new(Cursor::new(src.as_bytes().to_vec()));
-        assert_eq!(
+        assert!(matches!(
             file_readelementsarea(&mut f, &mut io),
-            Err(InternalStatus::Failure)
-        );
+            Err(Error::Input(msg)) if msg == "invalid input (TRI_FAILURE)"
+        ));
         assert!(io.triangle_areas.is_empty());
         // Matching count: a missing field stores -1.0 (866).
         let src = "3 2\n1 0.25\n2\n3\n";

@@ -6,18 +6,18 @@
 //! docs/function-mapping.md.
 //!
 //! Transliteration notes (beyond the module defaults):
-//! - The C 'int *status' out-params mirror to '&mut InternalStatus'
-//!   with identical propagation until rung 2 (D8); the negative-return
-//!   channels keep C's shapes: reconstruct returns C's int result with
-//!   TRI_INPUT (-3) riding the value channel exactly like the
-//!   sweeplinedelaunay TRI_INPUT pass-through (PR #34's precedent),
-//!   scoutsegment returns C's int 1/0 with TRI_SEG_SCOUT (-8) riding
-//!   the same channel where C returns it.
+//! - The C 'int *status' out-params are dissolved (rung 2, D8): every
+//!   raising site constructs its public Error variant in place -
+//!   Error::SegmentRecovery at the TRI_* status writes,
+//!   Error::Input at reconstruct's TRI_INPUT returns,
+//!   Error::Internal at conformingedge's internalerror site - and the
+//!   C int channels that carry non-error values stay as Ok payloads
+//!   (scoutsegment's 1/0 result, reconstruct's hull size).
 //! - C's #ifdef _DEBUG printf sites of formskeleton/reconstruct and
-//!   the internal-error printf sites of conformingedge are compiled
+//!   the internal-error printf texts of conformingedge are compiled
 //!   out of the pinned oracle build and are not transliterated; the
-//!   internalerror() halves follow the D8 funnel (*status =
-//!   internalerror(); return).
+//!   conformingedge site raises Error::Internal with internalerror()'s
+//!   verbatim payload instead (the printf text rides as the comment).
 //! - The C -D guards (REDUCED/CDT_ONLY) around conformingedge are open
 //!   in the pinned oracle; the port has a single build.
 //! - reconstruct's vertexarray is C trimalloc'd scratch (not mesh
@@ -50,7 +50,7 @@
 //! dead_code and is removed when the scaffolding is consumed.
 #![allow(dead_code)]
 
-use crate::error::{internalerror, InternalStatus};
+use crate::error::{Error, SegmentRecoveryKind};
 use crate::handles::{decode, encode, Osub, Otri, DUMMY_SUB, DUMMY_TRI};
 use crate::locate::{locate, LocateResult};
 use crate::mesh::Mesh;
@@ -97,9 +97,10 @@ enum PrevLink {
 /// from its .ele list (and, under -p, its .poly segments): create rows
 /// for every element, read and link every triangle, read and link every
 /// subsegment, then mark the remaining edges and count the boundary.
-/// Returns the hull size, or TRI_INPUT riding the value channel where
-/// C returns it (the caller stores the result in m->hullsize exactly
-/// like the api layer does; negative means invalid inputs).
+/// Returns the hull size as the Ok payload; the three TRI_INPUT
+/// returns of C (triangle.c:5522, 5573, 5664) raise Error::Input at
+/// exactly those return points (the caller stores the Ok result in
+/// m->hullsize exactly like the api layer does).
 #[allow(unused_assignments)] // C declares boundmarker/hullsize upfront and re-arms them at the section boundaries
 #[allow(clippy::too_many_arguments)]
 // C-parity: the indecremented index walks over corner/end/vertexarray
@@ -117,7 +118,7 @@ pub(crate) fn reconstruct(
     segmentlist: &[i32],
     segmentmarkerlist: Option<&[i32]>,
     numberofsegments: i32,
-) -> Result<i32, Oom> {
+) -> Result<i32, Error> {
     let mut vertexindex = 0usize;
     let mut attribindex = 0usize;
     let mut corner = [0i32; 3];
@@ -131,7 +132,7 @@ pub(crate) fn reconstruct(
     let incorners = corners;
     if incorners < 3 {
         // C: Triangles must have at least 3 vertices.
-        return Ok(InternalStatus::Input as i32);
+        return Err(Error::Input("invalid input (TRI_INPUT)".to_string()));
     }
     m.eextras = attribs;
 
@@ -199,7 +200,7 @@ pub(crate) fn reconstruct(
             vertexindex += 1;
             if (corner[j] < b.firstnumber) || (corner[j] >= b.firstnumber + m.invertices) {
                 // C: Triangle (elementnumber) has an invalid vertex index.
-                return Ok(InternalStatus::Input as i32);
+                return Err(Error::Input("invalid input (TRI_INPUT)".to_string()));
             }
         }
 
@@ -305,7 +306,7 @@ pub(crate) fn reconstruct(
             for j in 0..2usize {
                 if (end[j] < b.firstnumber) || (end[j] >= b.firstnumber + m.invertices) {
                     // C: Segment (segmentnumber) has an invalid vertex index.
-                    return Ok(InternalStatus::Input as i32);
+                    return Err(Error::Input("invalid input (TRI_INPUT)".to_string()));
                 }
             }
 
@@ -410,8 +411,7 @@ pub(crate) fn finddirection(
     b: &Behavior,
     searchtri: &mut Otri,
     searchpoint: (f64, f64),
-    status: &mut InternalStatus,
-) -> FindDirectionResult {
+) -> Result<FindDirectionResult, Error> {
     let searchpoint_v: Vertex = [searchpoint.0, searchpoint.1, 0.0];
 
     let startvertex = m.org(*searchtri);
@@ -458,8 +458,7 @@ pub(crate) fn finddirection(
         if searchtri.tri == DUMMY_TRI {
             // C: Unable to find a triangle leading from the origin to
             // the searchpoint.
-            *status = InternalStatus::FindDirection;
-            return FindDirectionResult::Within;
+            return Err(Error::SegmentRecovery(SegmentRecoveryKind::FindDirection));
         }
         leftvertex = m.apex(*searchtri);
         rightccw = leftccw;
@@ -477,8 +476,7 @@ pub(crate) fn finddirection(
         // Turn right until satisfied.
         m.oprevself(searchtri);
         if searchtri.tri == DUMMY_TRI {
-            *status = InternalStatus::FindDirection;
-            return FindDirectionResult::Within;
+            return Err(Error::SegmentRecovery(SegmentRecoveryKind::FindDirection));
         }
         rightvertex = m.dest(*searchtri);
         leftccw = rightccw;
@@ -493,15 +491,14 @@ pub(crate) fn finddirection(
         tries += 1;
     }
     if tries >= maxtries {
-        *status = InternalStatus::FindDirection;
-        return FindDirectionResult::Within;
+        return Err(Error::SegmentRecovery(SegmentRecoveryKind::FindDirection));
     }
     if leftccw == 0.0 {
-        FindDirectionResult::LeftCollinear
+        Ok(FindDirectionResult::LeftCollinear)
     } else if rightccw == 0.0 {
-        FindDirectionResult::RightCollinear
+        Ok(FindDirectionResult::RightCollinear)
     } else {
-        FindDirectionResult::Within
+        Ok(FindDirectionResult::Within)
     }
 }
 
@@ -523,8 +520,7 @@ pub(crate) fn segmentintersection(
     splittri: &mut Otri,
     splitsubseg: &mut Osub,
     endpoint2: u32,
-    status: &mut InternalStatus,
-) -> Result<(), Oom> {
+) -> Result<(), Error> {
     // Find the other three segment endpoints.
     let endpoint1 = m.apex(*splittri);
     let torg = m.org(*splittri);
@@ -541,8 +537,7 @@ pub(crate) fn segmentintersection(
     let denom = ty * ex - tx * ey;
     if denom == 0.0 {
         // C: Attempt to find intersection of parallel segments.
-        *status = InternalStatus::SegIntersect;
-        return Ok(());
+        return Err(Error::SegmentRecovery(SegmentRecoveryKind::Intersect));
     }
     let split = (ey * etx - ex * ety) / denom;
     // The intersection lies on the subsegment being split, give or take
@@ -551,8 +546,7 @@ pub(crate) fn segmentintersection(
     //   off the subsegment; inserting that vertex corrupts the mesh, or
     //   puts a point with NaN coordinates into it.
     if !(split >= -1.0e-9 && split <= 1.0 + 1.0e-9) {
-        *status = InternalStatus::SegIntersect;
-        return Ok(());
+        return Err(Error::SegmentRecovery(SegmentRecoveryKind::Intersect));
     }
     // Create the new vertex.
     let newvertex = m.vx_alloc()?;
@@ -580,13 +574,11 @@ pub(crate) fn segmentintersection(
         false,
     )?;
     if m.cyclefail {
-        *status = InternalStatus::Cycle;
-        return Ok(());
+        return Err(Error::SegmentRecovery(SegmentRecoveryKind::Cycle));
     }
     if success != InsertVertexResult::SuccessfulVertex {
         // C: Failure to split a segment.
-        *status = InternalStatus::SegIntersect;
-        return Ok(());
+        return Err(Error::SegmentRecovery(SegmentRecoveryKind::Intersect));
     }
     // Record a triangle whose origin is the new vertex.
     m.vx_set_2tri(newvertex, encode(*splittri));
@@ -617,10 +609,7 @@ pub(crate) fn segmentintersection(
     // Inserting the vertex may have caused edge flips.  We wish to
     //   rediscover the edge connecting endpoint1 to the new
     //   intersection vertex.
-    let _collinear = finddirection(m, b, splittri, endpoint1_xy, status);
-    if (*status as i32) < 0 {
-        return Ok(());
-    }
+    let _collinear = finddirection(m, b, splittri, endpoint1_xy)?;
 
     let rightvertex = m.dest(*splittri);
     let leftvertex = m.apex(*splittri);
@@ -631,8 +620,7 @@ pub(crate) fn segmentintersection(
         || (m.vx_real(rightvertex, 1) != endpoint1_xy.1)
     {
         // C: Topological inconsistency after splitting a segment.
-        *status = InternalStatus::SegIntersect;
-        return Ok(());
+        return Err(Error::SegmentRecovery(SegmentRecoveryKind::Intersect));
     }
     // 'splittri' should have destination endpoint1.
     Ok(())
@@ -647,8 +635,9 @@ pub(crate) fn segmentintersection(
 /// (reaching the second endpoint), a collinear vertex, or the
 /// intersection of two segments. Returns C's 1 if the entire segment is
 /// successfully inserted, 0 if the job must be finished by
-/// conformingedge() or constrainededge(); TRI_SEG_SCOUT rides the value
-/// channel exactly where C returns it.
+/// conformingedge() or constrainededge(); the scoutsteps budget site
+/// (triangle.c:6016-6017) raises Error::SegmentRecovery(Scout) exactly
+/// where C sets *status and returns TRI_SEG_SCOUT.
 // C's explicit `return 1;` / `return 0;` / tail `return scoutsegment(...)`
 // statements are kept verbatim; eliding them is C-invisible control flow.
 #[allow(clippy::needless_return)]
@@ -658,16 +647,14 @@ pub(crate) fn scoutsegment(
     searchtri: &mut Otri,
     endpoint2: u32,
     newmark: i32,
-    status: &mut InternalStatus,
-) -> Result<i32, Oom> {
+) -> Result<i32, Error> {
     // Each call reaches a vertex further along the segment, or is one
     //   of the two that follow a midpoint conformingedge() adds, so
     //   more calls than twice the vertices means the insertion is
     //   going in circles.
     m.scoutsteps += 1;
     if m.scoutsteps > 2 * m.vertices.live_count() as i64 {
-        *status = InternalStatus::SegScout;
-        return Ok(InternalStatus::SegScout as i32);
+        return Err(Error::SegmentRecovery(SegmentRecoveryKind::Scout));
     }
 
     let collinear = finddirection(
@@ -675,11 +662,7 @@ pub(crate) fn scoutsegment(
         b,
         searchtri,
         (m.vx_real(endpoint2, 0), m.vx_real(endpoint2, 1)),
-        status,
-    );
-    if (*status as i32) < 0 {
-        return Ok(InternalStatus::SegScout as i32);
-    }
+    )?;
 
     let rightvertex = m.dest(*searchtri);
     let leftvertex = m.apex(*searchtri);
@@ -701,14 +684,14 @@ pub(crate) fn scoutsegment(
         searchtri.lprevself();
         insertsubseg(m, b, *searchtri, newmark)?;
         // Insert the remainder of the segment.
-        return scoutsegment(m, b, searchtri, endpoint2, newmark, status);
+        return scoutsegment(m, b, searchtri, endpoint2, newmark);
     } else if collinear == FindDirectionResult::RightCollinear {
         // We've collided with a vertex between the segment's endpoints.
         insertsubseg(m, b, *searchtri, newmark)?;
         // Make the collinear vertex be the triangle's origin.
         searchtri.lnextself();
         // Insert the remainder of the segment.
-        return scoutsegment(m, b, searchtri, endpoint2, newmark, status);
+        return scoutsegment(m, b, searchtri, endpoint2, newmark);
     } else {
         let mut crosstri = searchtri.lnext();
         // C: tspivot(crosstri, crosssubseg).
@@ -718,15 +701,12 @@ pub(crate) fn scoutsegment(
             return Ok(0);
         } else {
             // Insert a vertex at the intersection.
-            segmentintersection(m, b, &mut crosstri, &mut crosssubseg, endpoint2, status)?;
-            if (*status as i32) < 0 {
-                return Ok(InternalStatus::SegScout as i32);
-            }
+            segmentintersection(m, b, &mut crosstri, &mut crosssubseg, endpoint2)?;
 
             *searchtri = crosstri;
             insertsubseg(m, b, *searchtri, newmark)?;
             // Insert the remainder of the segment.
-            return scoutsegment(m, b, searchtri, endpoint2, newmark, status);
+            return scoutsegment(m, b, searchtri, endpoint2, newmark);
         }
     }
 }
@@ -746,8 +726,7 @@ pub(crate) fn conformingedge(
     endpoint1: u32,
     endpoint2: u32,
     newmark: i32,
-    status: &mut InternalStatus,
-) -> Result<(), Oom> {
+) -> Result<(), Error> {
     // Create a new vertex to insert in the middle of the segment.
     let newvertex = m.vx_alloc()?;
     // Interpolate coordinates and attributes.
@@ -789,10 +768,15 @@ pub(crate) fn conformingedge(
             )?;
             if success != InsertVertexResult::SuccessfulVertex {
                 // C: Internal error in conformingedge(): Failure to
-                //   split a segment. (printf + internalerror(); the D8
-                //   funnel site.)
-                *status = internalerror();
-                return Ok(());
+                //   split a segment. (printf + internalerror(); the
+                //   payload is internalerror()'s verbatim stdout text,
+                //   triangle.c:349-354.)
+                return Err(Error::Internal(
+                    "  Please report this bug to jrs@cs.berkeley.edu
+  Include the message above, your input data set, and the exact
+    command line you used to run Triangle."
+                        .to_string(),
+                ));
             }
         }
         // The vertex has been inserted successfully.
@@ -811,28 +795,18 @@ pub(crate) fn conformingedge(
         b,
         &mut searchtri2,
         (m.vx_real(endpoint2, 0), m.vx_real(endpoint2, 1)),
-        status,
-    );
-    if (*status as i32) < 0 {
-        return Ok(());
-    }
-    if scoutsegment(m, b, &mut searchtri1, endpoint1, newmark, status)? == 0 {
-        if (*status as i32) < 0 {
-            return Ok(());
-        }
+    )?;
+    if scoutsegment(m, b, &mut searchtri1, endpoint1, newmark)? == 0 {
         // The origin of searchtri1 may have changed if a collision with
         //   an intervening vertex on the segment occurred.
         let midvertex1 = m.org(searchtri1);
-        conformingedge(m, b, midvertex1, endpoint1, newmark, status)?;
+        conformingedge(m, b, midvertex1, endpoint1, newmark)?;
     }
-    if scoutsegment(m, b, &mut searchtri2, endpoint2, newmark, status)? == 0 {
-        if (*status as i32) < 0 {
-            return Ok(());
-        }
+    if scoutsegment(m, b, &mut searchtri2, endpoint2, newmark)? == 0 {
         // The origin of searchtri2 may have changed if a collision
         //   with an intervening vertex on the segment occurred.
         let midvertex2 = m.org(searchtri2);
-        conformingedge(m, b, midvertex2, endpoint2, newmark, status)?;
+        conformingedge(m, b, midvertex2, endpoint2, newmark)?;
     }
     Ok(())
 }
@@ -939,8 +913,7 @@ pub(crate) fn constrainededge(
     starttri: &mut Otri,
     endpoint2: u32,
     newmark: i32,
-    status: &mut InternalStatus,
-) -> Result<(), Oom> {
+) -> Result<(), Error> {
     let mut crosssubseg;
     let endpoint1;
     let mut farvertex;
@@ -962,16 +935,14 @@ pub(crate) fn constrainededge(
         //   circles.
         digs += 1;
         if digs > m.triangles.live_count() as i64 {
-            *status = InternalStatus::SegInsert;
-            return Ok(());
+            return Err(Error::SegmentRecovery(SegmentRecoveryKind::Insert));
         }
         farvertex = m.org(fixuptri);
         if farvertex == 0 {
             // The dig has left the triangulation; the segment cannot be
             //   inserted. (C farvertex == NULL check; the zero id is
             //   C's NULL under D1.)
-            *status = InternalStatus::SegInsert;
-            return Ok(());
+            return Err(Error::SegmentRecovery(SegmentRecoveryKind::Insert));
         }
         // 'farvertex' is the extreme point of the polygon we are
         //   "digging" to get from endpoint1 to endpoint2.
@@ -1035,10 +1006,7 @@ pub(crate) fn constrainededge(
                     //   and endpoint2.
                     collision = true;
                     // Insert a vertex at the intersection.
-                    segmentintersection(m, b, &mut fixuptri, &mut crosssubseg, endpoint2, status)?;
-                    if (*status as i32) < 0 {
-                        return Ok(());
-                    }
+                    segmentintersection(m, b, &mut fixuptri, &mut crosssubseg, endpoint2)?;
                     done = true;
                 }
             }
@@ -1053,11 +1021,8 @@ pub(crate) fn constrainededge(
     //   another segment connecting that vertex with endpoint2.
     if collision {
         // Insert the remainder of the segment.
-        if scoutsegment(m, b, &mut fixuptri, endpoint2, newmark, status)? == 0 {
-            if (*status as i32) < 0 {
-                return Ok(());
-            }
-            constrainededge(m, b, &mut fixuptri, endpoint2, newmark, status)?;
+        if scoutsegment(m, b, &mut fixuptri, endpoint2, newmark)? == 0 {
+            constrainededge(m, b, &mut fixuptri, endpoint2, newmark)?;
         }
     }
     Ok(())
@@ -1077,8 +1042,7 @@ pub(crate) fn insertsegment(
     mut endpoint1: u32,
     endpoint2: u32,
     newmark: i32,
-    status: &mut InternalStatus,
-) -> Result<(), Oom> {
+) -> Result<(), Error> {
     let mut searchtri1 = Otri {
         tri: DUMMY_TRI,
         orient: 0,
@@ -1110,15 +1074,14 @@ pub(crate) fn insertsegment(
         {
             // C: Unable to locate PSLG vertex (endpoint1) in the
             //   triangulation.
-            *status = InternalStatus::SegInsert;
-            return Ok(());
+            return Err(Error::SegmentRecovery(SegmentRecoveryKind::Insert));
         }
     }
     // Remember this triangle to improve subsequent point location.
     m.recenttri = Some(searchtri1);
     // Scout the beginnings of a path from the first endpoint
     //   toward the second.
-    if scoutsegment(m, b, &mut searchtri1, endpoint2, newmark, status)? != 0 {
+    if scoutsegment(m, b, &mut searchtri1, endpoint2, newmark)? != 0 {
         // The segment was easily inserted.
         return Ok(());
     }
@@ -1154,15 +1117,14 @@ pub(crate) fn insertsegment(
         {
             // C: Unable to locate PSLG vertex (endpoint2) in the
             //   triangulation.
-            *status = InternalStatus::SegInsert;
-            return Ok(());
+            return Err(Error::SegmentRecovery(SegmentRecoveryKind::Insert));
         }
     }
     // Remember this triangle to improve subsequent point location.
     m.recenttri = Some(searchtri2);
     // Scout the beginnings of a path from the second endpoint
     //   toward the first.
-    if scoutsegment(m, b, &mut searchtri2, endpoint1, newmark, status)? != 0 {
+    if scoutsegment(m, b, &mut searchtri2, endpoint1, newmark)? != 0 {
         // The segment was easily inserted.
         return Ok(());
     }
@@ -1172,10 +1134,10 @@ pub(crate) fn insertsegment(
 
     if b.splitseg {
         // Insert vertices to force the segment into the triangulation.
-        conformingedge(m, b, endpoint1, endpoint2_moved, newmark, status)?;
+        conformingedge(m, b, endpoint1, endpoint2_moved, newmark)?;
     } else {
         // Insert the segment directly into the triangulation.
-        constrainededge(m, b, &mut searchtri1, endpoint2_moved, newmark, status)?;
+        constrainededge(m, b, &mut searchtri1, endpoint2_moved, newmark)?;
     }
     Ok(())
 }
@@ -1229,8 +1191,7 @@ pub(crate) fn formskeleton(
     segmentlist: &[i32],
     segmentmarkerlist: Option<&[i32]>,
     numberofsegments: i32,
-    status: &mut InternalStatus,
-) -> Result<(), Oom> {
+) -> Result<(), Error> {
     if b.poly {
         m.insegments = numberofsegments;
         let segmentmarkers = segmentmarkerlist.is_some();
@@ -1276,10 +1237,7 @@ pub(crate) fn formskeleton(
                     // C: Endpoints of segment are coincident (the
                     //   _DEBUG printf compiles out; C skips silently).
                 } else {
-                    insertsegment(m, b, endpoint1, endpoint2, boundmarker, status)?;
-                    if (*status as i32) < 0 {
-                        return Ok(());
-                    }
+                    insertsegment(m, b, endpoint1, endpoint2, boundmarker)?;
                 }
             }
         }
@@ -1958,55 +1916,51 @@ mod tests {
             orient: 1,
         };
         let bb = behavior(true);
-        let mut status = InternalStatus::Ok;
 
         // P(0.2, 0.2) strictly inside t1's cone at a:
         // ccw(P,a,c) = -0.2 < 0 (leftflag false),
         // ccw(a,P,b) = -0.2 < 0 (rightflag false) -> no walk, WITHIN.
         let mut st = t1_0;
         assert_eq!(
-            finddirection(&mut m, &bb, &mut st, (0.2, 0.2), &mut status),
+            finddirection(&mut m, &bb, &mut st, (0.2, 0.2)).expect("finddirection"),
             FindDirectionResult::Within
         );
-        assert_eq!(status, InternalStatus::Ok);
 
         // P(2, 0) collinear through dest b: ccw(a,P,b) = 0 -> RIGHTCOLLINEAR.
         let mut st = t1_0;
         assert_eq!(
-            finddirection(&mut m, &bb, &mut st, (2.0, 0.0), &mut status),
+            finddirection(&mut m, &bb, &mut st, (2.0, 0.0)).expect("finddirection"),
             FindDirectionResult::RightCollinear
         );
-        assert_eq!(status, InternalStatus::Ok);
 
         // P(0, 2) collinear through apex c: ccw(P,a,c) = 0 -> LEFTCOLLINEAR.
         let mut st = t1_0;
         assert_eq!(
-            finddirection(&mut m, &bb, &mut st, (0.0, 2.0), &mut status),
+            finddirection(&mut m, &bb, &mut st, (0.0, 2.0)).expect("finddirection"),
             FindDirectionResult::LeftCollinear
         );
-        assert_eq!(status, InternalStatus::Ok);
 
         // P(0.5, -0.1) below the shared edge; rightflag true once
         // (ccw(a,P,b) = 0.1 > 0), one oprevself turn lands on t2@1
         // (org a, dest d: ccw(a,P,d) = -0.45 < 0) -> WITHIN after the turn.
         let mut st = t1_0;
         assert_eq!(
-            finddirection(&mut m, &bb, &mut st, (0.5, -0.1), &mut status),
+            finddirection(&mut m, &bb, &mut st, (0.5, -0.1)).expect("finddirection"),
             FindDirectionResult::Within
         );
         assert_eq!(st, t2_1);
         assert_eq!(m.org(st), a); // the origin never changes
-        assert_eq!(status, InternalStatus::Ok);
 
         // P(-0.5, 0.1) outside the fan beyond the hull edge a-c of t1:
         // both flags on, the onext tie-break keeps the left walk, which
         // walks past t1 into outer space: TRI_FIND_DIRECTION.
+        // The walk raises Error::SegmentRecovery(FindDirection) at
+        // the site - the outcome pin replaces the *status pin.
         let mut st = t2_1;
-        assert_eq!(
-            finddirection(&mut m, &bb, &mut st, (-0.5, 0.1), &mut status),
-            FindDirectionResult::Within
-        );
-        assert_eq!(status, InternalStatus::FindDirection);
+        assert!(matches!(
+            finddirection(&mut m, &bb, &mut st, (-0.5, 0.1)),
+            Err(Error::SegmentRecovery(SegmentRecoveryKind::FindDirection))
+        ));
     }
 
     #[test]
@@ -2055,17 +2009,15 @@ mod tests {
             tri: tris[k].tri,
             orient: 0,
         });
-        let mut status = InternalStatus::Ok;
         for start in tris0 {
             // any searchpoint strictly inside the fan polygon turns and
             // settles WITHIN, origin = center preserved.
             let mut st = start;
-            let res = finddirection(&mut m, &b, &mut st, (0.0, 0.7), &mut status);
+            let res = finddirection(&mut m, &b, &mut st, (0.0, 0.7)).expect("finddirection");
             // the walk rotates around center; (0,0.7) lies between the
             // 90-degree rim spokes... rim[1] is at 120 degrees,
             // rim[2] at 240; the segment from each org heads there or
             // terminates; in all cases no error and origin kept.
-            assert_eq!(status, InternalStatus::Ok);
             assert_eq!(m.org(st), center);
             assert!(matches!(
                 res,
@@ -2106,10 +2058,8 @@ mod tests {
         let mut splittri = shared;
         let mut splitsubseg = m.tspivot(splittri);
         assert_ne!(splitsubseg.ss, DUMMY_SUB);
-        let mut status = InternalStatus::Ok;
-        segmentintersection(&mut m, &b, &mut splittri, &mut splitsubseg, d, &mut status)
+        segmentintersection(&mut m, &b, &mut splittri, &mut splitsubseg, d)
             .expect("segmentintersection");
-        assert_eq!(status, InternalStatus::Ok);
 
         // the new vertex: torg + split * (tdest - torg) = (0.75, 0), exact
         // in binary; its vertex2tri was recorded and steinerleft charged.
@@ -2166,17 +2116,13 @@ mod tests {
             let mut splittri = shared;
             let mut splitsubseg = m.tspivot(splittri);
             let before = m.vertices.live_count();
-            let mut status = InternalStatus::Ok;
-            segmentintersection(
-                &mut m,
-                &b,
-                &mut splittri,
-                &mut splitsubseg,
-                far,
-                &mut status,
-            )
-            .expect("segmentintersection");
-            assert_eq!(status, InternalStatus::SegIntersect);
+            // The parallel/off-segment failures raise
+            // Error::SegmentRecovery(Intersect) at the site - the
+            // outcome pin replaces the *status pin.
+            assert!(matches!(
+                segmentintersection(&mut m, &b, &mut splittri, &mut splitsubseg, far),
+                Err(Error::SegmentRecovery(SegmentRecoveryKind::Intersect))
+            ));
             assert_eq!(m.vertices.live_count(), before);
         }
         // off-segment crossing: apex c(0,1) -> (-1,-1) crosses the
@@ -2204,17 +2150,13 @@ mod tests {
             let mut splitsubseg = m.tspivot(splittri);
             let before = m.vertices.live_count();
             let before_subs = m.subsegs.live_count();
-            let mut status = InternalStatus::Ok;
-            segmentintersection(
-                &mut m,
-                &b,
-                &mut splittri,
-                &mut splitsubseg,
-                far,
-                &mut status,
-            )
-            .expect("segmentintersection");
-            assert_eq!(status, InternalStatus::SegIntersect);
+            // The parallel/off-segment failures raise
+            // Error::SegmentRecovery(Intersect) at the site - the
+            // outcome pin replaces the *status pin.
+            assert!(matches!(
+                segmentintersection(&mut m, &b, &mut splittri, &mut splitsubseg, far),
+                Err(Error::SegmentRecovery(SegmentRecoveryKind::Intersect))
+            ));
             assert_eq!(m.vertices.live_count(), before);
             assert_eq!(m.subsegs.live_count(), before_subs);
         }
@@ -2239,9 +2181,7 @@ mod tests {
 
         // hull edge a-c (t1's orient-2 rim edge): subsegment installed by
         // the first scoutsegment, marks propagated to the endpoints.
-        let mut status = InternalStatus::Ok;
-        insertsegment(&mut m, &b, a, c, 6, &mut status).expect("insertsegment");
-        assert_eq!(status, InternalStatus::Ok);
+        insertsegment(&mut m, &b, a, c, 6).expect("insertsegment");
         assert_eq!(m.subsegs.live_count(), 1);
         assert_eq!(m.vx_mark(a), 6);
         assert_eq!(m.vx_mark(c), 6);
@@ -2259,9 +2199,7 @@ mod tests {
         // direct install from BOTH endpoints' scouts is prevented by the
         // existing-subsegment check in insertsubseg, and scoutsegment's
         // second endpoint also just installs/keeps one subsegment.
-        let mut status = InternalStatus::Ok;
-        insertsegment(&mut m, &b, a, bb, 5, &mut status).expect("insertsegment");
-        assert_eq!(status, InternalStatus::Ok);
+        insertsegment(&mut m, &b, a, bb, 5).expect("insertsegment");
         assert_eq!(m.subsegs.live_count(), 2);
         assert_eq!(m.triangles.live_count(), 2); // no dig, no split
                                                  // recenttri carries the endpoint2 locate result (the api's
@@ -2304,9 +2242,7 @@ mod tests {
         );
         m.checksegments = true;
 
-        let mut status = InternalStatus::Ok;
-        insertsegment(&mut m, &b, c, d, 9, &mut status).expect("insertsegment");
-        assert_eq!(status, InternalStatus::Ok);
+        insertsegment(&mut m, &b, c, d, 9).expect("insertsegment");
 
         // midpoint of c(0,1)-d(0.5,-1): (0.25, 0) exact; one Steiner used.
         let mid = vertex_at(&m, 0.25, 0.0).expect("midpoint vertex");
@@ -2352,9 +2288,7 @@ mod tests {
         crate::quality::makevertexmap(&mut m, &b);
         m.checksegments = true;
 
-        let mut status = InternalStatus::Ok;
-        insertsegment(&mut m, &b, c, d, 8, &mut status).expect("insertsegment");
-        assert_eq!(status, InternalStatus::Ok);
+        insertsegment(&mut m, &b, c, d, 8).expect("insertsegment");
 
         // the dig preserves the pools: 2 triangles, 4 hull edges, 4
         // vertices; the a-b edge gave way to the c-d segment edge.
@@ -2402,17 +2336,14 @@ mod tests {
     #[test]
     fn formskeleton_square_pslg() {
         let (mut m, b) = delaunay_square(true);
-        let mut status = InternalStatus::Ok;
         formskeleton(
             &mut m,
             &b,
             &[1, 2, 2, 3, 3, 4, 4, 1],
             Some(&[11, 12, 13, 14]),
             4,
-            &mut status,
         )
         .expect("formskeleton");
-        assert_eq!(status, InternalStatus::Ok);
         assert_eq!(m.insegments, 4);
         // the vertex2tri map: every vertex's word decodes to a triangle
         // whose org is that vertex (the makevertexmap contract).
@@ -2729,9 +2660,7 @@ mod tests {
         crate::quality::makevertexmap(&mut m, &b);
         m.checksegments = true;
 
-        let mut status = InternalStatus::Ok;
-        insertsegment(&mut m, &b, a, mpt, 3, &mut status).expect("insertsegment");
-        assert_eq!(status, InternalStatus::Ok);
+        insertsegment(&mut m, &b, a, mpt, 3).expect("insertsegment");
         // two collinear half-segments: A-B and B-M.
         assert_eq!(m.subsegs.live_count(), 2);
         let subs = live_subsegs(&m);
@@ -2750,5 +2679,99 @@ mod tests {
         // (the collinear half A-B, then B-M), each ++ing once
         // (triangle.c:6011).
         assert_eq!(m.scoutsteps, 2);
+    }
+
+    #[test]
+    fn scoutsegment_outcome_scout_pins_the_raising_site() {
+        // Replaces the funnel test's SegScout arm pin: the scoutsteps
+        // budget site (triangle.c:6016-6017) raises
+        // Error::SegmentRecovery(Scout) exactly where C sets *status
+        // and returns TRI_SEG_SCOUT. A budget already past twice the
+        // vertex count fires the check on the first call.
+        let b = behavior(true);
+        let mut m = Mesh::new(&b, 8, 2, 0, 0).expect("mesh init");
+        let a = vxy(&mut m, 0.0, 0.0);
+        let bb = vxy(&mut m, 1.0, 0.0);
+        let c = vxy(&mut m, 0.0, 1.0);
+        let d = vxy(&mut m, 0.5, -1.0);
+        let (t1, _t2) = pair(&mut m, true, a, bb, c, d);
+        m.scoutsteps = 2 * m.vertices.live_count() as i64 + 1;
+        let mut searchtri = Otri {
+            tri: t1.tri,
+            orient: 0,
+        };
+        let out = scoutsegment(&mut m, &b, &mut searchtri, c, 7);
+        assert!(matches!(
+            out,
+            Err(Error::SegmentRecovery(SegmentRecoveryKind::Scout))
+        ));
+    }
+
+    #[test]
+    fn insertsegment_outcome_insert_pins_the_raising_site() {
+        // Replaces the funnel test's SegInsert arm pin: the endpoint
+        // locate site (triangle.c:6446; the port's first-endpoint
+        // branch) raises Error::SegmentRecovery(Insert) where C sets
+        // *status and returns. endpoint1 is a freshly allocated vertex
+        // with no vertex2tri word and coordinates outside the mesh,
+        // so the locate start walks off the hull without finding it.
+        let mut m = Mesh::new(&behavior(true), 8, 2, 0, 0).expect("mesh init");
+        let b = behavior(true);
+        let a = vxy(&mut m, 0.0, 0.0);
+        let bb = vxy(&mut m, 1.0, 0.0);
+        let c = vxy(&mut m, 0.0, 1.0);
+        let d = vxy(&mut m, 0.5, -1.0);
+        let (t1, _t2) = pair(&mut m, true, a, bb, c, d);
+        // Mirror the -p driver's dummytri[0] linkage (the
+        // conformingedge test's pattern): the locate start decodes it.
+        m.set_tri_slot(
+            DUMMY_TRI,
+            0,
+            encode(Otri {
+                tri: t1.tri,
+                orient: 2,
+            }),
+        );
+        let outside = vxy(&mut m, 100.0, 100.0);
+        let out = insertsegment(&mut m, &b, outside, a, 5);
+        assert!(matches!(
+            out,
+            Err(Error::SegmentRecovery(SegmentRecoveryKind::Insert))
+        ));
+    }
+
+    #[test]
+    fn segmentintersection_outcome_cycle_pins_the_raising_site() {
+        // Replaces the funnel test's Cycle arm pin: the cyclefail
+        // check after insertvertex (triangle.c:5931) raises
+        // Error::SegmentRecovery(Cycle). Nothing on this path resets
+        // the flag (only triangleinit does), so the preset state is
+        // exactly the state C's insertvertex leaves after a circling
+        // insertion (triangle.c:3282-3284) - the pin constructs the
+        // raising site's input state directly.
+        let b = Behavior {
+            steiner: 5,
+            ..behavior(true)
+        };
+        let mut m = Mesh::new(&b, 8, 2, 0, 0).expect("mesh init");
+        let a = vxy(&mut m, 0.0, 0.0);
+        let bpt = vxy(&mut m, 1.0, 0.0);
+        let c = vxy(&mut m, 1.0, 1.0);
+        let d = vxy(&mut m, 0.5, -1.0);
+        let (t1, _t2) = pair(&mut m, true, a, bpt, c, d);
+        m.checksegments = true;
+        let shared = Otri {
+            tri: t1.tri,
+            orient: 0,
+        };
+        insertsubseg(&mut m, &b, shared, 7).expect("insertsubseg");
+        let mut splittri = shared;
+        let mut splitsubseg = m.tspivot(splittri);
+        m.cyclefail = true;
+        let out = segmentintersection(&mut m, &b, &mut splittri, &mut splitsubseg, d);
+        assert!(matches!(
+            out,
+            Err(Error::SegmentRecovery(SegmentRecoveryKind::Cycle))
+        ));
     }
 }
