@@ -107,7 +107,8 @@ mod tests {
     /// 7). Adapted in rung 2: constructs Error::Internal directly with
     /// the verbatim internalerror payload - the same text the
     /// funnel_maps_every_negative_code arm carried and the
-    /// conformingedge raising site (construct.rs) raises today.
+    /// conformingedge site's boundary conversion (construct.rs)
+    /// constructs today.
     #[test]
     fn fatal_messages_are_verbatim() {
         assert_eq!(Error::OutOfMemory.to_string(), "Error:  Out of memory.");

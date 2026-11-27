@@ -7,17 +7,24 @@
 //!
 //! Transliteration notes (beyond the module defaults):
 //! - The C 'int *status' out-params are dissolved (rung 2, D8): every
-//!   raising site constructs its public Error variant in place -
-//!   Error::SegmentRecovery at the TRI_* status writes,
-//!   Error::Input at reconstruct's TRI_INPUT returns,
-//!   Error::Internal at conformingedge's internalerror site - and the
-//!   C int channels that carry non-error values stay as Ok payloads
-//!   (scoutsegment's 1/0 result, reconstruct's hull size).
+//!   raising site raises its error in place. The hot
+//!   segment-insertion chain (finddirection through insertsegment)
+//!   carries the narrow internal Copy SegmentChainError of the fix
+//!   pass - Recovery(SegmentRecoveryKind) at the TRI_* status writes,
+//!   Internal at conformingedge's internalerror site (the constant
+//!   payload is constructed only at the boundary), propagated
+//!   pool::Oom as Oom - converted losslessly to the public Error at
+//!   the formskeleton boundary, where the error leaves the hot
+//!   region. reconstruct's TRI_INPUT returns raise Error::Input in
+//!   place, and the C int channels that carry non-error values stay
+//!   as Ok payloads (scoutsegment's 1/0 result, reconstruct's hull
+//!   size).
 //! - C's #ifdef _DEBUG printf sites of formskeleton/reconstruct and
 //!   the internal-error printf texts of conformingedge are compiled
 //!   out of the pinned oracle build and are not transliterated; the
-//!   conformingedge site raises Error::Internal with internalerror()'s
-//!   verbatim payload instead (the printf text rides as the comment).
+//!   conformingedge site raises SegmentChainError::Internal, whose
+//!   boundary conversion constructs internalerror()'s verbatim
+//!   payload instead (the printf text rides as the comment).
 //! - The C -D guards (REDUCED/CDT_ONLY) around conformingedge are open
 //!   in the pinned oracle; the port has a single build.
 //! - reconstruct's vertexarray is C trimalloc'd scratch (not mesh
@@ -60,6 +67,63 @@ use crate::predicates::{tri_counterclockwise, tri_incircle, Vertex};
 use crate::slots::{DEADVERTEX, INPUTVERTEX, SEGMENTVERTEX, UNDEADVERTEX};
 use crate::transform::{insertsubseg, insertvertex, InsertVertexResult};
 use crate::util::vertex_coords;
+
+// ---------------------------------------------------------------------------
+// SegmentChainError (the fix pass's narrow hot-chain error)
+// ---------------------------------------------------------------------------
+
+/// The narrow internal error of the hot segment-insertion chain
+/// (finddirection, segmentintersection, scoutsegment, conformingedge,
+/// constrainededge, insertsegment; the rung-2 fix pass). The chain's
+/// error union is payload-free: the TRI_* *status writes raise
+/// Recovery(SegmentRecoveryKind) (the kinds carry no payload, so this
+/// is lossless), conformingedge's internalerror site raises Internal
+/// (the payload is internalerror()'s verbatim constant text,
+/// constructed only at the boundary conversion), and pool allocation
+/// failure propagates as Oom (pool::Oom converts here exactly as
+/// From<pool::Oom> for Error does at the public seam). The enum is
+/// Copy and one byte wide, so every Result in the chain is
+/// niche-narrowed to its Ok payload's width - the i32-shaped status
+/// channel width C had, which rung 2's wide Result<T, Error> inflated
+/// on these per-edge calls. The public taxonomy is unchanged: the
+/// error converts to crate::error::Error at the boundary where it
+/// leaves the hot region (formskeleton's insertsegment call).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SegmentChainError {
+    /// A TRI_* status write raised at its site; the
+    /// SegmentRecoveryKind is the exact C code.
+    Recovery(SegmentRecoveryKind),
+    /// conformingedge's internalerror site (triangle.c:6089-6175; the
+    /// printf compiles out, the payload is the verbatim
+    /// triangle.c:349-354 text, constructed at the boundary).
+    Internal,
+    /// Pool allocation failure propagated through the chain (D26's
+    /// Oom bridge, at chain width).
+    Oom,
+}
+
+impl From<Oom> for SegmentChainError {
+    fn from(_: Oom) -> SegmentChainError {
+        SegmentChainError::Oom
+    }
+}
+
+/// The boundary conversion: lossless; the public taxonomy and its
+/// Display strings are byte-identical to rung 2's direct raises.
+impl From<SegmentChainError> for Error {
+    fn from(e: SegmentChainError) -> Error {
+        match e {
+            SegmentChainError::Recovery(kind) => Error::SegmentRecovery(kind),
+            SegmentChainError::Internal => Error::Internal(
+                "  Please report this bug to jrs@cs.berkeley.edu
+  Include the message above, your input data set, and the exact
+    command line you used to run Triangle."
+                    .to_string(),
+            ),
+            SegmentChainError::Oom => Error::OutOfMemory,
+        }
+    }
+}
 
 /// C: enum finddirectionresult (triangle.h:113): WITHIN, LEFTCOLLINEAR,
 /// RIGHTCOLLINEAR - the exact C discriminants (pinned by test below).
@@ -411,7 +475,7 @@ pub(crate) fn finddirection(
     b: &Behavior,
     searchtri: &mut Otri,
     searchpoint: (f64, f64),
-) -> Result<FindDirectionResult, Error> {
+) -> Result<FindDirectionResult, SegmentChainError> {
     let searchpoint_v: Vertex = [searchpoint.0, searchpoint.1, 0.0];
 
     let startvertex = m.org(*searchtri);
@@ -458,7 +522,9 @@ pub(crate) fn finddirection(
         if searchtri.tri == DUMMY_TRI {
             // C: Unable to find a triangle leading from the origin to
             // the searchpoint.
-            return Err(Error::SegmentRecovery(SegmentRecoveryKind::FindDirection));
+            return Err(SegmentChainError::Recovery(
+                SegmentRecoveryKind::FindDirection,
+            ));
         }
         leftvertex = m.apex(*searchtri);
         rightccw = leftccw;
@@ -476,7 +542,9 @@ pub(crate) fn finddirection(
         // Turn right until satisfied.
         m.oprevself(searchtri);
         if searchtri.tri == DUMMY_TRI {
-            return Err(Error::SegmentRecovery(SegmentRecoveryKind::FindDirection));
+            return Err(SegmentChainError::Recovery(
+                SegmentRecoveryKind::FindDirection,
+            ));
         }
         rightvertex = m.dest(*searchtri);
         leftccw = rightccw;
@@ -491,7 +559,9 @@ pub(crate) fn finddirection(
         tries += 1;
     }
     if tries >= maxtries {
-        return Err(Error::SegmentRecovery(SegmentRecoveryKind::FindDirection));
+        return Err(SegmentChainError::Recovery(
+            SegmentRecoveryKind::FindDirection,
+        ));
     }
     if leftccw == 0.0 {
         Ok(FindDirectionResult::LeftCollinear)
@@ -520,7 +590,7 @@ pub(crate) fn segmentintersection(
     splittri: &mut Otri,
     splitsubseg: &mut Osub,
     endpoint2: u32,
-) -> Result<(), Error> {
+) -> Result<(), SegmentChainError> {
     // Find the other three segment endpoints.
     let endpoint1 = m.apex(*splittri);
     let torg = m.org(*splittri);
@@ -537,7 +607,7 @@ pub(crate) fn segmentintersection(
     let denom = ty * ex - tx * ey;
     if denom == 0.0 {
         // C: Attempt to find intersection of parallel segments.
-        return Err(Error::SegmentRecovery(SegmentRecoveryKind::Intersect));
+        return Err(SegmentChainError::Recovery(SegmentRecoveryKind::Intersect));
     }
     let split = (ey * etx - ex * ety) / denom;
     // The intersection lies on the subsegment being split, give or take
@@ -546,7 +616,7 @@ pub(crate) fn segmentintersection(
     //   off the subsegment; inserting that vertex corrupts the mesh, or
     //   puts a point with NaN coordinates into it.
     if !(split >= -1.0e-9 && split <= 1.0 + 1.0e-9) {
-        return Err(Error::SegmentRecovery(SegmentRecoveryKind::Intersect));
+        return Err(SegmentChainError::Recovery(SegmentRecoveryKind::Intersect));
     }
     // Create the new vertex.
     let newvertex = m.vx_alloc()?;
@@ -574,11 +644,11 @@ pub(crate) fn segmentintersection(
         false,
     )?;
     if m.cyclefail {
-        return Err(Error::SegmentRecovery(SegmentRecoveryKind::Cycle));
+        return Err(SegmentChainError::Recovery(SegmentRecoveryKind::Cycle));
     }
     if success != InsertVertexResult::SuccessfulVertex {
         // C: Failure to split a segment.
-        return Err(Error::SegmentRecovery(SegmentRecoveryKind::Intersect));
+        return Err(SegmentChainError::Recovery(SegmentRecoveryKind::Intersect));
     }
     // Record a triangle whose origin is the new vertex.
     m.vx_set_2tri(newvertex, encode(*splittri));
@@ -620,7 +690,7 @@ pub(crate) fn segmentintersection(
         || (m.vx_real(rightvertex, 1) != endpoint1_xy.1)
     {
         // C: Topological inconsistency after splitting a segment.
-        return Err(Error::SegmentRecovery(SegmentRecoveryKind::Intersect));
+        return Err(SegmentChainError::Recovery(SegmentRecoveryKind::Intersect));
     }
     // 'splittri' should have destination endpoint1.
     Ok(())
@@ -636,7 +706,8 @@ pub(crate) fn segmentintersection(
 /// intersection of two segments. Returns C's 1 if the entire segment is
 /// successfully inserted, 0 if the job must be finished by
 /// conformingedge() or constrainededge(); the scoutsteps budget site
-/// (triangle.c:6016-6017) raises Error::SegmentRecovery(Scout) exactly
+/// (triangle.c:6016-6017) raises SegmentChainError::Recovery(Scout)
+/// exactly
 /// where C sets *status and returns TRI_SEG_SCOUT.
 // C's explicit `return 1;` / `return 0;` / tail `return scoutsegment(...)`
 // statements are kept verbatim; eliding them is C-invisible control flow.
@@ -647,14 +718,14 @@ pub(crate) fn scoutsegment(
     searchtri: &mut Otri,
     endpoint2: u32,
     newmark: i32,
-) -> Result<i32, Error> {
+) -> Result<i32, SegmentChainError> {
     // Each call reaches a vertex further along the segment, or is one
     //   of the two that follow a midpoint conformingedge() adds, so
     //   more calls than twice the vertices means the insertion is
     //   going in circles.
     m.scoutsteps += 1;
     if m.scoutsteps > 2 * m.vertices.live_count() as i64 {
-        return Err(Error::SegmentRecovery(SegmentRecoveryKind::Scout));
+        return Err(SegmentChainError::Recovery(SegmentRecoveryKind::Scout));
     }
 
     let collinear = finddirection(
@@ -726,7 +797,7 @@ pub(crate) fn conformingedge(
     endpoint1: u32,
     endpoint2: u32,
     newmark: i32,
-) -> Result<(), Error> {
+) -> Result<(), SegmentChainError> {
     // Create a new vertex to insert in the middle of the segment.
     let newvertex = m.vx_alloc()?;
     // Interpolate coordinates and attributes.
@@ -770,13 +841,9 @@ pub(crate) fn conformingedge(
                 // C: Internal error in conformingedge(): Failure to
                 //   split a segment. (printf + internalerror(); the
                 //   payload is internalerror()'s verbatim stdout text,
+                //   constructed at the boundary conversion;
                 //   triangle.c:349-354.)
-                return Err(Error::Internal(
-                    "  Please report this bug to jrs@cs.berkeley.edu
-  Include the message above, your input data set, and the exact
-    command line you used to run Triangle."
-                        .to_string(),
-                ));
+                return Err(SegmentChainError::Internal);
             }
         }
         // The vertex has been inserted successfully.
@@ -913,7 +980,7 @@ pub(crate) fn constrainededge(
     starttri: &mut Otri,
     endpoint2: u32,
     newmark: i32,
-) -> Result<(), Error> {
+) -> Result<(), SegmentChainError> {
     let mut crosssubseg;
     let endpoint1;
     let mut farvertex;
@@ -935,14 +1002,14 @@ pub(crate) fn constrainededge(
         //   circles.
         digs += 1;
         if digs > m.triangles.live_count() as i64 {
-            return Err(Error::SegmentRecovery(SegmentRecoveryKind::Insert));
+            return Err(SegmentChainError::Recovery(SegmentRecoveryKind::Insert));
         }
         farvertex = m.org(fixuptri);
         if farvertex == 0 {
             // The dig has left the triangulation; the segment cannot be
             //   inserted. (C farvertex == NULL check; the zero id is
             //   C's NULL under D1.)
-            return Err(Error::SegmentRecovery(SegmentRecoveryKind::Insert));
+            return Err(SegmentChainError::Recovery(SegmentRecoveryKind::Insert));
         }
         // 'farvertex' is the extreme point of the polygon we are
         //   "digging" to get from endpoint1 to endpoint2.
@@ -1042,7 +1109,7 @@ pub(crate) fn insertsegment(
     mut endpoint1: u32,
     endpoint2: u32,
     newmark: i32,
-) -> Result<(), Error> {
+) -> Result<(), SegmentChainError> {
     let mut searchtri1 = Otri {
         tri: DUMMY_TRI,
         orient: 0,
@@ -1074,7 +1141,7 @@ pub(crate) fn insertsegment(
         {
             // C: Unable to locate PSLG vertex (endpoint1) in the
             //   triangulation.
-            return Err(Error::SegmentRecovery(SegmentRecoveryKind::Insert));
+            return Err(SegmentChainError::Recovery(SegmentRecoveryKind::Insert));
         }
     }
     // Remember this triangle to improve subsequent point location.
@@ -1117,7 +1184,7 @@ pub(crate) fn insertsegment(
         {
             // C: Unable to locate PSLG vertex (endpoint2) in the
             //   triangulation.
-            return Err(Error::SegmentRecovery(SegmentRecoveryKind::Insert));
+            return Err(SegmentChainError::Recovery(SegmentRecoveryKind::Insert));
         }
     }
     // Remember this triangle to improve subsequent point location.
@@ -1954,12 +2021,16 @@ mod tests {
         // P(-0.5, 0.1) outside the fan beyond the hull edge a-c of t1:
         // both flags on, the onext tie-break keeps the left walk, which
         // walks past t1 into outer space: TRI_FIND_DIRECTION.
-        // The walk raises Error::SegmentRecovery(FindDirection) at
-        // the site - the outcome pin replaces the *status pin.
+        // The walk raises SegmentChainError::Recovery(FindDirection)
+        // at the site (the boundary maps it to the public
+        // Error::SegmentRecovery) - the outcome pin replaces the
+        // *status pin.
         let mut st = t2_1;
         assert!(matches!(
             finddirection(&mut m, &bb, &mut st, (-0.5, 0.1)),
-            Err(Error::SegmentRecovery(SegmentRecoveryKind::FindDirection))
+            Err(SegmentChainError::Recovery(
+                SegmentRecoveryKind::FindDirection
+            ))
         ));
     }
 
@@ -2117,11 +2188,11 @@ mod tests {
             let mut splitsubseg = m.tspivot(splittri);
             let before = m.vertices.live_count();
             // The parallel/off-segment failures raise
-            // Error::SegmentRecovery(Intersect) at the site - the
+            // SegmentChainError::Recovery(Intersect) at the site - the
             // outcome pin replaces the *status pin.
             assert!(matches!(
                 segmentintersection(&mut m, &b, &mut splittri, &mut splitsubseg, far),
-                Err(Error::SegmentRecovery(SegmentRecoveryKind::Intersect))
+                Err(SegmentChainError::Recovery(SegmentRecoveryKind::Intersect))
             ));
             assert_eq!(m.vertices.live_count(), before);
         }
@@ -2151,11 +2222,11 @@ mod tests {
             let before = m.vertices.live_count();
             let before_subs = m.subsegs.live_count();
             // The parallel/off-segment failures raise
-            // Error::SegmentRecovery(Intersect) at the site - the
+            // SegmentChainError::Recovery(Intersect) at the site - the
             // outcome pin replaces the *status pin.
             assert!(matches!(
                 segmentintersection(&mut m, &b, &mut splittri, &mut splitsubseg, far),
-                Err(Error::SegmentRecovery(SegmentRecoveryKind::Intersect))
+                Err(SegmentChainError::Recovery(SegmentRecoveryKind::Intersect))
             ));
             assert_eq!(m.vertices.live_count(), before);
             assert_eq!(m.subsegs.live_count(), before_subs);
@@ -2685,7 +2756,7 @@ mod tests {
     fn scoutsegment_outcome_scout_pins_the_raising_site() {
         // Replaces the funnel test's SegScout arm pin: the scoutsteps
         // budget site (triangle.c:6016-6017) raises
-        // Error::SegmentRecovery(Scout) exactly where C sets *status
+        // SegmentChainError::Recovery(Scout) exactly where C sets *status
         // and returns TRI_SEG_SCOUT. A budget already past twice the
         // vertex count fires the check on the first call.
         let b = behavior(true);
@@ -2703,7 +2774,7 @@ mod tests {
         let out = scoutsegment(&mut m, &b, &mut searchtri, c, 7);
         assert!(matches!(
             out,
-            Err(Error::SegmentRecovery(SegmentRecoveryKind::Scout))
+            Err(SegmentChainError::Recovery(SegmentRecoveryKind::Scout))
         ));
     }
 
@@ -2711,7 +2782,7 @@ mod tests {
     fn insertsegment_outcome_insert_pins_the_raising_site() {
         // Replaces the funnel test's SegInsert arm pin: the endpoint
         // locate site (triangle.c:6446; the port's first-endpoint
-        // branch) raises Error::SegmentRecovery(Insert) where C sets
+        // branch) raises SegmentChainError::Recovery(Insert) where C sets
         // *status and returns. endpoint1 is a freshly allocated vertex
         // with no vertex2tri word and coordinates outside the mesh,
         // so the locate start walks off the hull without finding it.
@@ -2736,7 +2807,7 @@ mod tests {
         let out = insertsegment(&mut m, &b, outside, a, 5);
         assert!(matches!(
             out,
-            Err(Error::SegmentRecovery(SegmentRecoveryKind::Insert))
+            Err(SegmentChainError::Recovery(SegmentRecoveryKind::Insert))
         ));
     }
 
@@ -2744,7 +2815,7 @@ mod tests {
     fn segmentintersection_outcome_cycle_pins_the_raising_site() {
         // Replaces the funnel test's Cycle arm pin: the cyclefail
         // check after insertvertex (triangle.c:5931) raises
-        // Error::SegmentRecovery(Cycle). Nothing on this path resets
+        // SegmentChainError::Recovery(Cycle). Nothing on this path resets
         // the flag (only triangleinit does), so the preset state is
         // exactly the state C's insertvertex leaves after a circling
         // insertion (triangle.c:3282-3284) - the pin constructs the
@@ -2771,7 +2842,35 @@ mod tests {
         let out = segmentintersection(&mut m, &b, &mut splittri, &mut splitsubseg, d);
         assert!(matches!(
             out,
-            Err(Error::SegmentRecovery(SegmentRecoveryKind::Cycle))
+            Err(SegmentChainError::Recovery(SegmentRecoveryKind::Cycle))
+        ));
+    }
+
+    /// The boundary conversion of the fix pass's narrow chain error
+    /// is lossless: the Recovery kinds map to their public variants,
+    /// Internal constructs internalerror()'s verbatim payload
+    /// (triangle.c:349-354, pinned byte-identical to the pre-fix
+    /// raise), and the chain's Oom bridge maps to the fatal
+    /// OutOfMemory (D26). Pins by construction; no oracle involved.
+    #[test]
+    fn segment_chain_error_boundary_conversion_is_lossless() {
+        assert!(matches!(
+            Error::from(SegmentChainError::Recovery(SegmentRecoveryKind::Scout)),
+            Error::SegmentRecovery(SegmentRecoveryKind::Scout)
+        ));
+        assert!(matches!(
+            Error::from(SegmentChainError::Oom),
+            Error::OutOfMemory
+        ));
+        assert_eq!(
+            Error::from(SegmentChainError::Internal).to_string(),
+            "Triangle internal error:   Please report this bug to jrs@cs.berkeley.edu\n  Include the message above, your input data set, and the exact\n    command line you used to run Triangle."
+        );
+        // pool::Oom enters the chain as Oom (the From impl the ?
+        // operator uses at the chain's allocation sites).
+        assert!(matches!(
+            SegmentChainError::from(Oom),
+            SegmentChainError::Oom
         ));
     }
 }
