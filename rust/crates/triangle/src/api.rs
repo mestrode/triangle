@@ -4,9 +4,10 @@
 //! statistics / quality / check_mesh / check_delaunay /
 //! memory_bytes) plus the public MeshOutput, Statistics, Quality,
 //! BoundingBox types. Each method cites its C entry point; the
-//! context pointer of C becomes owned values (D8) and the error funnel
-//! (error.rs, ADR 0004 section 6) runs exactly here, where
-//! triangle_api.c inspects returned statuses.
+//! context pointer of C becomes owned values (D8); since rung 2 the
+//! core raises the public Error variants at its sites (error.rs, ADR
+//! 0004 section 6) and this boundary receives them directly, exactly
+//! where triangle_api.c inspects returned statuses.
 //!
 //! The entry points own their options validation, input validation
 //! and pool-geometry construction; triangulate runs the full
@@ -15,13 +16,12 @@
 //! enforcequality, highorder) and load_mesh runs the full
 //! triangle_mesh_load sequence (transfernodes, reconstruct, the
 //! load-era gates). No scaffolding sites remain: the stage-1 surface
-//! is wired end to end, and InternalStatus::NotImplemented has no
-//! constructor left outside the funnel's own tests. output runs the
+//! is wired end to end. output runs the
 //! ioarray writers through the triangle_mesh_copy lift (the ioarrays
 //! part-2 PR); the triangle_write_* and triangle_read_* file surface
 //! (triangle_api.c:437-555) landed with the I/O phase.
 
-use crate::error::{Error, InternalStatus};
+use crate::error::Error;
 use crate::handles::NULL;
 use crate::input::{Hole, MeshInput, Point2, Region};
 use crate::options::{Behavior, Options};
@@ -182,7 +182,6 @@ impl Mesh {
     /// on a freshly constructed mesh, where the triangle count is
     /// necessarily zero, so the check is unobservable and dissolves.
     fn create(&self, input: &MeshInput) -> Result<(), Error> {
-        let mut status = InternalStatus::Ok;
         let mut behavior = self.behavior.borrow_mut();
         let mut core = self.core.borrow_mut();
         // C: transfernodes (triangle_api.c:200-202) and the status
@@ -222,11 +221,7 @@ impl Mesh {
                 &flat_segmentlist(input)?,
                 segment_marker_list(input),
                 input.segments.len() as i32,
-                &mut status,
             )?;
-            if (status as i32) < 0 {
-                return Err(Error::from(status));
-            }
         }
         if behavior.poly && core.triangles.live_count() > 0 {
             // C: the m->holes / m->regions stores (triangle_api.c:
@@ -247,10 +242,7 @@ impl Mesh {
             // check (246-248). C's CDT_ONLY compile gate around the
             // block has no port flag; b->quality is the whole
             // condition here.
-            crate::refine::enforcequality(&mut core, &behavior, &mut status)?;
-            if (status as i32) < 0 {
-                return Err(Error::from(status));
-            }
+            crate::refine::enforcequality(&mut core, &behavior)?;
         }
         // C: the m->edges writer (triangle_api.c:252-253).
         core.edges = (3 * core.triangles.live_count() as i64 + core.hullsize) / 2;
@@ -275,8 +267,8 @@ impl Mesh {
         // C: transfernodes (triangle_api.c:285-287) and the status
         // check (289-291): the owned MeshInput fields arrive exactly
         // where C hands its triangleio pointers to transfernodes, and
-        // TRI_INPUT funnels through the Result channel (D8, the
-        // Mesh::create pattern).
+        // the TRI_INPUT raise propagates through the Result channel
+        // (rung 2, D8, the Mesh::create pattern).
         crate::ioarrays::transfernodes(
             &mut core,
             &mut behavior,
@@ -310,10 +302,12 @@ impl Mesh {
         )? as i64;
         // C: the hullsize < 0 check (triangle_api.c:301-303) returns
         // the raw code; reconstruct's only negative rider is TRI_INPUT
-        // (triangle.c:5522, 5573, 5664; construct.rs mirrors the three
-        // sites), funneled here exactly where C returns it (D8).
+        // (triangle.c:5522, 5573, 5664; construct.rs raises at the
+        // three sites), so this C mirror is defensively unreachable -
+        // kept for the 1:1 walk, raising the public variant directly
+        // exactly where C returns it (D8).
         if core.hullsize < 0 {
-            return Err(Error::from(InternalStatus::Input));
+            return Err(Error::Input("invalid input (TRI_INPUT)".to_string()));
         }
         // C: the three infvertex NULL stores (triangle_api.c:305-309),
         // the same construction-shape stores Mesh::create makes.
@@ -426,19 +420,16 @@ impl Mesh {
 
     /// triangle_mesh_refine (triangle_api.c:332-359): enforcequality
     /// over the loaded mesh. C gates on b->quality with triangles in
-    /// the mesh (triangle_api.c:347), funnels enforcequality's status
-    /// (the funnel item 5 translation, error.rs), and - with a good
-    /// status - refreshes m->edges inside the gate (triangle_api.c:
-    /// 354-355, the (3 * items + hullsize) / 2 arithmetic).
+    /// the mesh (triangle_api.c:347), receives enforcequality's Error
+    /// directly (rung 2: the core raises the public variants at its
+    /// sites), and - with a good result - refreshes m->edges inside
+    /// the gate (triangle_api.c:354-355, the (3 * items + hullsize)
+    /// / 2 arithmetic).
     pub fn refine(&mut self) -> Result<(), Error> {
         let behavior = self.behavior.borrow();
-        let mut status = InternalStatus::Ok;
         let mut core = self.core.borrow_mut();
         if behavior.quality && core.triangles.live_count() > 0 {
-            crate::refine::enforcequality(&mut core, &behavior, &mut status)?;
-            if (status as i32) < 0 {
-                return Err(Error::from(status));
-            }
+            crate::refine::enforcequality(&mut core, &behavior)?;
             core.edges = (3 * core.triangles.live_count() as i64 + core.hullsize) / 2;
         }
         Ok(())
@@ -674,14 +665,14 @@ impl Mesh {
 
 // The read wrappers of triangle_api.c (493-555): C opens the file
 // ("r"), runs the reader, closes it, and answers TRI_FILE_OPEN when
-// fopen returned NULL. The port funnels File::open's error into
-// Error::Io (it carries the real io::Error, richer than C's bare
-// code; the D8 funnel's Io arm) and maps the reader's InternalStatus
-// through the single translation point, exactly where triangle_api.c
-// inspects the returned status: TRI_FILE_READ (a fgets NULL) is
-// Error::Io and the raw -1 TODO failures are Error::Input (they are
-// malformed-input failures - C's own TODO texts say so; the funnel
-// item 5 mapping, justified in the I/O-phase PR body).
+// fopen returned NULL. The port wraps File::open's error in Error::Io
+// (it carries the real io::Error, richer than C's bare code; D31's
+// equivalence class) and receives the readers' Error values directly
+// (rung 2: the readers raise at the seam, exactly where triangle.c's
+// fgets NULL and raw -1 TODO returns sit): TRI_FILE_READ (a fgets
+// NULL) is Error::Io and the raw -1 TODO failures are Error::Input
+// (they are malformed-input failures - C's own TODO texts say so;
+// the mapping was justified in the I/O-phase PR body).
 
 /// triangle_read_nodes (triangle_api.c:493-508).
 pub fn read_nodes(
@@ -690,25 +681,25 @@ pub fn read_nodes(
     firstnode: &mut i32,
 ) -> Result<(), Error> {
     let mut file = crate::io::LineFile::new(std::fs::File::open(nodefilename).map_err(Error::Io)?);
-    crate::io::file_readnodes(&mut file, io, firstnode).map_err(Error::from)
+    crate::io::file_readnodes(&mut file, io, firstnode)
 }
 
 /// triangle_read_poly (triangle_api.c:509-523).
 pub fn read_poly(polyfilename: &str, io: &mut MeshInput, firstnode: &mut i32) -> Result<(), Error> {
     let mut file = crate::io::LineFile::new(std::fs::File::open(polyfilename).map_err(Error::Io)?);
-    crate::io::file_readpoly(&mut file, io, firstnode).map_err(Error::from)
+    crate::io::file_readpoly(&mut file, io, firstnode)
 }
 
 /// triangle_read_elements (triangle_api.c:525-539).
 pub fn read_elements(elefilename: &str, io: &mut MeshInput) -> Result<(), Error> {
     let mut file = crate::io::LineFile::new(std::fs::File::open(elefilename).map_err(Error::Io)?);
-    crate::io::file_readelements(&mut file, io).map_err(Error::from)
+    crate::io::file_readelements(&mut file, io)
 }
 
 /// triangle_read_area (triangle_api.c:541-555).
 pub fn read_area(areafilename: &str, io: &mut MeshInput) -> Result<(), Error> {
     let mut file = crate::io::LineFile::new(std::fs::File::open(areafilename).map_err(Error::Io)?);
-    crate::io::file_readelementsarea(&mut file, io).map_err(Error::from)
+    crate::io::file_readelementsarea(&mut file, io)
 }
 
 #[cfg(test)]

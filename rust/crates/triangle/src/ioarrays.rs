@@ -57,7 +57,7 @@
 //! (triangle.c:7830-7838) describes a use no live call site realizes,
 //! so it lands dead_code-allowed with that noted at the site.
 
-use crate::error::InternalStatus;
+use crate::error::Error;
 use crate::handles::{Osub, Otri, DUMMY_SUB, DUMMY_TRI};
 use crate::input::Point2;
 use crate::mesh::Mesh;
@@ -74,10 +74,9 @@ use std::cmp::Ordering;
 /// updating the bounds, and finish with the sweepline circle-event
 /// flag.
 ///
-/// C returns TRI_INPUT (triangle.c:7712) where the port carries the
-/// mirrored code on the Result's error channel (the splittriangle
-/// precedent, refine.rs; the api.rs boundary maps it through the
-/// funnel, D8), and TRI_OK (triangle.c:7756) as Ok. The `b->weighted`
+/// C returns TRI_INPUT (triangle.c:7712) where the port raises
+/// Error::Input with the funnel arm's exact payload (rung 2, D8),
+/// and TRI_OK (triangle.c:7756) as Ok. The `b->weighted`
 /// reset (triangle.c:7715) mutates the core's Behavior exactly where
 /// C mutates b.
 // C-parity: the single indexed `for (i = 0; i < m->invertices; i++)`
@@ -93,20 +92,19 @@ pub(crate) fn transfernodes(
     pointmarkerlist: Option<&[i32]>,
     numberofpoints: i32,
     numberofpointattribs: i32,
-) -> Result<(), InternalStatus> {
+) -> Result<(), Error> {
     m.invertices = numberofpoints;
     m.mesh_dim = 2;
     m.nextras = numberofpointattribs;
     if m.invertices < 3 {
         // Error:  Input must have at least three input vertices.
-        return Err(InternalStatus::Input);
+        return Err(Error::Input("invalid input (TRI_INPUT)".to_string()));
     }
     if m.nextras == 0 {
         b.weighted = 0;
     }
 
-    m.initializevertexpool(b.poly)
-        .map_err(InternalStatus::from)?;
+    m.initializevertexpool(b.poly).map_err(Error::from)?;
     // The pool geometry already ran eagerly in Mesh::new over the same
     // input counters (the ADR 0003 section 4 convention, the same one
     // delaunay.rs cites at its initializetrisubpools site), and no
@@ -117,7 +115,7 @@ pub(crate) fn transfernodes(
     // Read the vertices.
     let mut attribindex = 0usize;
     for i in 0..m.invertices as usize {
-        let vertexloop = m.vx_alloc().map_err(InternalStatus::from)?;
+        let vertexloop = m.vx_alloc().map_err(Error::from)?;
         // Read the vertex coordinates.
         let x = pointlist[i].x;
         let y = pointlist[i].y;
@@ -646,19 +644,19 @@ mod tests {
     }
 
     #[test]
-    fn fewer_than_three_points_funnels_the_input_error() {
+    fn fewer_than_three_points_raises_the_input_error() {
         // C returns TRI_INPUT (triangle.c:7710-7712) after the counter
-        // stores and before the weighted reset; the port carries the
-        // same code on the error channel and the funnel maps it to
-        // Error::Input exactly where triangle_api.c returns the status
+        // stores and before the weighted reset; the port raises
+        // Error::Input at exactly that return point (rung 2, D8), the
+        // same place triangle_api.c returns the status
         // (triangle_api.c:204-206).
         let mut b = weighted_behavior();
         let mut m = core_mesh(&b, 2, 0);
         let points = [Point2 { x: 0.0, y: 0.0 }, Point2 { x: 1.0, y: 0.0 }];
         let err = transfernodes(&mut m, &mut b, &points, &[], Some(&[1, 2]), 2, 0)
             .expect_err("fewer than three points must fail");
-        assert_eq!(err, InternalStatus::Input);
-        assert!(matches!(Error::from(err), Error::Input(_)));
+        // The raising site keeps the funnel arm's exact payload.
+        assert!(matches!(err, Error::Input(ref msg) if msg == "invalid input (TRI_INPUT)"));
         // The stores at triangle.c:7707-7709 ran before the check...
         assert_eq!(m.invertices, 2);
         assert_eq!(m.mesh_dim, 2);

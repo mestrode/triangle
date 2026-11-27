@@ -55,11 +55,16 @@
 //!   full-width word through slots.rs orgword/setorgword (the same
 //!   slot org/setorg use); bit 32 tags the event, the low 32 bits are
 //!   the arena index, and the all-zero word keeps the C NULL meaning.
-//! - sweeplinedelaunay returns C's TRI_INPUT (-3) through the `long`
-//!   channel when every input vertex is identical (triangle.c:5258);
-//!   C's caller stores it as hullsize, no error raised. The port
-//!   mirrors literally: Ok(InternalStatus::Input as i64) through the
-//!   Result<i64, Oom> channel, flowing out of delaunay() the same way.
+//! - sweeplinedelaunay raises Error::Input at C's TRI_INPUT return
+//!   (triangle.c:5256-5258) when every input vertex is identical;
+//!   C's dispatcher reads that return as the raw `hulledges` value
+//!   and hands it to triangle_mesh_create unchecked (the C hullsize
+//!   oddity: the tube rows are alive, so the collinear guard does
+//!   not catch it and hullsize stores -3). The port re-rides the
+//!   raised code onto the long channel inside delaunay() exactly
+//!   where C's `return hulledges` (triangle.c:5448) continues the
+//!   value flow, so hullsize and every success-path observable stay
+//!   1:1 (D8's rung-2 resolution).
 //! - Mesh::hyperbolacount/circletopcount and Mesh::xminextreme arrive
 //!   with part 2 as landed fields (incremented exactly at C's sites;
 //!   xminextreme written by the transfernodes row, ioarrays.rs, which
@@ -1735,15 +1740,16 @@ pub(crate) fn frontlocate(
 /// triangulation by sweeping the events left to right: site events grow
 /// the front and splay-track candidate edges, circle events flip the
 /// front concavities away. Returns the hull edge count (removeghosts).
-/// When every input vertex is identical, returns C's TRI_INPUT through
-/// the long channel exactly as C does (triangle.c:5258).
+/// When every input vertex is identical, raises Error::Input at C's
+/// TRI_INPUT return exactly where C returns it (triangle.c:5256-5258);
+/// the dispatcher re-rides the code onto the long channel (delaunay).
 ///
 /// Idiom notes: the event arena, its heap and the free-event list are
 /// owned locals (C's trimalloc'd temporaries, D8/D11); front handles
 /// carrying the org-slot event pun are read only by check4deadevent;
 /// splayroot is the splay-tree row id (0 = C NULL). The two
 /// randomnation draws sweep at exactly the C sites.
-pub(crate) fn sweeplinedelaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, Oom> {
+pub(crate) fn sweeplinedelaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, crate::error::Error> {
     // C: poolinit(&m->splaynodes, ...) at this site dissolves into the
     // eager Mesh::new init (same geometry), so nothing happens here;
     // the pooldeinit at the end dissolves the same way.
@@ -1799,9 +1805,13 @@ pub(crate) fn sweeplinedelaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, Oom> 
     //    second are identical points): one distinct partner is forced.
     loop {
         if heapsize == 0 {
-            // Error:  Input vertices are all identical. C returns TRI_INPUT
-            // through the long channel; the port mirrors the literal value.
-            return Ok(crate::error::InternalStatus::Input as i64);
+            // Error:  Input vertices are all identical. C returns
+            // TRI_INPUT here (triangle.c:5256-5258); the port raises
+            // Error::Input at exactly that return point, and the
+            // dispatcher re-rides the code onto the long channel.
+            return Err(crate::error::Error::Input(
+                "invalid input (TRI_INPUT)".to_string(),
+            ));
         }
         // C: secondvertex = (vertex) eventheap[0]->eventptr; ... the same
         // recycle-then-delete sequence.
@@ -2089,9 +2099,10 @@ pub(crate) fn sweeplinedelaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, Oom> 
 /// the behavior flags - incremental, else sweepline, else
 /// divide-and-conquer - and return the hull edge count (0 when the
 /// input was collinear, hence itemless; the dispatcher is otherwise
-/// faithful down to the odd TRI_INPUT pass-through of sweeplinedelaunay
-/// landing in C's hullsize).
-pub(crate) fn delaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, Oom> {
+/// faithful down to the odd TRI_INPUT of sweeplinedelaunay landing
+/// in C's hullsize - the port re-rides the raised Error::Input onto
+/// the long channel exactly where C's value flow continues).
+pub(crate) fn delaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, crate::error::Error> {
     // C: m->eextras = 0; initializetrisubpools(m, b).
     m.eextras = 0;
     m.initializetrisubpools(
@@ -2107,7 +2118,22 @@ pub(crate) fn delaunay(m: &mut Mesh, b: &Behavior) -> Result<i64, Oom> {
     let hulledges = if b.incremental {
         incrementaldelaunay(m, b)?
     } else if b.sweepline {
-        sweeplinedelaunay(m, b)?
+        // C: hulledges = sweeplinedelaunay(m, b) (triangle.c:5436-
+        // 5438). C's sweeplinedelaunay returns TRI_INPUT on the long
+        // channel (triangle.c:5256-5258, identical input vertices);
+        // C reads that return as the raw `hulledges` value, and
+        // `return hulledges` (triangle.c:5448) hands it to
+        // triangle_mesh_create, which stores it into hullsize with no
+        // check (triangle_api.c:209-210) - the C hullsize oddity. The
+        // port's sweeplinedelaunay raises Error::Input at that return
+        // point; the dispatcher re-rides the code onto the long
+        // channel exactly here, where C's value flow continues; every
+        // other failure (the pool Oom bridge) propagates.
+        match sweeplinedelaunay(m, b) {
+            Ok(hulledges) => hulledges,
+            Err(crate::error::Error::Input(_)) => -3, // TRI_INPUT (triangle_config.h:31)
+            Err(e) => return Err(e),
+        }
     } else {
         divconqdelaunay(m, b)?
     };
@@ -3438,14 +3464,17 @@ mod tests {
         let (hull_edges, live, _) = end_state_checks(&m);
         assert_eq!((hull_edges, live), (4, 2));
 
-        // every vertex identical: the do-while runs dry and C's
-        // TRI_INPUT rides the long channel out (triangle.c:5256-5258);
-        // the port mirrors the literal value
+        // every vertex identical: the do-while runs dry and C returns
+        // TRI_INPUT (triangle.c:5256-5258); the port raises
+        // Error::Input at that exact return point - the outcome pin
+        // replaces the funnel-era value-channel pin
         let pts2 = [(1.0, 1.0), (1.0, 1.0)];
         let mut m2 = mesh_with(&pts2, false);
         set_bounds(&mut m2, &pts2);
-        let status = sweeplinedelaunay(&mut m2, &b).expect("oom");
-        assert_eq!(status, crate::error::InternalStatus::Input as i64);
+        let err = sweeplinedelaunay(&mut m2, &b).expect_err("all-identical input");
+        assert!(
+            matches!(err, crate::error::Error::Input(ref msg) if msg == "invalid input (TRI_INPUT)")
+        );
         assert_eq!(m2.undeads, 1);
         assert_eq!(m2.vx_type(2), UNDEADVERTEX);
         // via the dispatcher the value flows out as C's hullsize oddity:
@@ -3456,10 +3485,10 @@ mod tests {
         };
         let mut m3 = mesh_with(&pts2, false);
         set_bounds(&mut m3, &pts2);
-        assert_eq!(
-            delaunay(&mut m3, &b_sw).expect("oom"),
-            crate::error::InternalStatus::Input as i64
-        );
+        // the dispatcher re-rides the raised code onto the long
+        // channel exactly where C's value flow continues: hullsize
+        // keeps C's literal TRI_INPUT.
+        assert_eq!(delaunay(&mut m3, &b_sw).expect("oom"), -3);
 
         // two distinct collinear points after a duplicate: the ghosts
         // all dissolve, removeghosts counts the two hull edges and the
@@ -3478,8 +3507,6 @@ mod tests {
 
     #[test]
     fn delaunay_dispatcher_selects_per_flags() {
-        use crate::error::InternalStatus;
-
         let square = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
         let pentagon = [(0.0, 0.0), (2.0, 0.0), (3.0, 1.0), (1.0, 3.0), (-1.0, 1.0)];
 
@@ -3546,7 +3573,10 @@ mod tests {
         set_bounds(&mut m6, &line);
         assert_eq!(delaunay(&mut m6, &b_d).expect("oom"), 0);
         assert_eq!(m6.triangles.live_count(), 0);
-        // TRI_INPUT is pinned as C's -3 through the channel it rides
-        assert_eq!(InternalStatus::Input as i64, -3);
+        // The TRI_INPUT oddity is pinned through the channel it rides
+        // at the raising site: sweeplinedelaunay's Err payload and the
+        // dispatcher's re-ridden -3 (C's literal TRI_INPUT,
+        // triangle_config.h:31) are both pinned by the
+        // duplicate-accounting test above.
     }
 }

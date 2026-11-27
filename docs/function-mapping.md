@@ -36,7 +36,7 @@ pseudo-rows below. Nothing is unassigned.
 | `triangle_helper.c` | `options.rs`, `input.rs` (unit dissolves) | S1 shell |
 | `triangle_io.c` | `io.rs` | IO |
 | `triangle_api.c` | `api.rs`, `options.rs`, `error.rs`, `lib.rs`, `io.rs` (context lifecycle dissolves) | S1 shell / IO |
-| `triangle_config.h` (TRI_* codes) | `error.rs` (InternalStatus mirror + funnel) | S1 shell |
+| `triangle_config.h` (TRI_* codes) | `error.rs` (public Error taxonomy; the raising sites construct the variants in place since rung 2, D8) | S1 shell |
 | `triangle_version.h.in` | `lib.rs` (VERSION, HAS_ACUTE) | S1 shell |
 | `src/examples/triangle-cli` | `rust/crates/triangle-cli` (the real main, landed in the I/O-phase PR (#46)) | IO |
 
@@ -53,10 +53,10 @@ side changes; the function names are the stable key).
 | --- | --- | --- | --- | --- | --- |
 | `interpolate` | triangle.c:238 | `util.rs` | same name (snake_case) | S1 | landed in PR #30 |
 | `behavior_update` | triangle.c:275 | `options.rs` | same name (snake_case) | S1 shell | Options::defaults and Options::parse; derived-field tail transliterated bit-exact |
-| `triexit` | triangle.c:313 | `error.rs` | same name (snake_case) | S1 shell | funnel: no process exit, no manual alloc/free (D8, D11); trimalloc OOM becomes InternalStatus::Oom |
-| `trimalloc` | triangle.c:318 | `error.rs` | same name (snake_case) | S1 shell | funnel: no process exit, no manual alloc/free (D8, D11); trimalloc OOM becomes InternalStatus::Oom |
-| `trifree` | triangle.c:330 | `error.rs` | same name (snake_case) | S1 shell | funnel: no process exit, no manual alloc/free (D8, D11); trimalloc OOM becomes InternalStatus::Oom |
-| `internalerror` | triangle.c:349 | `error.rs` | same name (snake_case) | S1 shell | funnel: no process exit, no manual alloc/free (D8, D11); trimalloc OOM becomes InternalStatus::Oom |
+| `triexit` | triangle.c:313 | `error.rs` | same name (snake_case) | S1 shell | no process exit, no manual alloc/free (D8, D11); the pool's Oom converts through From<Oom> for Error to Error::OutOfMemory at the call sites (rung 2) |
+| `trimalloc` | triangle.c:318 | `error.rs` | same name (snake_case) | S1 shell | no process exit, no manual alloc/free (D8, D11); the pool's Oom converts through From<Oom> for Error to Error::OutOfMemory at the call sites (rung 2) |
+| `trifree` | triangle.c:330 | `error.rs` | same name (snake_case) | S1 shell | no process exit, no manual alloc/free (D8, D11); the pool's Oom converts through From<Oom> for Error to Error::OutOfMemory at the call sites (rung 2) |
+| `internalerror` | triangle.c:349 | `error.rs` | same name (snake_case) | S1 shell | no process exit, no manual alloc/free (D8, D11); the payload rides Error::Internal verbatim, raised in place at the conformingedge site (rung 2) |
 | `parsecommandline` | triangle.c:364 | `options.rs` | same name (snake_case) | S1 shell | Options::defaults and Options::parse; derived-field tail transliterated bit-exact |
 | `printtriangle` | triangle.c:574 | `debug.rs` | same name (snake_case) | S1 | |
 | `printsubseg` | triangle.c:660 | `debug.rs` | same name (snake_case) | S1 | |
@@ -126,26 +126,26 @@ side changes; the function names are the stable key).
 | `frontlocate` | triangle.c:5189 | `delaunay.rs` | same name (snake_case) | S1 | landed in PR #34 |
 | `sweeplinedelaunay` | triangle.c:5212 | `delaunay.rs` | same name (snake_case) | S1 | landed in PR #34 |
 | `delaunay` | triangle.c:5429 | `delaunay.rs` | same name (snake_case) | S1 | landed in PR #34 (dispatcher: incremental/sweepline/divconq per the landed `Behavior` flags) |
-| `reconstruct` | triangle.c:5483 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8); landed in PR #35 |
-| `finddirection` | triangle.c:5776 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8); landed in PR #35 |
-| `segmentintersection` | triangle.c:5873 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8); landed in PR #35 |
-| `scoutsegment` | triangle.c:6003 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8); landed in PR #35 |
-| `conformingedge` | triangle.c:6089 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8); landed in PR #35 |
-| `delaunayfixup` | triangle.c:6201 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8); landed in PR #35 |
-| `constrainededge` | triangle.c:6312 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8); landed in PR #35 |
-| `insertsegment` | triangle.c:6420 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8); landed in PR #35 |
-| `markhull` | triangle.c:6517 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8); landed in PR #35 |
-| `formskeleton` | triangle.c:6554 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8); landed in PR #35 |
-| `infecthull` | triangle.c:6642 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8); landed in PR #35 |
-| `plague` | triangle.c:6714 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8); landed in PR #35 |
-| `regionplague` | triangle.c:6886 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8); landed in PR #35 |
-| `carveholes` | triangle.c:6964 | `construct.rs` | same name (snake_case) | S1 | status out-params mirror InternalStatus until rung 2 (D8); landed in PR #35 |
+| `reconstruct` | triangle.c:5483 | `construct.rs` | same name (snake_case) | S1 | rung 2 (D8): every C status/negative-value flow raises its public Error variant at the raising site; landed in PR #35 |
+| `finddirection` | triangle.c:5776 | `construct.rs` | same name (snake_case) | S1 | rung 2 (D8): every C status/negative-value flow raises its error at the raising site; fix pass (perf): the hot chain's signatures carry the narrow internal Copy SegmentChainError, converted to the public variant at the formskeleton boundary; landed in PR #35 |
+| `segmentintersection` | triangle.c:5873 | `construct.rs` | same name (snake_case) | S1 | rung 2 (D8): every C status/negative-value flow raises its error at the raising site; fix pass (perf): the hot chain's signatures carry the narrow internal Copy SegmentChainError, converted to the public variant at the formskeleton boundary; landed in PR #35 |
+| `scoutsegment` | triangle.c:6003 | `construct.rs` | same name (snake_case) | S1 | rung 2 (D8): every C status/negative-value flow raises its error at the raising site; fix pass (perf): the hot chain's signatures carry the narrow internal Copy SegmentChainError, converted to the public variant at the formskeleton boundary; landed in PR #35 |
+| `conformingedge` | triangle.c:6089 | `construct.rs` | same name (snake_case) | S1 | rung 2 (D8): every C status/negative-value flow raises its error at the raising site; fix pass (perf): the hot chain's signatures carry the narrow internal Copy SegmentChainError, converted to the public variant at the formskeleton boundary; landed in PR #35 |
+| `delaunayfixup` | triangle.c:6201 | `construct.rs` | same name (snake_case) | S1 | rung 2 (D8): every C status/negative-value flow raises its public Error variant at the raising site; landed in PR #35 |
+| `constrainededge` | triangle.c:6312 | `construct.rs` | same name (snake_case) | S1 | rung 2 (D8): every C status/negative-value flow raises its error at the raising site; fix pass (perf): the hot chain's signatures carry the narrow internal Copy SegmentChainError, converted to the public variant at the formskeleton boundary; landed in PR #35 |
+| `insertsegment` | triangle.c:6420 | `construct.rs` | same name (snake_case) | S1 | rung 2 (D8): every C status/negative-value flow raises its error at the raising site; fix pass (perf): the hot chain's signatures carry the narrow internal Copy SegmentChainError, converted to the public variant at the formskeleton boundary; landed in PR #35 |
+| `markhull` | triangle.c:6517 | `construct.rs` | same name (snake_case) | S1 | rung 2 (D8): every C status/negative-value flow raises its public Error variant at the raising site; landed in PR #35 |
+| `formskeleton` | triangle.c:6554 | `construct.rs` | same name (snake_case) | S1 | rung 2 (D8): every C status/negative-value flow raises its public Error variant at the raising site; landed in PR #35 |
+| `infecthull` | triangle.c:6642 | `construct.rs` | same name (snake_case) | S1 | rung 2 (D8): every C status/negative-value flow raises its public Error variant at the raising site; landed in PR #35 |
+| `plague` | triangle.c:6714 | `construct.rs` | same name (snake_case) | S1 | rung 2 (D8): every C status/negative-value flow raises its public Error variant at the raising site; landed in PR #35 |
+| `regionplague` | triangle.c:6886 | `construct.rs` | same name (snake_case) | S1 | rung 2 (D8): every C status/negative-value flow raises its public Error variant at the raising site; landed in PR #35 |
+| `carveholes` | triangle.c:6964 | `construct.rs` | same name (snake_case) | S1 | rung 2 (D8): every C status/negative-value flow raises its public Error variant at the raising site; landed in PR #35 |
 | `tallyencs` | triangle.c:7129 | `refine.rs` | same name (snake_case) | S1 | landed in the refine PR (#39); consumer-carry: the badsubseg queue rows come from checkseg4encroach (quality.rs) and drain through the slots.rs accessors |
 | `precisionerror` | triangle.c:7154 | `refine.rs` | same name (snake_case) | S1 | landed in the refine PR (#39); the only C call site (triangle.c:7510) is _DEBUG-gated, so the verbatim body is ahead-of-use until the CLI wiring |
-| `splitencsegs` | triangle.c:7183 | `refine.rs` | same name (snake_case) | S1 | landed in the refine PR (#39); consumer-carry: badsubsegdealloc/badsubsegtraverse (mesh.rs rows below) and the badsubseg row readers (slots.rs, promoted from test-only); status out-param mirrors InternalStatus (D8) |
+| `splitencsegs` | triangle.c:7183 | `refine.rs` | same name (snake_case) | S1 | landed in the refine PR (#39); consumer-carry: badsubsegdealloc/badsubsegtraverse (mesh.rs rows below) and the badsubseg row readers (slots.rs, promoted from test-only); rung 2 (D8): the TRI_SEG_SPLIT/TRI_CYCLE writes raise Error::SegmentRecovery in place |
 | `tallyfaces` | triangle.c:7383 | `refine.rs` | same name (snake_case) | S1 | landed in the refine PR (#39); the queue it fills is the one enforcequality re-inits verbatim (triangle.c:7559-7561) |
 | `splittriangle` | triangle.c:7409 | `refine.rs` | same name (snake_case) | S1 | landed in the refine PR (#39); the findNewSPLocation site (triangle.c:7437) mirrors the acute compile switch through the crate's acute feature and is live since the stage-1 acute C PR (#43) through the family's D26 seam (tuple interpolants, the Oom funnel); D16 superseded |
-| `enforcequality` | triangle.c:7527 | `refine.rs` | same name (snake_case) | S1 | landed in the refine PR (#39); re-runs C's bad-triangle queue init verbatim (the mesh.rs state) and carries the badsubseg/badtriang pool restarts (slots.rs); status out-param mirrors InternalStatus (D8); wired by api.rs Mesh::refine (triangle_mesh_refine row); the aCute scratch-pool init site (triangle.c:7536-7540) is a documented no-op per D23 (the pool is eager at Mesh::new) since stage-1 acute C (#43); D16 superseded |
+| `enforcequality` | triangle.c:7527 | `refine.rs` | same name (snake_case) | S1 | landed in the refine PR (#39); re-runs C's bad-triangle queue init verbatim (the mesh.rs state) and carries the badsubseg/badtriang pool restarts (slots.rs); rung 2 (D8): the TRI_CYCLE write raises Error::SegmentRecovery in place; wired by api.rs Mesh::refine (triangle_mesh_refine row); the aCute scratch-pool init site (triangle.c:7536-7540) is a documented no-op per D23 (the pool is eager at Mesh::new) since stage-1 acute C (#43); D16 superseded |
 | `highorder` | triangle.c:7624 | `refine.rs` | same name (snake_case) | S1 | landed in the refine PR (#39); deliberately moved from just before C's Array I/O banner (triangle.c:7687) for cohesion with its only caller, triangle_mesh_create (triangle_api.c:256), which calls it through api.rs Mesh::create since the ioarrays part-1 PR (#44) |
 | `transfernodes` | triangle.c:7697 | `ioarrays.rs` | same name (snake_case) | S1 | landed in the ioarrays part-1 PR (#44); the TRI_INPUT return funnels through the Result channel exactly where triangle_api.c:204-206 funnels the status (D8); wired by api.rs Mesh::create, which now runs the full triangle_mesh_create sequence (triangle_api.c:200-256); the writers below landed in the ioarrays part-2 PR (#45) |
 | `writenodes` | triangle.c:7768 | `ioarrays.rs` | same name (snake_case) | S1 | landed in the ioarrays part-2 PR (#45); the numbering-over-marks scratch reuse (triangle.c:7820-7823) mirrors through the vx chokepoint, writepoly/writeedges/writeneighbors read the numbers back exactly where C does, and Mesh::output restores the original markers afterwards (triangle_api.c:423-425, the input.rs restore_pointmarkers row) |
@@ -284,7 +284,7 @@ side changes; the function names are the stable key).
 | `struct mesh` | triangle.h | `mesh.rs` (struct + lifecycle) + `slots.rs` (accessor chokepoint) | pool ownership per ADR 0002; storage share corrected per the ADR 0002 amendment (2026-11-24) |
 | `struct memorypool` | triangle.c | `pool.rs` | ticket #9 per the ADR 0002 §4 contract (D4) |
 | `struct quality` / `struct statistics` / `struct rect` | triangle_api.h / triangle.h | `api.rs` | public `Quality`, `Statistics`, `BoundingBox` |
-| `TRI_*` status codes | triangle_config.h:28-40 | `error.rs` | `InternalStatus` mirror + `Error` funnel (D8) |
+| `TRI_*` status codes | triangle_config.h:28-40 | `error.rs` | the public `Error` taxonomy; the raising sites construct the variants in place (rung 2, D8) |
 | `enumerations` (`locateresult`, `insertvertexresult`, `finddirectionresult`, ...) | triangle.h | the owning module of the function that returns them | transliterated verbatim |
 | `triunsuitable_user_func` (typedef) | triangle.h | `options.rs` | `Unsuitable` trait + `VertexSample` values (D9) |
 | `FILENAMESIZE`, `TRINAME`-style string helpers | triangle_io.c / util.c of the example CLI | `io.rs` / `triangle-cli` | landed in the I/O-phase PR (#46): owned Strings, no FILENAMESIZE truncation (D32) |
