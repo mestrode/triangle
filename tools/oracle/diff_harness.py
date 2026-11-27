@@ -2,6 +2,9 @@
 """Differential harness: pinned C oracle vs candidate, byte-for-byte.
 
 Wayfinder ticket #13: Differential oracle harness and byte-parity corpus.
+Issue #66 adds the stdout gate: the candidate's captured stdout is compared
+byte-for-byte against the oracle's captured stdout on every corpus run, as an
+additional gate field next to the output-file parity gate.
 
 The byte-identity gate from the port strategy (ADR docs/adr/0001-port-strategy.md,
 closed ticket #6) is binding: a candidate (the Rust port under stage-1
@@ -12,7 +15,8 @@ Modes
   self-check (default, no --candidate)
       1. verify the corpus regenerates byte-identically (generator determinism),
       2. run the oracle over the corpus and verify non-empty, sane outputs,
-      3. re-run the oracle and assert byte-identical self-determinism,
+      3. re-run the oracle and assert byte-identical self-determinism
+         (output files and captured stdout),
       4. wire the stub (tools/oracle/stub_candidate.py) as a candidate and
          demonstrate that an injected trivial divergence is DETECTED and
          LOCALIZED exactly (input, option flags, output file, first differing
@@ -20,11 +24,13 @@ Modes
       Exit 0 iff every phase holds.
   differential (--candidate PATH)
       Run the candidate executable over the corpus and compare every expected
-      output byte-for-byte against the (cached) oracle outputs. On mismatch,
+      output file byte-for-byte against the (cached) oracle outputs, and the
+      candidate's captured stdout byte-for-byte against the oracle's captured
+      stdout of the same run (the stdout gate, issue #66). On mismatch,
       report enough to bisect against the strict function-per-function mapping:
       which case (and its kind/size), which option flag string, which output
-      file, the first differing byte offset and line, both diverging lines, and
-      the surrounding context.
+      file (or the stdout stream), the first differing byte offset and line,
+      both diverging lines, and the surrounding context.
 
 Candidate contract
   The candidate must be an executable with the triangle-CLI interface: invoked
@@ -246,6 +252,34 @@ def compare_entry(oracle_dir, cand_dir, case, family):
                 "case": case["id"], "kind": case["kind"], "size": case["size"],
                 "family": family["tag"], "options": family["options"],
                 "input": family["input"], "file": name,
+                **diff,
+            })
+    # The stdout gate (issue #66): the candidate's captured stdout against
+    # the oracle's captured stdout of the same corpus run, byte-for-byte,
+    # localized with the same first-difference report. run_tool folds stderr
+    # into the capture for both tools, so the gate covers the merged
+    # terminal stream exactly as each tool wrote it. All current corpus
+    # families are non-verbose, so the registered D33 verbose divergence
+    # stays untouched by this gate.
+    oracle_stdout = os.path.join(oracle_dir, "candidate-stdout.txt")
+    cand_stdout = os.path.join(cand_dir, "candidate-stdout.txt")
+    if not (os.path.isfile(oracle_stdout) and os.path.isfile(cand_stdout)):
+        mismatches.append({
+            "case": case["id"], "kind": case["kind"], "size": case["size"],
+            "family": family["tag"], "options": family["options"],
+            "input": family["input"], "file": "stdout",
+            "status": "missing_output",
+            "detail": "stdout capture missing (oracle: %s, candidate: %s)"
+                      % (os.path.isfile(oracle_stdout),
+                         os.path.isfile(cand_stdout)),
+        })
+    else:
+        diff = first_diff(oracle_stdout, cand_stdout)
+        if diff:
+            mismatches.append({
+                "case": case["id"], "kind": case["kind"], "size": case["size"],
+                "family": family["tag"], "options": family["options"],
+                "input": family["input"], "file": "stdout",
                 **diff,
             })
     return mismatches
@@ -511,6 +545,7 @@ def differential(args, manifest):
         print_mismatch(m, i)
     if len(mismatches) > 10:
         log("... and %d further mismatches (see the JSON report)" % (len(mismatches) - 10))
+    stdout_mismatches = sum(1 for m in mismatches if m.get("file") == "stdout")
     report = {
         "mode": "differential",
         "candidate": os.path.abspath(args.candidate),
@@ -520,13 +555,14 @@ def differential(args, manifest):
         "entries": len(entries),
         "mismatches": mismatches,
         "byte_identical": len(mismatches) == 0,
+        "stdout_identical": stdout_mismatches == 0,
     }
     write_report(args, report)
     if mismatches:
-        log("RESULT: %d mismatching outputs over %d runs; see the JSON report."
-            % (len(mismatches), len(entries)))
+        log("RESULT: %d mismatching outputs over %d runs (%d stdout); see the JSON report."
+            % (len(mismatches), len(entries), stdout_mismatches))
         return 1
-    log("RESULT: all %d runs byte-identical." % len(entries))
+    log("RESULT: all %d runs byte-identical and stdout-identical." % len(entries))
     return 0
 
 
