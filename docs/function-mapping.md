@@ -34,7 +34,7 @@ pseudo-rows below. Nothing is unassigned.
 | C unit (`src/Triangle/`) | Rust module(s) in `rust/crates/triangle/src/` | Stage |
 | --- | --- | --- |
 | `triangle.h` (types, macros, encode/decode) | `mesh/handles.rs`, `mesh/slots.rs`, `error.rs`, `options.rs` | S1 |
-| `triangle.c` | `mesh/util.rs`, `options.rs`, `error.rs`, `mesh/debug.rs`, `mesh/pool.rs`, `mesh/mod.rs`, `algorithm/quality.rs`, `algorithm/locate.rs`, `algorithm/transform.rs`, `algorithm/delaunay.rs`, `algorithm/segments.rs`, `algorithm/refine.rs`, `io/arrays.rs`, `io/marshal.rs` (the writers, issue #72) | S1 |
+| `triangle.c` | `mesh/util.rs`, `options.rs`, `error.rs`, `mesh/debug.rs`, `mesh/pool.rs`, `mesh/mod.rs`, `mesh/queues.rs` (the standing queues, issue #74), `algorithm/quality.rs`, `algorithm/locate.rs`, `algorithm/transform.rs`, `algorithm/delaunay.rs`, `algorithm/segments.rs`, `algorithm/refine.rs`, `io/arrays.rs`, `io/marshal.rs` (the writers, issue #72) | S1 |
 | `acute.c` | `acute.rs` (behind feature `acute`, default on) | S1 |
 | `predicates.c` | `predicates.rs` | S1 |
 | `eps_writer.c` | `io/eps.rs` | IO |
@@ -88,8 +88,8 @@ side changes; the function names are the stable key).
 | `subsegtraverse` | triangle.c:1243 | `mesh/mod.rs` | `traverse_subseg` | S1 | D3 sentinel rows here (dummyinit); landed in PR #35 (the reconstruct consumer) |
 | `vertexdealloc` | triangle.c:1262 | `mesh/mod.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit) |
 | `vertextraverse` | triangle.c:1276 | `mesh/mod.rs` | `traverse_vertex` | S1 | D3 sentinel rows here (dummyinit); vertextraverse landed in PR #33 (the divconqdelaunay consumer) |
-| `badsubsegdealloc` | triangle.c:1298 | `mesh/mod.rs` | `dealloc_bad_subseg` | S1 | D3 sentinel rows here (dummyinit); landed in the refine PR (#39), the splitencsegs consumer |
-| `badsubsegtraverse` | triangle.c:1316 | `mesh/mod.rs` | `traverse_bad_subseg` | S1 | D3 sentinel rows here (dummyinit); landed in the refine PR (#39), the splitencsegs consumer |
+| `badsubsegdealloc` | triangle.c:1298 | `mesh/queues.rs` | `dealloc_bad_subseg` | S1 | D3 sentinel rows here (dummyinit); landed in the refine PR (#39), the splitencsegs consumer; moved to mesh/queues.rs in the standing-queue rung (#74) |
+| `badsubsegtraverse` | triangle.c:1316 | `mesh/queues.rs` | `traverse_bad_subseg` | S1 | D3 sentinel rows here (dummyinit); landed in the refine PR (#39), the splitencsegs consumer; moved to mesh/queues.rs in the standing-queue rung (#74) |
 | `getvertex` | triangle.c:1343 | `mesh/mod.rs` | `get_vertex` | S1 | D3 sentinel rows here (dummyinit); landed in PR #35 (the reconstruct consumer) |
 | `triangledeinit` | triangle.c:1376 | `mesh/mod.rs` | same name (snake_case) | S1 | D3 sentinel rows here (dummyinit); the acute free (trifree(m->acute_mem) and the NULL store, triangle.c:1395-1396) dissolves into the Drop of the mesh-owned acute_mem field (D23, the stage-1 acute B PR #41) |
 | `maketriangle` | triangle.c:1414 | `mesh/mod.rs` | `make_triangle` | S1 | D3 sentinel rows here (dummyinit) |
@@ -98,9 +98,9 @@ side changes; the function names are the stable key).
 | `randomnation` | triangle.c:1521 | `mesh/util.rs` | `random_below` | S1 | seed moves from _Thread_local to a per-run owned field (D10); landed in PR #30 |
 | `checkmesh` | triangle.c:1537 | `algorithm/quality.rs` | `check_mesh` | S1 | testtriangle carries the Unsuitable callback site (D9); quality_statistics moves from the C Array I/O tail for cohesion; landed in PR #36 (with the #28 restoration of the algorithm/transform.rs call sites, the bad-queue fields on mesh/mod.rs, the badtriang accessors in mesh/slots.rs, and the api.rs statistics/quality/check wiring) |
 | `checkdelaunay` | triangle.c:1622 | `algorithm/quality.rs` | `check_delaunay` | S1 | testtriangle carries the Unsuitable callback site (D9); quality_statistics moves from the C Array I/O tail for cohesion; landed in PR #36 (with the #28 restoration of the algorithm/transform.rs call sites, the bad-queue fields on mesh/mod.rs, the badtriang accessors in mesh/slots.rs, and the api.rs statistics/quality/check wiring) |
-| `enqueuebadtriang` | triangle.c:1714 | `algorithm/quality.rs` | `enqueue_bad_triangle_row` | S1 | testtriangle carries the Unsuitable callback site (D9); quality_statistics moves from the C Array I/O tail for cohesion; landed in PR #36 (with the #28 restoration of the algorithm/transform.rs call sites, the bad-queue fields on mesh/mod.rs, the badtriang accessors in mesh/slots.rs, and the api.rs statistics/quality/check wiring) |
-| `enqueuebadtri` | triangle.c:1810 | `algorithm/quality.rs` | `enqueue_bad_triangle` | S1 | testtriangle carries the Unsuitable callback site (D9); quality_statistics moves from the C Array I/O tail for cohesion; landed in PR #36 (with the #28 restoration of the algorithm/transform.rs call sites, the bad-queue fields on mesh/mod.rs, the badtriang accessors in mesh/slots.rs, and the api.rs statistics/quality/check wiring) |
-| `dequeuebadtriang` | triangle.c:1835 | `algorithm/quality.rs` | `dequeue_bad_triangle` | S1 | testtriangle carries the Unsuitable callback site (D9); quality_statistics moves from the C Array I/O tail for cohesion; landed in PR #36 (with the #28 restoration of the algorithm/transform.rs call sites, the bad-queue fields on mesh/mod.rs, the badtriang accessors in mesh/slots.rs, and the api.rs statistics/quality/check wiring) |
+| `enqueuebadtriang` | triangle.c:1714 | `mesh/queues.rs` | `enqueue_bad_triangle_row` | S1 | testtriangle carries the Unsuitable callback site (D9); quality_statistics moves from the C Array I/O tail for cohesion; landed in PR #36 (with the #28 restoration of the algorithm/transform.rs call sites, the bad-queue fields on mesh/mod.rs, the badtriang accessors in mesh/slots.rs, and the api.rs statistics/quality/check wiring; moved to mesh/queues.rs in the standing-queue rung, #74) |
+| `enqueuebadtri` | triangle.c:1810 | `mesh/queues.rs` | `enqueue_bad_triangle` | S1 | testtriangle carries the Unsuitable callback site (D9); quality_statistics moves from the C Array I/O tail for cohesion; landed in PR #36 (with the #28 restoration of the algorithm/transform.rs call sites, the bad-queue fields on mesh/mod.rs, the badtriang accessors in mesh/slots.rs, and the api.rs statistics/quality/check wiring; moved to mesh/queues.rs in the standing-queue rung, #74) |
+| `dequeuebadtriang` | triangle.c:1835 | `mesh/queues.rs` | `dequeue_bad_triangle` | S1 | testtriangle carries the Unsuitable callback site (D9); quality_statistics moves from the C Array I/O tail for cohesion; landed in PR #36 (with the #28 restoration of the algorithm/transform.rs call sites, the bad-queue fields on mesh/mod.rs, the badtriang accessors in mesh/slots.rs, and the api.rs statistics/quality/check wiring; moved to mesh/queues.rs in the standing-queue rung, #74) |
 | `inlens` | triangle.c:1878 | `algorithm/quality.rs` | `in_lens` | S1 | testtriangle carries the Unsuitable callback site (D9); quality_statistics moves from the C Array I/O tail for cohesion; landed in PR #36 (with the #28 restoration of the algorithm/transform.rs call sites, the bad-queue fields on mesh/mod.rs, the badtriang accessors in mesh/slots.rs, and the api.rs statistics/quality/check wiring) |
 | `checkseg4encroach` | triangle.c:1925 | `algorithm/quality.rs` | `check_seg_for_encroachment` | S1 | testtriangle carries the Unsuitable callback site (D9); quality_statistics moves from the C Array I/O tail for cohesion; landed in PR #36 (with the #28 restoration of the algorithm/transform.rs call sites, the bad-queue fields on mesh/mod.rs, the badtriang accessors in mesh/slots.rs, and the api.rs statistics/quality/check wiring) |
 | `testtriangle` | triangle.c:2001 | `algorithm/quality.rs` | `test_triangle` | S1 | testtriangle carries the Unsuitable callback site (D9); quality_statistics moves from the C Array I/O tail for cohesion; landed in PR #36 (with the #28 restoration of the algorithm/transform.rs call sites, the bad-queue fields on mesh/mod.rs, the badtriang accessors in mesh/slots.rs, and the api.rs statistics/quality/check wiring) |
@@ -153,7 +153,7 @@ side changes; the function names are the stable key).
 | `carveholes` | triangle.c:6964 | `algorithm/segments.rs` | `carve_holes` | S1 | rung 2 (D8): every C status/negative-value flow raises its public Error variant at the raising site; landed in PR #35 |
 | `tallyencs` | triangle.c:7129 | `algorithm/refine.rs` | `tally_encroached_subsegs` | S1 | landed in the refine PR (#39); consumer-carry: the badsubseg queue rows come from checkseg4encroach (algorithm/quality.rs) and drain through the mesh/slots.rs accessors |
 | `precisionerror` | triangle.c:7154 | `algorithm/refine.rs` | `precision_error` | S1 | landed in the refine PR (#39); the only C call site (triangle.c:7510) is _DEBUG-gated, so the verbatim body is ahead-of-use until the CLI wiring |
-| `splitencsegs` | triangle.c:7183 | `algorithm/refine.rs` | `split_encroached_subsegs` | S1 | landed in the refine PR (#39); consumer-carry: badsubsegdealloc/badsubsegtraverse (mesh/mod.rs rows below) and the badsubseg row readers (mesh/slots.rs, promoted from test-only); rung 2 (D8): the TRI_SEG_SPLIT/TRI_CYCLE writes raise Error::SegmentRecovery in place |
+| `splitencsegs` | triangle.c:7183 | `algorithm/refine.rs` | `split_encroached_subsegs` | S1 | landed in the refine PR (#39); consumer-carry: badsubsegdealloc/badsubsegtraverse (mesh/queues.rs rows below, the standing-queue rung #74) and the badsubseg row readers (mesh/slots.rs, promoted from test-only); rung 2 (D8): the TRI_SEG_SPLIT/TRI_CYCLE writes raise Error::SegmentRecovery in place |
 | `tallyfaces` | triangle.c:7383 | `algorithm/refine.rs` | `tally_faces` | S1 | landed in the refine PR (#39); the queue it fills is the one enforcequality re-inits verbatim (triangle.c:7559-7561) |
 | `splittriangle` | triangle.c:7409 | `algorithm/refine.rs` | `split_triangle` | S1 | landed in the refine PR (#39); the findNewSPLocation site (triangle.c:7437) mirrors the acute compile switch through the crate's acute feature and is live since the stage-1 acute C PR (#43) through the family's D26 seam (tuple interpolants, the Oom funnel); D16 superseded |
 | `enforcequality` | triangle.c:7527 | `algorithm/refine.rs` | `enforce_quality` | S1 | landed in the refine PR (#39); re-runs C's bad-triangle queue init verbatim (the mesh/mod.rs state) and carries the badsubseg/badtriang pool restarts (mesh/slots.rs); rung 2 (D8): the TRI_CYCLE write raises Error::SegmentRecovery in place; wired by api.rs Mesh::refine (triangle_mesh_refine row); the aCute scratch-pool init site (triangle.c:7536-7540) is a documented no-op per D23 (the pool is eager at Mesh::new) since stage-1 acute C (#43); D16 superseded |
@@ -341,6 +341,32 @@ fixture helpers consolidated into `io/fixtures.rs`.
 | `file_write_edges` | `src/io/mod.rs` | `src/io/marshal.rs` | triangle_io.c:203-262 |
 | `file_write_neighbors` | `src/io/mod.rs` | `src/io/marshal.rs` | triangle_io.c:264-310 (two-walk overlay at 283-287, dummy's -1, no save/restore) |
 | `file_write_eps` | `src/io/mod.rs` | `src/io/marshal.rs` | triangle_io.c:312-351 (composes io/eps.rs, which does not move) |
+
+## Standing-queue seam migration (issue #74)
+
+The standing-queue rung moved the bad-triangle and bad-subseg work
+queues behind one seam, `rust/crates/triangle/src/mesh/queues.rs`
+(the structs `BadTriangles` and `BadSubsegs` behind the mesh fields):
+the bucket-lattice discipline that algorithm/quality.rs and
+algorithm/refine.rs drove inline over the mesh fields is owned by one
+module, one Rust item per C anchor, and row storage stays behind the
+accessor chokepoint (the mesh/slots.rs accessors route through the
+pools inside the two structs). C anchors are unchanged; no production
+call site changes order, condition, or data. ADR 0005 section 6 swaps
+the concurrent claim queue in behind this seam.
+
+| Moved item | Old path (triangle crate) | New path | C anchor (unchanged) |
+| --- | --- | --- | --- |
+| `enqueue_bad_triangle_row` | `src/algorithm/quality.rs` | `src/mesh/queues.rs` (impl Mesh) | triangle.c:1714-1795 |
+| `enqueue_bad_triangle` | `src/algorithm/quality.rs` | `src/mesh/queues.rs` (impl Mesh) | triangle.c:1810-1823 |
+| `dequeue_bad_triangle` | `src/algorithm/quality.rs` | `src/mesh/queues.rs` (impl Mesh) | triangle.c:1835-1859 |
+| `dealloc_bad_subseg` | `src/mesh/mod.rs` | `src/mesh/queues.rs` (impl Mesh) | triangle.c:1298-1304 |
+| `traverse_bad_subseg` | `src/mesh/mod.rs` | `src/mesh/queues.rs` (impl Mesh) | triangle.c:1316-1327 |
+| `bad_subseg_restart` (poolrestart bridge) | `src/mesh/slots.rs` | `BadSubsegs::restart`, `src/mesh/queues.rs` | triangle.c:7533-7534 |
+| `bad_tri_restart` (poolrestart bridge) | `src/mesh/slots.rs` | `BadTriangles::restart`, `src/mesh/queues.rs` | triangle.c:7555-7556 |
+| queuefront sweep + firstnonemptyq reset (inline in enforce_quality) | `src/algorithm/refine.rs` | `BadTriangles::reset`, `src/mesh/queues.rs` | triangle.c:7559-7561 |
+| lattice fields `queuefront`/`queuetail`/`nextnonemptyq`/`firstnonemptyq` | `src/mesh/mod.rs` (Mesh fields) | private fields of `BadTriangles`, `src/mesh/queues.rs` | triangle.h:502-505 |
+| the badsubseg/badtriangle pools | `src/mesh/mod.rs` (Mesh fields) | inside `BadSubsegs`/`BadTriangles`, `src/mesh/queues.rs` | triangle.h:271-274, 277-286 |
 
 ## Types and macros (triangle.h and friends)
 

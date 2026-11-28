@@ -1284,7 +1284,8 @@ impl Mesh {
     // { subseg encsubseg; vertex subsegorg, subsegdest; }, 3 words).
     // Enqueued by insertvertex (algorithm/algorithm/transform.rs) and checkseg4encroach
     // (algorithm/algorithm/quality.rs); the consuming traversal (badsubsegtraverse /
-    // badsubsegdealloc, mesh/mod.rs) landed with algorithm/algorithm/refine.rs.
+    // badsubsegdealloc, mesh/queues.rs since the standing-queue rung, issue #74)
+    // landed with algorithm/algorithm/refine.rs.
     // -----------------------------------------------------------------------
 
     /// C: poolalloc(&m->badsubsegs) at insertvertex's encroachment
@@ -1347,21 +1348,6 @@ impl Mesh {
         self.badsubsegs.word(id, 2) as u32
     }
 
-    /// C: poolrestart(&m->badsubsegs) (triangle.c:7533-7534,
-    /// enforcequality's badsubseg pool init).
-    /// Invariants (ADR 0002 section 3 d): the dead chain is dropped; the
-    /// debug integrity walk runs on the emptied chain.
-    pub(crate) fn bad_subseg_restart(&mut self) {
-        self.badsubsegs.restart();
-    }
-
-    /// C: poolrestart(&m->badtriangles) (triangle.c:7555-7556,
-    /// enforcequality's badtriang pool init).
-    /// Invariants (ADR 0002 section 3 d): as bad_sub_seg_restart.
-    pub(crate) fn bad_tri_restart(&mut self) {
-        self.badtriangles.restart();
-    }
-
     /// C: pooldealloc(&m->badtriangles) in enforcequality's else arm
     /// (triangle.c:7586; C defines no badtridealloc wrapper for this
     /// site - the queue empties by dequeue, so no dead-row mark).
@@ -1381,10 +1367,10 @@ impl Mesh {
     // (slot-1 REAL, the same f64-bits convention as tri_real), the three
     // vertex ids at words 2-4 (D1: ids replace pointers), the next-row
     // link at word 5 (D4: the C badtriang* pointer is a u32 pool row id,
-    // the null row id 0 at every queue end). Written by algorithm/algorithm/quality.rs
-    // (enqueuebadtri; the readers serve dequeuebadtriang and the
-    // algorithm/algorithm/refine.rs drainers, so they are production readers, not
-    // test-side).
+    // the null row id 0 at every queue end). Written by the standing-queue
+    // seam (mesh/queues.rs, issue #74; enqueuebadtri); the readers serve
+    // dequeuebadtriang and the algorithm/algorithm/refine.rs drainers, so
+    // they are production readers, not test-side).
     // -----------------------------------------------------------------------
 
     /// C: poolalloc(&m->badtriangles) at enqueuebadtri (triangle.c:1820):

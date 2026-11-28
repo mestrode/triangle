@@ -1,5 +1,4 @@
-//! Mesh quality testing: checkmesh, checkdelaunay, the bad-triangle queue
-//! (enqueuebadtriang, enqueuebadtri, dequeuebadtriang), inlens,
+//! Mesh quality testing: checkmesh, checkdelaunay, inlens,
 //! checkseg4encroach, testtriangle (with the Unsuitable callback call site),
 //! quality_statistics.
 //! C: triangle.c section Mesh quality testing routines (+ quality_statistics
@@ -10,8 +9,10 @@
 //! makevertexmap with its algorithm/segments.rs consumer (PR #35), the rest,
 //! together with the #28 restoration of testtriangle/checkseg4encroach/
 //! inlens at the algorithm/algorithm/transform.rs call sites, in the quality PR. The queue
-//! state (queuefront/queuetail/nextnonemptyq/firstnonemptyq) lives on
-//! mesh/mod.rs since this PR; the badtriang row accessors live in mesh/mesh/slots.rs.
+//! The queue discipline (enqueuebadtriang / enqueuebadtri /
+//! dequeuebadtriang and the queue state) moved behind the standing-queue
+//! seam, mesh/queues.rs (issue #74); the badtriang row accessors live in
+//! mesh/slots.rs.
 //! dequeuebadtriang's consumer is enforcequality, which landed with
 //! algorithm/algorithm/refine.rs; the ahead-of-use dead_code blanket is removed with that
 //! PR (every item of this module now has its production consumer).
@@ -30,11 +31,6 @@ use crate::mesh::util::vertex_coords;
 use crate::mesh::Mesh;
 use crate::options::{Behavior, VertexSample};
 use crate::predicates::{counterclockwise, nonregular, Vertex};
-
-/// C SQUAREROOTTWO (triangle_config.h:163), the full-precision literal.
-#[allow(clippy::approx_constant)] // C-parity: the C macro carries this
-                                  // literal, verbatim, not std's SQRT_2 constant.
-const SQUARE_ROOT_TWO: f64 = 1.4142135623730950488016887242096980785696718753769480732;
 
 /// C: makevertexmap (triangle.c:2206-2222). Compute a mapping from each
 /// mesh vertex to one adjacent triangle (vertex2tri): walk the triangles
@@ -194,143 +190,6 @@ pub(crate) fn check_delaunay(m: &mut Mesh, b: &mut Behavior) -> i32 {
     b.noexact = saveexact;
 
     horrors
-}
-
-/// C: enqueuebadtriang (triangle.c:1714-1795). Add a bad triangle data
-/// structure to the end of a queue. The queue is actually a set of 4096
-/// queues, keyed by the square of the shortest edge length, giving
-/// priority to smaller edges (queue 4095 is the highest priority). The
-/// key-to-queue arithmetic (length, posexponent, the repeated-squaring
-/// exponent loop and the SQUAREROOTTWO ladder) is byte-parity-relevant
-/// for the refinement drivers: identical arithmetic, identical queue
-/// number, identical linkage order.
-///
-/// `b` is unused in the C body too (kept for the exact C shape).
-pub(crate) fn enqueue_bad_triangle_row(m: &mut Mesh, _b: &Behavior, badtri: u32) {
-    // Determine the appropriate queue to put the bad triangle into.
-    //   Recall that the key is the square of its shortest edge length.
-    let key = m.bad_tri_key(badtri);
-    let (mut length, posexponent) = if key == 0.0 {
-        (0.0, 0)
-    } else if key >= 1.0 {
-        (key, 1)
-    } else {
-        // `badtri->key' is 2.0 to a negative exponent, so we'll record
-        //   that fact and use the reciprocal of `badtri->key',
-        //   which is > 1.0.
-        (1.0 / key, 0)
-    };
-    // `length' is approximately 2.0 to what exponent?  The following code
-    //   determines the answer in time logarithmic in the exponent.
-    let mut exponent: i32 = 0;
-    while length > 2.0 {
-        // Find an approximation by repeated squaring of two.
-        let mut expincrement: i32 = 1;
-        let mut multiplier: f64 = 0.5;
-        while length * multiplier * multiplier > 1.0 {
-            expincrement *= 2;
-            multiplier *= multiplier;
-        }
-        // Reduce the value of `length', then iterate if necessary.
-        exponent += expincrement;
-        length *= multiplier;
-    }
-    if length == 0.0 {
-        exponent = 1023;
-    }
-    // `length' is approximately squareroot(2.0) to what exponent?
-    exponent = 2 * exponent + (length > SQUARE_ROOT_TWO) as i32;
-    // `exponent' is now in the range 0...2047 for IEEE double precision.
-    //   Choose a queue in the range 0...4095.  The shortest edges have the
-    //   highest priority (queue 4095).
-    let queuenumber: i32 = if posexponent != 0 {
-        2047 - exponent
-    } else {
-        2048 + exponent
-    };
-
-    // Are we inserting into an empty queue?
-    if m.queuefront[queuenumber as usize] == NULL_ROW {
-        // Yes, we are inserting into an empty queue.
-        //   Will this become the highest-priority queue?
-        if queuenumber > m.firstnonemptyq {
-            // Yes, this is the highest-priority queue.
-            m.nextnonemptyq[queuenumber as usize] = m.firstnonemptyq;
-            m.firstnonemptyq = queuenumber;
-        } else {
-            // No, this is not the highest-priority queue.
-            //   Find the queue with next higher priority.
-            let mut i: i32 = queuenumber + 1;
-            while m.queuefront[i as usize] == NULL_ROW {
-                i += 1;
-            }
-            // Mark the newly nonempty queue as following a
-            //   higher-priority queue.
-            m.nextnonemptyq[queuenumber as usize] = m.nextnonemptyq[i as usize];
-            m.nextnonemptyq[i as usize] = queuenumber;
-        }
-        // Put the bad triangle at the beginning of the (empty) queue.
-        m.queuefront[queuenumber as usize] = badtri;
-    } else {
-        // Add the bad triangle to the end of an already nonempty queue.
-        let tail = m.queuetail[queuenumber as usize];
-        m.set_bad_tri_next(tail, badtri);
-    }
-    // Maintain a pointer to the last triangle of the queue.
-    m.queuetail[queuenumber as usize] = badtri;
-    // Newly enqueued bad triangle has no successor in the queue.
-    m.set_bad_tri_next(badtri, NULL_ROW);
-}
-
-/// C: enqueuebadtri (triangle.c:1810-1823). Add a bad triangle to the end
-/// of a queue: allocate a badtriang row for the triangle, fill it
-/// (poortri, key, apex, org, dest, exactly C's write order), then pass it
-/// to enqueuebadtriang. OOM routes through the pool bridge.
-pub(crate) fn enqueue_bad_triangle(
-    m: &mut Mesh,
-    b: &Behavior,
-    enqtri: Otri,
-    minedge: f64,
-    enqapex: u32,
-    enqorg: u32,
-    enqdest: u32,
-) -> Result<(), Oom> {
-    // Allocate space for the bad triangle.
-    let newbad = m.bad_tri_alloc()?;
-    m.set_bad_tri_poor_tri(newbad, encode(enqtri));
-    m.set_bad_tri_key(newbad, minedge);
-    m.set_bad_tri_apex(newbad, enqapex);
-    m.set_bad_tri_org(newbad, enqorg);
-    m.set_bad_tri_dest(newbad, enqdest);
-    enqueue_bad_triangle_row(m, b, newbad);
-    Ok(())
-}
-
-/// C: dequeuebadtriang (triangle.c:1835-1859). Remove a triangle from the
-/// front of the highest-priority queue. The C NULL returns (no queues
-/// nonempty, the out-of-range guards, an empty front) mirror as None;
-/// the row id of the dequeued badtriang row otherwise.
-pub(crate) fn dequeue_bad_triangle(m: &mut Mesh) -> Option<u32> {
-    // If no queues are nonempty, return None.
-    if m.firstnonemptyq < 0 {
-        return None;
-    }
-    if m.firstnonemptyq >= 4096 {
-        return None;
-    }
-    // Find the first triangle of the highest-priority queue.
-    let result = m.queuefront[m.firstnonemptyq as usize];
-    if result == NULL_ROW {
-        return None;
-    }
-    // Remove the triangle from the queue.
-    m.queuefront[m.firstnonemptyq as usize] = m.bad_tri_next(result);
-    // If this queue is now empty, note the new highest-priority
-    //   nonempty queue.
-    if result == m.queuetail[m.firstnonemptyq as usize] {
-        m.firstnonemptyq = m.nextnonemptyq[m.firstnonemptyq as usize];
-    }
-    Some(result)
 }
 
 /// C: inlens (triangle.c:1878-1896). Check whether a vertex lies in the
@@ -513,7 +372,7 @@ pub(crate) fn test_triangle(m: &mut Mesh, b: &Behavior, testtri: Otri) -> Result
         let area = 0.5 * (dxod * dyda - dyod * dxda);
         if b.fixedarea && (area > b.maxarea) {
             // Add this triangle to the list of bad triangles.
-            enqueue_bad_triangle(m, b, testtri, minedge, tapex, torg, tdest)?;
+            m.enqueue_bad_triangle(b, testtri, minedge, tapex, torg, tdest)?;
             return Ok(());
         }
 
@@ -525,7 +384,7 @@ pub(crate) fn test_triangle(m: &mut Mesh, b: &Behavior, testtri: Otri) -> Result
             let areabound = m.tri_area_bound(testtri.tri);
             if (area > areabound) && (areabound > 0.0) {
                 // Add this triangle to the list of bad triangles.
-                enqueue_bad_triangle(m, b, testtri, minedge, tapex, torg, tdest)?;
+                m.enqueue_bad_triangle(b, testtri, minedge, tapex, torg, tdest)?;
                 return Ok(());
             }
         }
@@ -555,7 +414,7 @@ pub(crate) fn test_triangle(m: &mut Mesh, b: &Behavior, testtri: Otri) -> Result
                     .is_unsuitable(org_sample, dest_sample, apex_sample, area)
                 {
                     // Add this triangle to the list of bad triangles.
-                    enqueue_bad_triangle(m, b, testtri, minedge, tapex, torg, tdest)?;
+                    m.enqueue_bad_triangle(b, testtri, minedge, tapex, torg, tdest)?;
                     return Ok(());
                 }
             }
@@ -659,7 +518,7 @@ pub(crate) fn test_triangle(m: &mut Mesh, b: &Behavior, testtri: Otri) -> Result
         }
 
         // Add this triangle to the list of bad triangles.
-        enqueue_bad_triangle(m, b, testtri, minedge, tapex, torg, tdest)?;
+        m.enqueue_bad_triangle(b, testtri, minedge, tapex, torg, tdest)?;
     }
     Ok(())
 }
@@ -871,122 +730,6 @@ mod tests {
         m.set_dest(t, vb);
         m.set_apex(t, vc);
         t
-    }
-
-    // ------------------------------------------------------------------
-    // enqueuebadtriang / enqueuebadtri / dequeuebadtriang
-    // ------------------------------------------------------------------
-
-    /// The C key-to-queue arithmetic, hand-derived per C's ladder:
-    /// key 0.0 -> exponent 1023 -> queue 2048 + 2046 = 4094; key 1.0 ->
-    /// queue 2047; key 4.0 -> exponent 2*1+1 (length 4 -> 2 via one
-    /// halving, 2.0 > SQUAREROOTTWO) -> queue 2047 - 3 = 2044; key 0.25
-    /// -> length 4.0 with posexponent 0 -> queue 2048 + 3 = 2051;
-    /// key 2.0 -> exponent 2*0+1 = 1 -> queue 2047 - 1 = 2046.
-    #[test]
-    fn queue_number_arithmetic_matches_the_c_ladder() {
-        let b = Behavior::default_form();
-        let mut m = mesh(&b);
-        let t = lone_tri(&mut m, false, (0.0, 0.0), (1.0, 0.0), (0.0, 1.0));
-        for (i, (key, expected_qn)) in [
-            (0.0, 4094usize),
-            (1.0, 2047),
-            (4.0, 2044),
-            (0.25, 2051),
-            (2.0, 2046),
-        ]
-        .iter()
-        .enumerate()
-        {
-            enqueue_bad_triangle(&mut m, &b, t, *key, 0, 0, 0).expect("enqueue");
-            // the freshly allocated row (ids 1..=5; the pool has no
-            // sentinel) is the new front of exactly the expected queue.
-            assert_eq!(m.queuefront[*expected_qn], i as u32 + 1);
-        }
-        // firstnonemptyq is the highest-priority (largest) queue number
-        // used: the first row (key 0.0) sits at 4094.
-        assert_eq!(m.firstnonemptyq, 4094);
-        // The 4094 queue holds exactly the key-0.0 row; the 2047 queue
-        // holds the key-1.0 row; ... the linkage order (front == then
-        // tail ==) pins which row is where.
-        let row0 = m.queuefront[4094];
-        assert_eq!(m.bad_tri_key(row0), 0.0);
-        assert_eq!(m.queuefront[2047], m.queuefront[4094] + 1);
-        assert_eq!(m.bad_tri_key(m.queuefront[2047]), 1.0);
-        assert_eq!(m.bad_tri_key(m.queuefront[2044]), 4.0);
-        assert_eq!(m.bad_tri_key(m.queuefront[2051]), 0.25);
-        assert_eq!(m.bad_tri_key(m.queuefront[2046]), 2.0);
-        // every queue's tail points at itself (single-element queues)
-        for qn in [4094usize, 2047, 2044, 2051, 2046] {
-            assert_eq!(m.queuetail[qn], m.queuefront[qn]);
-        }
-        // pool row accounting: five rows live, ids 1..=5 (no sentinel)
-        assert_eq!(m.badtriangles.live_count(), 5);
-    }
-
-    /// FIFO within one queue: two rows with the same key dequeue in
-    /// insertion order; priority across queues: smaller keys first.
-    #[test]
-    fn dequeue_is_fifo_within_a_queue_and_priority_across_queues() {
-        let b = Behavior::default_form();
-        let mut m = mesh(&b);
-        let t = lone_tri(&mut m, false, (0.0, 0.0), (1.0, 0.0), (0.0, 1.0));
-        enqueue_bad_triangle(&mut m, &b, t, 4.0, 3, 1, 2).expect("enqueue"); // r1
-        enqueue_bad_triangle(&mut m, &b, t, 4.0, 6, 4, 5).expect("enqueue"); // r2, same queue
-        enqueue_bad_triangle(&mut m, &b, t, 1.0, 9, 7, 8).expect("enqueue"); // r3, higher priority
-        assert_eq!(m.badtriangles.live_count(), 3);
-        // dequeue: r3 first (queue 2047 before 2044), then r2 was
-        // appended after r1 in queue 2044: r1, then r2.
-        let d1 = dequeue_bad_triangle(&mut m).expect("row");
-        assert_eq!(m.bad_tri_key(d1), 1.0);
-        assert_eq!(m.bad_tri_apex(d1), 9);
-        assert_eq!(m.bad_tri_org(d1), 7);
-        assert_eq!(m.bad_tri_dest(d1), 8);
-        assert_eq!(m.bad_tri_poor_tri(d1), encode(t));
-        let d2 = dequeue_bad_triangle(&mut m).expect("row");
-        assert_eq!(m.bad_tri_key(d2), 4.0);
-        assert_eq!(m.bad_tri_org(d2), 1);
-        let d3 = dequeue_bad_triangle(&mut m).expect("row");
-        assert_eq!(m.bad_tri_key(d3), 4.0);
-        assert_eq!(m.bad_tri_org(d3), 4);
-        // The queue drained: firstnonemptyq falls back through the
-        // nextnonemptyq chain to -1.
-        assert_eq!(m.firstnonemptyq, -1);
-        assert!(dequeue_bad_triangle(&mut m).is_none());
-        // dequeued rows stay allocated (deallocation belongs to the
-        // algorithm/algorithm/refine.rs drainers).
-        assert_eq!(m.badtriangles.live_count(), 3);
-        assert_eq!(m.bad_tri_next(d2), d3, "the FIFO link survives the pop");
-    }
-
-    /// An empty-queue insert below the current head chains nextnonemptyq
-    /// exactly like C: (first -> ...) -> new -> ... .
-    #[test]
-    fn empty_queue_insert_links_the_nextnonemptyq_chain() {
-        let b = Behavior::default_form();
-        let mut m = mesh(&b);
-        let t = lone_tri(&mut m, false, (0.0, 0.0), (1.0, 0.0), (0.0, 1.0));
-        // queue 2047 (key 1.0), then the lower-priority queue 2044
-        // (key 4.0): the second insert walks i upward to 2047.
-        enqueue_bad_triangle(&mut m, &b, t, 1.0, 0, 0, 0).expect("enqueue");
-        let r_high = m.queuefront[2047];
-        enqueue_bad_triangle(&mut m, &b, t, 4.0, 0, 0, 0).expect("enqueue");
-        let r_low = m.queuefront[2044];
-        assert_eq!(m.firstnonemptyq, 2047);
-        assert_eq!(m.nextnonemptyq[2047], 2044, "2047 points at 2044");
-        assert_eq!(m.nextnonemptyq[2044], -1, "2044 ends the chain");
-        // and one more between them: queue 2046 (key 2.0).
-        enqueue_bad_triangle(&mut m, &b, t, 2.0, 0, 0, 0).expect("enqueue");
-        assert_eq!(m.nextnonemptyq[2047], 2046);
-        assert_eq!(m.nextnonemptyq[2046], 2044);
-        // the drain order follows the chain: 2047, 2046, 2044.
-        assert_eq!(dequeue_bad_triangle(&mut m), Some(r_high));
-        assert_eq!(m.firstnonemptyq, 2046);
-        let r_mid = m.queuefront[2046];
-        assert_eq!(dequeue_bad_triangle(&mut m), Some(r_mid));
-        assert_eq!(m.firstnonemptyq, 2044);
-        assert_eq!(dequeue_bad_triangle(&mut m), Some(r_low));
-        assert_eq!(m.firstnonemptyq, -1);
     }
 
     // ------------------------------------------------------------------

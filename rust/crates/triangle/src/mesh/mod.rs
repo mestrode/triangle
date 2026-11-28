@@ -30,7 +30,8 @@
 //! the delaunay part-1 PR (the divconqdelaunay consumer), triangletraverse
 //! and getvertex with their consumers, and badsubsegdealloc /
 //! badsubsegtraverse (triangle.c:1298-1304, 1316-1327) with algorithm/algorithm/refine.rs
-//! (the splitencsegs consumer).
+//! (the splitencsegs consumer); the standing-queue rung (issue #74)
+//! moved them into mesh/queues.rs.
 //!
 //! The behavior fields the init functions read arrive on the normalized
 //! Behavior (options.rs): Mesh::new takes &Behavior exactly where C's
@@ -41,6 +42,7 @@
 
 use crate::mesh::handles::{encode, encode_subseg, Osub, Otri, DUMMY_SUB, DUMMY_TRI, NULL_ROW};
 use crate::mesh::pool::{Oom, WordPool};
+use crate::mesh::queues::{BadSubsegs, BadTriangles};
 use crate::mesh::slots::{HalfWord, TriShape, VertexShape};
 use crate::options::Behavior;
 
@@ -51,8 +53,6 @@ const TRI_PER_BLOCK: i32 = 4092;
 const SUBSEG_PER_BLOCK: i32 = 508;
 const VERTEX_PER_BLOCK: i32 = 4092;
 const VIRUS_PER_BLOCK: i32 = 1020;
-const BAD_SUBSEG_PER_BLOCK: i32 = 252;
-const BAD_TRI_PER_BLOCK: i32 = 4092;
 const FLIP_STACKER_PER_BLOCK: i32 = 252;
 const SPLAY_NODE_PER_BLOCK: i32 = 508;
 
@@ -60,14 +60,16 @@ const SPLAY_NODE_PER_BLOCK: i32 = 508;
 /// need exist at this stage; the rest of the C field set (bounds, counters,
 /// queues, the quality scratch) lands with the modules that own their rows.
 pub(crate) struct Mesh {
-    /// The eight mesh pools (C field names; all one uniform WordPool type,
-    /// ADR 0003 section 1).
+    /// The mesh pools (C field names; all one uniform WordPool type, ADR
+    /// 0003 section 1) and the two standing queues (the badsubseg and
+    /// badtriangle WordPools inside their queue structs, mesh/queues.rs,
+    /// issue #74).
     pub(crate) triangles: WordPool,
     pub(crate) subsegs: WordPool,
     pub(crate) vertices: WordPool,
     pub(crate) viri: WordPool,
-    pub(crate) badsubsegs: WordPool,
-    pub(crate) badtriangles: WordPool,
+    pub(crate) badsubsegs: BadSubsegs,
+    pub(crate) badtriangles: BadTriangles,
     pub(crate) flipstackers: WordPool,
     pub(crate) splaynodes: WordPool,
 
@@ -229,31 +231,6 @@ pub(crate) struct Mesh {
     /// triangle.c:1396) dissolves into Drop of the owned field.
     #[cfg(feature = "acute")]
     pub(crate) acute_mem: crate::acute::AcutePool,
-
-    // -----------------------------------------------------------------
-    // The bad-triangle queues (C triangle.h:502-505, the mesh fields the
-    // enqueuebadtriang/dequeuebadtriang rows of algorithm/algorithm/quality.rs drive: 4096
-    // queues keyed by the square of the shortest edge, front/tail links
-    // into the badtriangles pool, the nextnonemptyq chain and its head).
-    // D4: the C badtriang pointers mirror as u32 pool row ids, the null
-    // row id 0 marking queue ends; firstnonemptyq -1 marks "all empty",
-    // 4096 the sentinel value dequeue treats as empty.
-    // ----------------------------------------------------------------
-    /// C m->queuefront[4096]: the first badtriang row of each queue (the
-    /// null row id 0 for an empty queue).
-    pub(crate) queuefront: [u32; 4096],
-    /// C m->queuetail[4096]: the last badtriang row of each queue.
-    /// C leaves this uninitialized until an enqueue writes it, and the
-    /// queue discipline never reads it before that first write; the port
-    /// pins the null row id 0 as the deterministic superset.
-    pub(crate) queuetail: [u32; 4096],
-    /// C m->nextnonemptyq[4096]: the next lower-priority nonempty queue
-    /// after each nonempty queue. Same unread-before-write discipline as
-    /// `queuetail`; the port pins -1 as the deterministic superset.
-    pub(crate) nextnonemptyq: [i32; 4096],
-    /// C m->firstnonemptyq: the highest-priority nonempty queue, -1 when
-    /// all queues are empty.
-    pub(crate) firstnonemptyq: i32,
 }
 
 impl Mesh {
@@ -291,18 +268,8 @@ impl Mesh {
             subsegs: WordPool::new(0, 0, 0, false)?,
             vertices: WordPool::new(0, 0, 0, false)?,
             viri: WordPool::new(8, VIRUS_PER_BLOCK as u32, VIRUS_PER_BLOCK as u32, false)?,
-            badsubsegs: WordPool::new(
-                24,
-                BAD_SUBSEG_PER_BLOCK as u32,
-                BAD_SUBSEG_PER_BLOCK as u32,
-                false,
-            )?,
-            badtriangles: WordPool::new(
-                48,
-                BAD_TRI_PER_BLOCK as u32,
-                BAD_TRI_PER_BLOCK as u32,
-                false,
-            )?,
+            badsubsegs: BadSubsegs::new()?,
+            badtriangles: BadTriangles::new()?,
             flipstackers: WordPool::new(
                 16,
                 FLIP_STACKER_PER_BLOCK as u32,
@@ -383,23 +350,6 @@ impl Mesh {
             infvertex3: NULL_ROW,
             infvertex_store: [[0; 2]; 3],
             recenttri: None,
-            // The bad-triangle queue state (C triangle.h:502-505). C
-            // initializes queuefront[] to NULL and firstnonemptyq to -1
-            // inside enforcequality (triangle.c:7559-7561) right before
-            // tallyfaces fills the queues; queuetail[] and nextnonemptyq[]
-            // are uninitialized struct memory there, never read before
-            // their first enqueue writes them (the queue discipline of
-            // algorithm/algorithm/quality.rs). The port pins the whole state at construction:
-            // the enforcequality-init values for the two C-initialized
-            // members and the null superset for the other two, following
-            // the established lazy-pool-init convention (ADR 0003
-            // section 4). algorithm/algorithm/refine.rs's enforcequality re-runs the C init
-            // loop verbatim over these fields (the queuefront sweep and
-            // firstnonemptyq reset of triangle.c:7559-7561).
-            queuefront: [NULL_ROW; 4096],
-            queuetail: [NULL_ROW; 4096],
-            nextnonemptyq: [-1; 4096],
-            firstnonemptyq: -1,
             // The aCute scratch pool (C m->acute_mem, triangle.h:496):
             // NULL inside triangleinit (triangle.c:1507), really
             // allocated by acutepool_init(20) at the enforcequality site
@@ -759,36 +709,6 @@ impl Mesh {
         loop {
             let newsub = self.subsegs.traverse_next(t)?;
             if !self.is_dead_subseg(newsub) {
-                return Some(newsub);
-            }
-        }
-    }
-
-    /// C: badsubsegdealloc (triangle.c:1298-1304). The dead-row idiom:
-    /// subsegorg = NULL first (triangle.c:1302) so badsubsegtraverse
-    /// skips the row, then pooldealloc (triangle.c:1303); splitencsegs
-    /// (algorithm/algorithm/refine.rs) is the consumer.
-    ///
-    /// Invariants (ADR 0002 section 3): the NULL word is the dead-row
-    /// mark, never decoded (b); the push makes slot 0 pool-private (d);
-    /// reuse stays exact-LIFO (e).
-    pub(crate) fn dealloc_bad_subseg(&mut self, dyingsubseg: u32) {
-        self.set_bad_sub_seg_org(dyingsubseg, NULL_ROW);
-        self.badsubsegs.dealloc(dyingsubseg);
-    }
-
-    /// C: badsubsegtraverse (triangle.c:1316-1327). Walk the pool and
-    /// skip the rows badsubsegdealloc marked (the subsegorg == NULL
-    /// test of the do-while, triangle.c:1321-1326); splitencsegs'
-    /// traversalinit (triangle.c:7367) starts it.
-    ///
-    /// Invariants (ADR 0002 section 3): the NULL mark is the skip test
-    /// (b); the null row itself is never yielded (b, debug-pinned at
-    /// the pool seam).
-    pub(crate) fn traverse_bad_subseg(&self, t: &mut crate::mesh::pool::Traversal) -> Option<u32> {
-        loop {
-            let newsub = self.badsubsegs.traverse_next(t)?;
-            if self.bad_subseg_org(newsub) != NULL_ROW {
                 return Some(newsub);
             }
         }
@@ -1225,5 +1145,6 @@ mod tests {
 pub(crate) mod debug;
 pub(crate) mod handles;
 pub(crate) mod pool;
+pub(crate) mod queues;
 pub(crate) mod slots;
 pub(crate) mod util;

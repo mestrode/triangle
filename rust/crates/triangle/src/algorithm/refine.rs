@@ -14,12 +14,10 @@
 
 use std::cmp::Ordering;
 
-use crate::algorithm::quality::{
-    check_seg_for_encroachment, dequeue_bad_triangle, enqueue_bad_triangle_row, test_triangle,
-};
+use crate::algorithm::quality::{check_seg_for_encroachment, test_triangle};
 use crate::algorithm::transform::{delete_vertex, insert_vertex, undo_vertex, InsertVertexResult};
 use crate::error::{Error, SegmentRecoveryKind};
-use crate::mesh::handles::{decode, decode_subseg, Osub, Otri, DUMMY_SUB, DUMMY_TRI, NULL_ROW};
+use crate::mesh::handles::{decode, decode_subseg, Osub, Otri, DUMMY_SUB, DUMMY_TRI};
 use crate::mesh::pool::Oom;
 use crate::mesh::slots::{FREE_VERTEX, SEGMENT_VERTEX};
 use crate::mesh::util::vertex_coords;
@@ -479,7 +477,7 @@ pub(crate) fn split_triangle(m: &mut Mesh, b: &Behavior, badtri: u32) -> Result<
 pub(crate) fn enforce_quality(m: &mut Mesh, b: &Behavior) -> Result<(), Error> {
     // Initialize the pool of encroached subsegments
     // (triangle.c:7532).
-    m.bad_subseg_restart();
+    m.badsubsegs.restart();
 
     // C: #ifndef NO_ACUTE (triangle.c:7536-7540): the aCute scratch
     // pool, initialized by acutepool_init(20, &m->acute_mem) at
@@ -506,14 +504,12 @@ pub(crate) fn enforce_quality(m: &mut Mesh, b: &Behavior) -> Result<(), Error> {
     // (triangle.c:7552).
     if (b.minangle > 0.0) || b.vararea || b.fixedarea || b.usertest {
         // Initialize the pool of bad triangles (triangle.c:7554).
-        m.bad_tri_restart();
+        m.badtriangles.restart();
         // Initialize the queues of bad triangles
-        // (triangle.c:7557-7561), the construction-pinned queue state
-        // of mesh/mod.rs re-initialized verbatim.
-        for slot in m.queuefront.iter_mut() {
-            *slot = NULL_ROW;
-        }
-        m.firstnonemptyq = -1;
+        // (triangle.c:7557-7561), the queuefront sweep and
+        // firstnonemptyq reset behind the standing-queue seam
+        // (mesh/queues.rs).
+        m.badtriangles.reset();
         // Test all triangles to see if they're bad (triangle.c:7562).
         tally_faces(m, b)?;
         // Initialize the pool of recently flipped triangles
@@ -524,7 +520,7 @@ pub(crate) fn enforce_quality(m: &mut Mesh, b: &Behavior) -> Result<(), Error> {
         while (m.badtriangles.live_count() > 0) && (m.steinerleft != 0) {
             // Fix one bad triangle by inserting a vertex at its
             // circumcenter (triangle.c:7570).
-            let badtri = match dequeue_bad_triangle(m) {
+            let badtri = match m.dequeue_bad_triangle() {
                 Some(row) => row,
                 // C's dequeue cannot return NULL under the loop guard
                 // (every live row sits in a queue); the None arm mirrors
@@ -538,7 +534,7 @@ pub(crate) fn enforce_quality(m: &mut Mesh, b: &Behavior) -> Result<(), Error> {
             if m.badsubsegs.live_count() > 0 {
                 // Put bad triangle back in queue for another try later
                 // (triangle.c:7578).
-                enqueue_bad_triangle_row(m, b, badtri);
+                m.enqueue_bad_triangle_row(b, badtri);
                 // Fix any encroached subsegments that resulted. Record
                 // any new bad triangles that result
                 // (triangle.c:7580-7581).

@@ -662,8 +662,8 @@ impl Mesh {
             + pool_bytes(&m.triangles)
             + pool_bytes(&m.subsegs)
             + pool_bytes(&m.viri)
-            + pool_bytes(&m.badsubsegs)
-            + pool_bytes(&m.badtriangles)
+            + m.badsubsegs.pool_bytes()
+            + m.badtriangles.pool_bytes()
             + pool_bytes(&m.flipstackers)
             + pool_bytes(&m.splaynodes)
     }
