@@ -3,7 +3,8 @@
 # Wayfinder ticket #13. The Rust port's stage-1 core + I/O + CLI phases
 # exist, so per tools/oracle/README.md ("Wiring") this job runs the
 # differential command with the built Rust CLI as the candidate: the
-# pinned C oracle against the Rust CLI over the 120-run corpus,
+# pinned C oracle against the Rust CLI over the 180-run corpus
+# (12 families since the -r extension, issue #68),
 # byte-for-byte. From now on this job IS the permanent serial-path
 # byte-identity gate required by ADR docs/adr/0001-port-strategy.md
 # (serial byte-identity stays binding, including when internal
@@ -26,5 +27,5 @@ jobs:
       - name: Rust CLI build (release, default features, locked)
         working-directory: rust
         run: cargo build --release --locked -p triangle-cli
-      - name: Differential run (oracle vs Rust CLI over the 120-run corpus)
+      - name: Differential run (oracle vs Rust CLI over the 180-run corpus)
         run: tools/oracle/run-harness.sh --candidate rust/target/release/triangle-cli

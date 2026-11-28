@@ -1,7 +1,12 @@
 //! The rung-boundary measurement instrument (idiomatization rung R3,
 //! issue #57 PART A): one criterion benchmark per timed workload of the
-//! harness corpus - the same 10 case classes x 2 timed sizes (m, l) x
-//! 8 option families that tools/oracle/run-bench.sh times (80 benches).
+//! harness corpus - the same 10 case classes x 2 timed sizes (m, l) x the
+//! 8 triangulate-only option families (80 benches). The corpus's -r
+//! refine families (issue #68) are outside this instrument's contract
+//! (they time refine-from-elements through load_mesh + refine, reading
+//! staged multi-file meshes, not a library-only `triangulate`), so they
+//! are skipped and the R3 protocol set stays identical; run-bench.sh's
+//! timed set is the extended 120-entry set since issue #68.
 //!
 //! Instrument contract (binding for the R3 protocol):
 //! - In-process, single-threaded, library-only: each bench builds the
@@ -68,6 +73,11 @@ struct Family {
     tag: String,
     options: String,
     input: String,
+    /// Present only on the -r families (issue #68): they read a sealed
+    /// base mesh instead of a generated geometry input, which no
+    /// `triangulate` workload can express; such families are skipped.
+    #[serde(default)]
+    rbase: Option<String>,
 }
 
 /// One fully prepared workload: the input read from the corpus file plus
@@ -147,6 +157,11 @@ fn timed_entries(corpus: &Path) -> Vec<Entry> {
             continue;
         }
         for family in &case.families {
+            if family.rbase.is_some() {
+                // The -r refine families (issue #68) are refine-from-mesh
+                // workloads, outside this instrument's triangulate contract.
+                continue;
+            }
             entries.push(build_entry(corpus, case, family));
         }
     }

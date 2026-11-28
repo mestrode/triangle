@@ -56,18 +56,24 @@ committed; regeneration is byte-identical, verified by the self-check):
   stress), `random` (random point set), `pslg_hole` (unit square with
   square hole ring), `pslg_concave` (L-shape), `pslg_wall` (unit square
   with an interior wall segment);
-- crossed with the full option family (120 runs):
+- crossed with the full option family (180 runs):
   plain Delaunay (`""`), constrained (`-p`), quality refinement without
   aCute (`-q20` on the point set, `-pq20` on the PSLG), quality with aCute
   (`-pq20U120`, the aCute max-angle `-U` switch), fixed area constraints
-  (`-pa<area>`, `-pq20a<area>`), and `-pen` (also writes .edge/.neigh).
+  (`-pa<area>`, `-pq20a<area>`), `-pen` (also writes .edge/.neigh), and the
+  -r refine families reading pre-existing meshes (issue #68): `-r`
+  (reconstruction only), `-rq20` (quality refinement on the existing mesh),
+  `-ra<area>` (area-constrained refinement), `-rpq20U120` (the aCute variant
+  over a segmented base mesh).
 
-Each case produces `input.node` and `input.poly` plus a manifest
-(`work/corpus/manifest.json`) with per-file sha256 hashes and per-family
-argv. Area targets scale with domain area and size class so element counts
-(and runtimes) stay comparable. An opt-in size class `xl` exists for the
+Each case produces `input.node` and `input.poly`, the sealed -r base
+meshes (`rbase-plain/` from the plain family, `rbase-p/` from the p family;
+built by one pinned-oracle run per case, issue #68) plus a manifest
+(`work/corpus/manifest.json`) with per-file sha256 hashes (base meshes
+included) and per-family argv. Area targets scale with domain area and size
+class so element counts (and runtimes) stay comparable. An opt-in size class `xl` exists for the
 performance gate (\#11): it is generated separately (`--sizes xl`, e.g.
-`--out work/corpus-mt`) so the default corpus stays the sealed 120-run
+`--out work/corpus-mt`) so the default corpus stays the sealed 180-run
 parity contract.
 
 ## Differential harness
@@ -76,6 +82,13 @@ parity contract.
 the candidate over every (case, option family) pair and compares the outputs
 byte-for-byte: `.1.node`, `.1.ele`, `.1.poly`, and `.1.edge` /
 `.1.neigh` where the family produces them.
+
+The -r families (issue #68) read pre-existing meshes: the generator seals
+each case's base meshes into the corpus (one pinned-oracle run per case over
+the plain family, or the p family where segments are required), and the
+harness stages the family's multi-file input set (`node + ele + poly` as the
+family requires) into every run dir, identically for oracle and candidate;
+the file and stdout gates apply to the new families unchanged.
 
 Candidate contract: an executable with the triangle-CLI interface. The
 harness invokes it as `./candidate <options> <input>` inside a fresh run
@@ -124,6 +137,7 @@ a missing expected output file is flagged as such:
 ```sh
 tools/oracle/run-harness.sh
 # [ok] corpus regeneration byte-identical for all 15 cases
+#      (geometry inputs and -r base meshes)
 # [ok] oracle self-determinism: ... byte-identical for all N runs
 # [ok] injected divergence detected and localized: case random_m, family pq20,
 #      file input.1.node, first differing line 6
@@ -174,8 +188,9 @@ tools/oracle/run-bench.sh --candidate <rust-cli> --gate 1.05
 ```
 
 Configuration (ticket #11): the timed set is sizes m and l of every case
-class x option family (80 runs); size s stays corpus-only, its runs are
-startup-dominated and measure process overhead, not the meshing kernels.
+class x option family (120 timed runs at the 12-family corpus since the -r
+extension, issue #68; 80 runs before it); size s stays corpus-only, its runs
+are startup-dominated and measure process overhead, not the meshing kernels.
 Per timed entry, oracle and candidate runs interleave: 3 warmup runs per
 side, then 25 timed runs per side; the per-side statistic is the median.
 Binding numbers: the sum-of-medians total ratio and the geometric mean of

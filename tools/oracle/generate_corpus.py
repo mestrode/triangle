@@ -5,10 +5,12 @@ Wayfinder ticket #13: Differential oracle harness and byte-parity corpus.
 
 Generates the corpus the differential harness runs on: .node (point set) and
 .poly (PSLG) inputs crossed with the full option family (plain Delaunay, -p
-constrained, -q quality with and without the aCute -U max-angle switch, and
-area constraints). Everything is seeded; regeneration is byte-identical, and
-the manifest records the sha256 of every generated input file so callers (the
-harness, CI, or the performance gate #11) can verify the corpus.
+constrained, -q quality with and without the aCute -U max-angle switch, area
+constraints, and the -r refine families reading pre-existing meshes; the -r
+extension is issue #68). Everything is seeded; regeneration is
+byte-identical, and the manifest records the sha256 of every generated
+input file so callers (the harness, CI, or the performance gate #11) can
+verify the corpus.
 
 Case classes
   grid          integer lattice (collinear and cocircular degeneracy stress),
@@ -27,6 +29,10 @@ stay comparable across size classes.
 Layout (regenerated, never committed):
   <out>/<case>/input.node   vertices as a .node point set
   <out>/<case>/input.poly   the same vertices as a .poly PSLG
+  <out>/<case>/rbase-plain/ -r base mesh from the plain family
+                            (input.node + input.ele, sealed oracle output)
+  <out>/<case>/rbase-p/     -r base mesh from the p family
+                            (input.node + input.ele + input.poly)
   <out>/manifest.json       cases, per-family argv, and input hashes
 
 The 'plain' and 'q20' families run on the .node input (Delaunay / quality
@@ -38,7 +44,8 @@ reader (the same format the C writers use). Two runs of this script produce
 identical bytes; the harness self-check verifies this by regenerating into a
 temp directory and comparing hashes.
 
-Usage: python3 tools/oracle/generate_corpus.py [--out DIR] [--sizes s,m,l] [--quiet]
+Usage: python3 tools/oracle/generate_corpus.py [--out DIR] [--sizes s,m,l]
+                                            [--oracle BIN] [--quiet]
 """
 
 import argparse
@@ -46,8 +53,11 @@ import hashlib
 import json
 import os
 import random
+import shutil
+import subprocess
+import tempfile
 
-MANIFEST_VERSION = 1
+MANIFEST_VERSION = 2
 
 # Per-case-class seeds; fixed integers, never derived from time or machine state.
 SEEDS = {"grid": 11, "random": 22, "pslg_hole": 33, "pslg_concave": 44, "pslg_wall": 55}
@@ -78,7 +88,29 @@ FAMILIES = [
     ("pa", "-pa{area}", "poly", ["node", "ele", "poly"]),
     ("pq20a", "-pq20a{area}", "poly", ["node", "ele", "poly"]),
     ("pen", "-pen", "poly", ["node", "ele", "poly", "edge", "neigh"]),
+    # The -r refine families (issue #68): they read a pre-existing mesh as
+    # input, staged from the sealed base meshes (RBASES below). The option
+    # strings follow the non-r counterparts exactly: -r reconstructs,
+    # -rq20 adds quality refinement on the existing mesh, -ra{area} is the
+    # fixed-area form of pa, and -rpq20U120 is the aCute variant over a
+    # segmented (p) base mesh.
+    ("r", "-r", "rplain", ["node", "ele"]),
+    ("rq20", "-rq20", "rplain", ["node", "ele"]),
+    ("ra", "-ra{area}", "rplain", ["node", "ele"]),
+    ("rpq20U120", "-rpq20U120", "rp", ["node", "ele", "poly"]),
 ]
+
+# -r base-mesh wiring (issue #68): input kind -> (base family tag, argv input
+# token, files staged into every run dir). The base meshes are built by one
+# pinned-oracle run per case over the base family's own corpus invocation
+# (plain over the .node input; p over the .poly input, where segments are
+# required) and sealed into the corpus as <case>/rbase-<tag>/<staged names>,
+# so the -r runs read the standard 'input.*' names and write the standard
+# 'input.1.*' outputs.
+RBASES = {
+    "rplain": ("plain", "input.node", ["input.node", "input.ele"]),
+    "rp": ("p", "input.poly", ["input.node", "input.ele", "input.poly"]),
+}
 
 
 def fmt(x):
@@ -257,6 +289,12 @@ def main():
     parser.add_argument("--out", default=None,
                         help="output directory (default: tools/oracle/work/corpus)")
     parser.add_argument("--quiet", action="store_true", help="suppress per-case output")
+    parser.add_argument("--oracle", default=None,
+                        help="pinned oracle binary used to build the -r base "
+                             "meshes (default: tools/oracle/work/oracle/"
+                             "triangle-oracle; built by build-oracle.sh, which "
+                             "run-harness.sh and run-bench.sh run before "
+                             "corpus generation)")
     parser.add_argument("--sizes", default="s,m,l",
                         help="comma-separated size classes to generate "
                              "(default s,m,l). 'xl' is opt-in: a heavier "
@@ -272,6 +310,12 @@ def main():
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
     out = args.out or os.path.join(script_dir, "work", "corpus")
+    oracle = args.oracle or os.path.join(script_dir, "work", "oracle",
+                                        "triangle-oracle")
+    if not (os.path.isfile(oracle) and os.access(oracle, os.X_OK)):
+        parser.error("the -r base meshes need the pinned oracle at %s - "
+                     "run tools/oracle/build-oracle.sh first (run-harness.sh "
+                     "and run-bench.sh do), or pass --oracle" % oracle)
     os.makedirs(out, exist_ok=True)
 
     manifest_cases = []
@@ -287,18 +331,81 @@ def main():
             write_poly(poly_path, pts, seg_pairs, holes)
 
             area_value = area / area_target
+            # -r base meshes (issue #68): one pinned-oracle run per case over
+            # each base family; the outputs are sealed into the corpus
+            # (rbase-<tag>/) and hashed into the manifest, so regeneration
+            # reproduces them byte-identically (oracle determinism, ticket
+            # #5). The invocation mirrors the harness contract (symlink
+            # 'candidate', fixed argv): the writers embed the command line
+            # in the output trailer.
+            rbase = {}
+            base_kinds = {}
+            for _tag, _options, kind_input, _expected in FAMILIES:
+                if kind_input in RBASES and RBASES[kind_input][0] not in base_kinds:
+                    base_kinds[RBASES[kind_input][0]] = kind_input
+            for base_tag in sorted(base_kinds):
+                kind_input = base_kinds[base_tag]
+                _base_tag, _argv_input, staged = RBASES[kind_input]
+                base_opts = next(f[1] for f in FAMILIES if f[0] == base_tag)
+                base_kind_input = next(f[2] for f in FAMILIES if f[0] == base_tag)
+                base_input = "input." + base_kind_input
+                base_argv = ([base_opts] if base_opts else []) + [base_input]
+                base_dir = os.path.join(case_dir, "rbase-" + base_tag)
+                if os.path.exists(base_dir):
+                    shutil.rmtree(base_dir)
+                os.makedirs(base_dir)
+                tmp = tempfile.mkdtemp(prefix="corpus-rbase-")
+                try:
+                    shutil.copy(os.path.join(case_dir, base_input),
+                                os.path.join(tmp, base_input))
+                    os.symlink(os.path.abspath(oracle),
+                               os.path.join(tmp, "candidate"))
+                    proc = subprocess.run(["./candidate"] + base_argv, cwd=tmp,
+                                          stdout=subprocess.DEVNULL,
+                                          stderr=subprocess.STDOUT)
+                    if proc.returncode != 0:
+                        raise RuntimeError("oracle exited %d building the %s "
+                                           "base mesh of %s"
+                                           % (proc.returncode, base_tag, case_id))
+                    files = {}
+                    for name in staged:
+                        out_name = "input.1." + name.split(".", 1)[1]
+                        src = os.path.join(tmp, out_name)
+                        if not os.path.isfile(src) or os.path.getsize(src) == 0:
+                            raise RuntimeError("oracle produced no %s for the "
+                                               "%s base mesh of %s"
+                                               % (out_name, base_tag, case_id))
+                        shutil.copy(src, os.path.join(base_dir, name))
+                        files[name] = sha256_file(os.path.join(base_dir, name))
+                    rbase[base_tag] = {"dir": "rbase-" + base_tag,
+                                       "files": files}
+                finally:
+                    shutil.rmtree(tmp, ignore_errors=True)
             families = []
             for tag, options, kind_input, expected in FAMILIES:
                 options = options.replace("{area}", fmt(area_value))
-                input_file = "input." + kind_input
-                argv = ([options] if options else []) + [input_file]
-                families.append({
-                    "tag": tag,
-                    "options": options,
-                    "input": input_file,
-                    "argv": argv,
-                    "expected": expected,
-                })
+                if kind_input in RBASES:
+                    base_tag, input_file, staged = RBASES[kind_input]
+                    argv = ([options] if options else []) + [input_file]
+                    families.append({
+                        "tag": tag,
+                        "options": options,
+                        "input": input_file,
+                        "argv": argv,
+                        "expected": expected,
+                        "rbase": base_tag,
+                        "staged": staged,
+                    })
+                else:
+                    input_file = "input." + kind_input
+                    argv = ([options] if options else []) + [input_file]
+                    families.append({
+                        "tag": tag,
+                        "options": options,
+                        "input": input_file,
+                        "argv": argv,
+                        "expected": expected,
+                    })
             manifest_cases.append({
                 "id": case_id,
                 "kind": kind,
@@ -311,6 +418,7 @@ def main():
                     "node": {"file": "input.node", "sha256": sha256_file(node_path)},
                     "poly": {"file": "input.poly", "sha256": sha256_file(poly_path)},
                 },
+                "rbase": rbase,
                 "families": families,
             })
             if not args.quiet:
@@ -320,7 +428,7 @@ def main():
     manifest = {
         "manifest_version": MANIFEST_VERSION,
         "generator": "tools/oracle/generate_corpus.py",
-        "description": "Differential harness corpus (wayfinder #13)",
+        "description": "Differential harness corpus (wayfinder #13; -r extension #68)",
         "cases": manifest_cases,
     }
     manifest_path = os.path.join(out, "manifest.json")

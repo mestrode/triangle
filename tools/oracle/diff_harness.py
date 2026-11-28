@@ -6,6 +6,14 @@ Issue #66 adds the stdout gate: the candidate's captured stdout is compared
 byte-for-byte against the oracle's captured stdout on every corpus run, as an
 additional gate field next to the output-file parity gate.
 
+Issue #68 extends the corpus with the -r refine families: they read
+pre-existing meshes as inputs. The generator builds each case's base meshes
+by running the pinned oracle once per base family (plain; p where segments
+are required) and seals them into the corpus (rbase-<tag>/ per case); the run
+flow stages the family's multi-file input set (node + ele + poly as the
+family requires) into every run dir, identically for oracle and candidate,
+and the file and stdout gates apply to the new families unchanged.
+
 The byte-identity gate from the port strategy (ADR docs/adr/0001-port-strategy.md,
 closed ticket #6) is binding: a candidate (the Rust port under stage-1
 verification, an idiomatization rung, or the serial-path CI gate) must produce
@@ -95,8 +103,11 @@ def sha256_file(path):
 def load_manifest(corpus_dir):
     with open(os.path.join(corpus_dir, "manifest.json")) as f:
         manifest = json.load(f)
-    if manifest.get("manifest_version") != 1:
-        raise RuntimeError("unsupported manifest version in %s" % corpus_dir)
+    if manifest.get("manifest_version") != 2:
+        raise RuntimeError("unsupported manifest version in %s - the corpus "
+                           "predates or postdates the -r extension (issue "
+                           "#68); regenerate it with generate_corpus.py"
+                           % corpus_dir)
     return manifest
 
 
@@ -121,13 +132,33 @@ def run_tool(tool, run_dir, argv, env_extra):
                               stdout=out, stderr=subprocess.STDOUT, env=env)
 
 
+def stage_inputs(run_dir, case, family, corpus_dir):
+    """Materialize the family's input file(s) into a run dir (issue #68).
+
+    The non-r families read one generated geometry file (input.node or
+    input.poly). The -r families read a pre-existing mesh: their manifest
+    entry carries the base family ('rbase') and the staged file list
+    ('staged'); the files are copied from the corpus's sealed rbase-<tag>/
+    directory under their standard input names, so oracle and candidate
+    always see exactly the same multi-file inputs.
+    """
+    if "staged" in family:
+        base_dir = os.path.join(corpus_dir, case["id"],
+                                "rbase-" + family["rbase"])
+        for name in family["staged"]:
+            shutil.copy(os.path.join(base_dir, name),
+                        os.path.join(run_dir, name))
+    else:
+        shutil.copy(os.path.join(corpus_dir, case["id"], family["input"]),
+                    os.path.join(run_dir, family["input"]))
+
+
 def prepare_run_dir(bases, case, family, corpus_dir):
     path = os.path.join(bases, case["id"], family["tag"])
     if os.path.exists(path):
         shutil.rmtree(path)
     os.makedirs(path)
-    shutil.copy(os.path.join(corpus_dir, case["id"], family["input"]),
-                os.path.join(path, family["input"]))
+    stage_inputs(path, case, family, corpus_dir)
     return path
 
 
@@ -146,8 +177,7 @@ def oracle_run(oracle, cache_root, oracle_key, case, family, corpus_dir):
     if os.path.exists(cache_dir):
         shutil.rmtree(cache_dir)
     os.makedirs(cache_dir)
-    shutil.copy(os.path.join(corpus_dir, case["id"], family["input"]),
-                os.path.join(cache_dir, family["input"]))
+    stage_inputs(cache_dir, case, family, corpus_dir)
     env = {"ORACLE_HARNESS_CASE": case["id"], "ORACLE_HARNESS_FAMILY": family["tag"]}
     proc = run_tool(oracle, cache_dir, family["argv"], env)
     if proc.returncode != 0:
@@ -325,7 +355,8 @@ def self_check(args, manifest):
     tmp = os.path.join(WORK, "corpus-regen-check")
     if os.path.exists(tmp):
         shutil.rmtree(tmp)
-    proc = subprocess.run([sys.executable, GENERATOR, "--out", tmp, "--quiet"],
+    proc = subprocess.run([sys.executable, GENERATOR, "--out", tmp, "--quiet",
+                           "--oracle", args.oracle],
                           capture_output=True)
     if proc.returncode != 0:
         fail("corpus generation failed:\n%s" % proc.stderr.decode())
@@ -339,9 +370,18 @@ def self_check(args, manifest):
                 fail("regenerated %s/input.%s does not match the manifest hash"
                      % (case["id"], key))
                 regen_ok = False
+        # the sealed -r base meshes (issue #68) reproduce byte-identically too
+        for base in case.get("rbase", {}).values():
+            for name, want in base["files"].items():
+                src = os.path.join(tmp, case["id"], base["dir"], name)
+                if sha256_file(src) != want:
+                    fail("regenerated %s/%s/%s does not match the manifest hash"
+                         % (case["id"], base["dir"], name))
+                    regen_ok = False
     shutil.rmtree(tmp)
     if regen_ok:
-        log("[ok] corpus regeneration byte-identical for all %d cases"
+        log("[ok] corpus regeneration byte-identical for all %d cases "
+            "(geometry inputs and -r base meshes)"
             % len(manifest["cases"]))
 
     # --- 2+3. oracle pass and self-determinism -----------------------------
