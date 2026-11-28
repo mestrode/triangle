@@ -470,7 +470,7 @@ impl Mesh {
         // C: writenodes (triangle_api.c:393-395), the numbering
         // writer (it writes the vertex numbers over the marks,
         // triangle.c:7823).
-        crate::io::arrays::write_nodes(
+        crate::io::marshal::write_nodes(
             &mut core,
             &behavior,
             &mut out.points,
@@ -478,7 +478,7 @@ impl Mesh {
             &mut out.point_markers,
         )?;
         // C: always write elements (triangle_api.c:397-398).
-        crate::io::arrays::write_elements(
+        crate::io::marshal::write_elements(
             &mut core,
             &behavior,
             &mut out.elements,
@@ -487,7 +487,7 @@ impl Mesh {
         // C: the poly || convex gate (triangle_api.c:400-402): the -c
         // switch causes a PSLG to be written even if none was read.
         if behavior.poly || behavior.convex {
-            crate::io::arrays::write_poly(
+            crate::io::marshal::write_poly(
                 &mut core,
                 &behavior,
                 &mut out.segments,
@@ -504,7 +504,7 @@ impl Mesh {
         }
         // C: the edges gate (triangle_api.c:415-417).
         if edges {
-            crate::io::arrays::write_edges(
+            crate::io::marshal::write_edges(
                 &mut core,
                 &behavior,
                 &mut out.edges,
@@ -513,7 +513,7 @@ impl Mesh {
         }
         // C: the neighbors gate (triangle_api.c:419-421).
         if neighbors {
-            crate::io::arrays::write_neighbors(&mut core, &behavior, &mut out.neighbors)?;
+            crate::io::marshal::write_neighbors(&mut core, &behavior, &mut out.neighbors)?;
         }
         // C: the pointmarker restore (triangle_api.c:423-425), gated
         // on the marker list existing: writenodes wrote the vertex
@@ -531,7 +531,7 @@ impl Mesh {
     // here, the read wrappers at module scope below. The context NULL
     // checks dissolve over the owned mesh (D8); the FILE* parameter
     // becomes the writer; the writers' unchecked fprintf return values
-    // surface as io::Result at the io/mod.rs seam and funnel into
+    // surface as io::Result at the io/marshal.rs seam and funnel into
     // Error::Io exactly where triangle_api.c returns the TRI_* code.
     // ------------------------------------------------------------------
 
@@ -539,14 +539,14 @@ impl Mesh {
     pub fn write_nodes(&self, w: &mut dyn std::io::Write) -> Result<(), Error> {
         let behavior = self.behavior.borrow();
         let mut core = self.core.borrow_mut();
-        crate::io::file_write_nodes(&mut core, &behavior, w).map_err(Error::Io)
+        crate::io::marshal::file_write_nodes(&mut core, &behavior, w).map_err(Error::Io)
     }
 
     /// triangle_write_elements (triangle_api.c:446-454).
     pub fn write_elements(&self, w: &mut dyn std::io::Write) -> Result<(), Error> {
         let behavior = self.behavior.borrow();
         let mut core = self.core.borrow_mut();
-        crate::io::file_write_elements(&mut core, &behavior, w).map_err(Error::Io)
+        crate::io::marshal::file_write_elements(&mut core, &behavior, w).map_err(Error::Io)
     }
 
     /// triangle_write_poly (triangle_api.c:455-465): C's holelist /
@@ -560,28 +560,29 @@ impl Mesh {
     ) -> Result<(), Error> {
         let behavior = self.behavior.borrow();
         let mut core = self.core.borrow_mut();
-        crate::io::file_write_poly(&mut core, &behavior, w, holelist, regionlist).map_err(Error::Io)
+        crate::io::marshal::file_write_poly(&mut core, &behavior, w, holelist, regionlist)
+            .map_err(Error::Io)
     }
 
     /// triangle_write_edges (triangle_api.c:466-474).
     pub fn write_edges(&self, w: &mut dyn std::io::Write) -> Result<(), Error> {
         let behavior = self.behavior.borrow();
         let mut core = self.core.borrow_mut();
-        crate::io::file_write_edges(&mut core, &behavior, w).map_err(Error::Io)
+        crate::io::marshal::file_write_edges(&mut core, &behavior, w).map_err(Error::Io)
     }
 
     /// triangle_write_neighbors (triangle_api.c:475-483).
     pub fn write_neighbors(&self, w: &mut dyn std::io::Write) -> Result<(), Error> {
         let behavior = self.behavior.borrow();
         let mut core = self.core.borrow_mut();
-        crate::io::file_write_neighbors(&mut core, &behavior, w).map_err(Error::Io)
+        crate::io::marshal::file_write_neighbors(&mut core, &behavior, w).map_err(Error::Io)
     }
 
     /// triangle_write_eps (triangle_api.c:484-492).
     pub fn write_eps(&self, w: &mut dyn std::io::Write) -> Result<(), Error> {
         let behavior = self.behavior.borrow();
         let mut core = self.core.borrow_mut();
-        crate::io::file_write_eps(&mut core, &behavior, w).map_err(Error::Io)
+        crate::io::marshal::file_write_eps(&mut core, &behavior, w).map_err(Error::Io)
     }
 
     /// triangle_mesh_statistics (triangle_api.c:111). The mirror of

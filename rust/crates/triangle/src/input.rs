@@ -287,7 +287,7 @@ mod tests {
         let mut plist: Vec<Point2> = Vec::new();
         let mut palist: Vec<f64> = Vec::new();
         let mut pmlist: Vec<i32> = Vec::new();
-        crate::io::arrays::write_nodes(&mut m, &b, &mut plist, &mut palist, &mut pmlist)
+        crate::io::marshal::write_nodes(&mut m, &b, &mut plist, &mut palist, &mut pmlist)
             .expect("writenodes");
         // the original markers left in the list, the numbers sit on
         // the marks
@@ -306,7 +306,7 @@ mod tests {
         let mut plist2: Vec<Point2> = Vec::new();
         let mut palist2: Vec<f64> = Vec::new();
         let mut pmlist2: Vec<i32> = Vec::new();
-        crate::io::arrays::write_nodes(&mut m, &b, &mut plist2, &mut palist2, &mut pmlist2)
+        crate::io::marshal::write_nodes(&mut m, &b, &mut plist2, &mut palist2, &mut pmlist2)
             .expect("writenodes");
         assert_eq!(pmlist2, vec![4, 5, 6]);
     }
@@ -339,7 +339,7 @@ mod tests {
         let mut plist: Vec<Point2> = Vec::new();
         let mut palist: Vec<f64> = Vec::new();
         let mut pmlist: Vec<i32> = Vec::new();
-        crate::io::arrays::write_nodes(&mut m, &b, &mut plist, &mut palist, &mut pmlist)
+        crate::io::marshal::write_nodes(&mut m, &b, &mut plist, &mut palist, &mut pmlist)
             .expect("writenodes");
         // the living rows carry numbers, the undead keeps its input
         // marker, and the list holds the two living markers only
