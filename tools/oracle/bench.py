@@ -12,9 +12,13 @@ sides. The single-threaded benchmark corpus IS the harness corpus; this
 runner adds no inputs of its own.
 
 Timed set: by default sizes m and l of every case class x option family
-(80 runs). Size s stays corpus-only: its runs are startup-dominated and
+(120 runs at the 12-family corpus of issue #68; 80 before the -r
+extension). Size s stays corpus-only: its runs are startup-dominated and
 measure process overhead, not the meshing kernels. --sizes and the
 --cases/--families globs narrow the set exactly like run-harness.sh.
+The -r families (issue #68) stage their multi-file mesh inputs into the
+run dirs exactly like the differential harness does (the staging logic is
+mirrored here on purpose; bench.py never imports the harness).
 
 Interleaving: for every timed entry, oracle and candidate runs alternate -
 --warmup untimed warmup runs per side first, then --repeats timed runs per
@@ -93,8 +97,9 @@ def die(msg, code=2):
 def load_manifest(corpus_dir):
     with open(os.path.join(corpus_dir, "manifest.json")) as f:
         manifest = json.load(f)
-    if manifest.get("manifest_version") != 1:
-        die("unsupported manifest version in %s" % corpus_dir)
+    if manifest.get("manifest_version") != 2:
+        die("unsupported manifest version in %s - regenerate the corpus "
+            "(generate_corpus.py; -r extension, issue #68)" % corpus_dir)
     return manifest
 
 
@@ -112,13 +117,31 @@ def timed_entries(manifest, sizes, case_filter, family_filter):
     return entries
 
 
+def stage_inputs(run_dir, case, family, corpus_dir):
+    """Materialize the family's input file(s) into a run dir (issue #68).
+
+    Mirrors diff_harness.py's staging: one generated geometry file for the
+    non-r families; for the -r families the sealed base-mesh files
+    ('staged', from the corpus's rbase-<tag>/ directory) under their
+    standard input names.
+    """
+    if "staged" in family:
+        base_dir = os.path.join(corpus_dir, case["id"],
+                                "rbase-" + family["rbase"])
+        for name in family["staged"]:
+            shutil.copy(os.path.join(base_dir, name),
+                        os.path.join(run_dir, name))
+    else:
+        shutil.copy(os.path.join(corpus_dir, case["id"], family["input"]),
+                    os.path.join(run_dir, family["input"]))
+
+
 def prepare_run_dir(bench_root, side, case, family, corpus_dir):
     path = os.path.join(bench_root, case["id"], family["tag"], side)
     if os.path.exists(path):
         shutil.rmtree(path)
     os.makedirs(path)
-    shutil.copy(os.path.join(corpus_dir, case["id"], family["input"]),
-                os.path.join(path, family["input"]))
+    stage_inputs(path, case, family, corpus_dir)
     return path
 
 
@@ -186,6 +209,9 @@ def main():
                          "ratio or the geometric mean exceeds it")
     ap.add_argument("--report", default=DEFAULT_REPORT,
                     help="JSON report path")
+    ap.add_argument("--label", default=None,
+                    help="report-only label recorded in the report's config "
+                         "(e.g. 'diagnostic'; never changes measurement)")
     ap.add_argument("--quiet", action="store_true", help="suppress per-run rows")
     args = ap.parse_args()
 
@@ -297,6 +323,7 @@ def main():
             "sizes": sizes, "repeats": args.repeats, "warmup": args.warmup,
             "threads": args.threads,
             "cases": args.cases, "families": args.families,
+            "label": args.label,
         },
         "rows": rows,
         "totals": {
