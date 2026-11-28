@@ -55,6 +55,10 @@ _Avoid_: error codes, exceptions, panics
 **Candidate contract**: The differential harness's invocation rule (tools/oracle): the Rust CLI runs as ./candidate <options> <input> inside a prepared run directory, writing the standard input.1.* outputs with exit 0 on success.
 _Avoid_: wrapper script, argument compatibility set
 
+**Output phase**:
+The numbering + marshalling + serialization of the six mesh-bound artifacts as one phase (ADR 0005's phase (e)), owned by io/marshal.rs behind one record seam per artifact.
+_Avoid_: writer bundle, I/O layer
+
 ## Data model
 
 **Packed handle**:

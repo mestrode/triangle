@@ -358,51 +358,7 @@ pub(crate) fn eps_update_metrics(ps: &mut Rect, clip: &mut Rect, ms: &mut Rect) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::options::Options;
-
-    fn behavior_with(setup: impl FnOnce(&mut Options)) -> crate::options::Behavior {
-        let mut opts = Options::new();
-        setup(&mut opts);
-        opts.validate().expect("validate")
-    }
-
-    /// The two-triangle unit square of the io/mod.rs tests (same shape as
-    /// the io/arrays.rs fixture): vertices (0,0), (1,0), (1,1), (0,1)
-    /// bonded across t1's orient-2 edge.
-    fn square_two_triangles(b: &crate::options::Behavior) -> (Mesh, u32, u32, [u32; 4]) {
-        let mut m = Mesh::new(b, 8, 2, 0, 0).expect("mesh init");
-        let a = m.vx_alloc().expect("vx");
-        m.set_vx_x(a, 0.0);
-        m.set_vx_y(a, 0.0);
-        let e = m.vx_alloc().expect("vx");
-        m.set_vx_x(e, 1.0);
-        m.set_vx_y(e, 0.0);
-        let c = m.vx_alloc().expect("vx");
-        m.set_vx_x(c, 1.0);
-        m.set_vx_y(c, 1.0);
-        let d = m.vx_alloc().expect("vx");
-        m.set_vx_x(d, 0.0);
-        m.set_vx_y(d, 1.0);
-        let t1 = m.make_triangle(b.usesegments, b.vararea).expect("tri");
-        m.set_org(t1, a);
-        m.set_dest(t1, e);
-        m.set_apex(t1, c);
-        let t2 = m.make_triangle(b.usesegments, b.vararea).expect("tri");
-        m.set_org(t2, a);
-        m.set_dest(t2, c);
-        m.set_apex(t2, d);
-        m.bond(
-            Otri {
-                tri: t1.tri,
-                orient: 2,
-            },
-            Otri {
-                tri: t2.tri,
-                orient: 0,
-            },
-        );
-        (m, t1.tri, t2.tri, [a, e, c, d])
-    }
+    use crate::io::fixtures::{behavior_with, square_two_triangles};
 
     fn page_and_clip() -> (Rect, Rect) {
         (
@@ -509,7 +465,7 @@ mod tests {
     #[test]
     fn file_write_eps_renders_the_square_byte_for_byte() {
         let b = behavior_with(|_| {});
-        let (mut m, _t1, _t2, _v) = square_two_triangles(&b);
+        let (mut m, _t1, _t2, _v) = square_two_triangles(&b, 0);
         // Mesh bounds (file_write_eps reads them; the fixture does
         // not triangulate, so they are set here like transfernodes
         // would).
@@ -518,7 +474,7 @@ mod tests {
         m.xmax = 1.0;
         m.ymax = 1.0;
         let mut out: Vec<u8> = Vec::new();
-        crate::io::file_write_eps(&mut m, &b, &mut out).expect("eps");
+        crate::io::marshal::file_write_eps(&mut m, &b, &mut out).expect("eps");
         assert_eq!(
             String::from_utf8(out).expect("ascii"),
             "%!PS-Adobe-3.0 EPSF-3.0\n\
