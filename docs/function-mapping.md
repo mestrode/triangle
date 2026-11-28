@@ -11,6 +11,9 @@ Layout: C compilation units mirror to Rust modules in the lib crate
 `rust/crates/triangle`; `triangle.c` splits along its own section banners.
 The transliterated core is private; the public surface is the API shell
 (`api.rs`, `options.rs`, `input.rs`, `error.rs`, `lib.rs` re-exports).
+Since the interchange extraction (issue #70, ADR 0006) the format read
+half and the format emission live in the workspace crate
+`rust/crates/triangle-io`; the migration table below carries every move.
 
 Stage column: **S1** = stage-1 core transliteration; **S1 shell** = day-one
 idiomatic API shell; **IO** = the later I/O phase; **-** = no Rust
@@ -36,7 +39,7 @@ pseudo-rows below. Nothing is unassigned.
 | `predicates.c` | `predicates.rs` | S1 |
 | `eps_writer.c` | `io/eps.rs` | IO |
 | `triangle_helper.c` | `options.rs`, `input.rs` (unit dissolves) | S1 shell |
-| `triangle_io.c` | `io/mod.rs` | IO |
+| `triangle_io.c` | `io/mod.rs` (writers) + the `triangle-io` crate (readers, format emission; issue #70) | IO |
 | `triangle_api.c` | `api.rs`, `options.rs`, `error.rs`, `lib.rs`, `io/mod.rs` (context lifecycle dissolves) | S1 shell / IO |
 | `triangle_config.h` (TRI_* codes) | `error.rs` (public Error taxonomy; the raising sites construct the variants in place since rung 2, D8) | S1 shell |
 | `triangle_version.h.in` | `lib.rs` (VERSION, HAS_ACUTE) | S1 shell |
@@ -233,21 +236,21 @@ side changes; the function names are the stable key).
 
 | C function | C site | Rust module | Rust symbol (R4) | Stage | Notes |
 | --- | --- | --- | --- | --- | --- |
-| `file_writenodes` | triangle_io.c:23 | `io/mod.rs` | `file_write_nodes` | IO | landed in the I/O-phase PR (#46); inline numbering (setvertexmark at triangle_io.c:64-65), the writer seam is D31, the open funnels to Error::Io (D8) |
-| `file_writeelements` | triangle_io.c:78 | `io/mod.rs` | `file_write_elements` | IO | landed in the I/O-phase PR (#46); the order-2 mid slots ho+1, ho+2, ho (triangle_io.c:107-118) |
-| `file_writepoly` | triangle_io.c:133 | `io/mod.rs` | `file_write_poly` | IO | landed in the I/O-phase PR (#46); the hole/region tails (triangle_io.c:173-193) sit behind #ifndef CDT_ONLY, which this fork's build leaves undefined, so they always render in the measured binary; the port builds the full shape |
-| `file_writeedges` | triangle_io.c:203 | `io/mod.rs` | `file_write_edges` | IO | landed in the I/O-phase PR (#46); the emit gate's conjunct swap is D29 |
-| `file_writeneighbors` | triangle_io.c:264 | `io/mod.rs` | `file_write_neighbors` | IO | landed in the I/O-phase PR (#46); the word-6 overlay without the restore, the dummy's -1 stays (the overlay numbering at triangle_io.c:283-287 with the dummy's -1 at 287, the neighbor reads at 295-301) |
-| `file_write_eps` | triangle_io.c:312 | `io/mod.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46); composes the io/eps.rs unit (triangle_io.c:331-347) |
-| `readline` | triangle_io.c:370 | `io/mod.rs` | `read_line` | IO | landed in the I/O-phase PR (#46); INPUTLINESIZE, '#' comments, the number-lookahead charset, the rescan loop |
-| `findfield` | triangle_io.c:401 | `io/mod.rs` | `find_field` | IO | landed in the I/O-phase PR (#46) |
-| `file_readnodes_internal` | triangle_io.c:432 | `io/mod.rs` | `file_read_nodes_internal` | IO | landed in the I/O-phase PR (#46); firstnode captured at i == 0, the attribute/marker defaults fill (triangle_io.c:432-536) |
-| `file_readsegments_internal` | triangle_io.c:546 | `io/mod.rs` | `file_read_segments_internal` | IO | landed in the I/O-phase PR (#46) |
-| `file_readholes_internal` | triangle_io.c:616 | `io/mod.rs` | `file_read_holes_internal` | IO | landed in the I/O-phase PR (#46); the missing-area branch copies the attribute (triangle_io.c:694) |
-| `file_readnodes` | triangle_io.c:712 | `io/mod.rs` | `file_read_nodes` | IO | landed in the I/O-phase PR (#46) |
-| `file_readpoly` | triangle_io.c:723 | `io/mod.rs` | `file_read_poly` | IO | landed in the I/O-phase PR (#46) |
-| `file_readelements` | triangle_io.c:744 | `io/mod.rs` | `file_read_elements` | IO | landed in the I/O-phase PR (#46); numberofcorners pinned to 3 (triangle_io.c:783) |
-| `file_readelementsarea` | triangle_io.c:828 | `io/mod.rs` | `file_read_elements_area` | IO | landed in the I/O-phase PR (#46); a missing field stores -1.0 (triangle_io.c:864) |
+| `file_writenodes` | triangle_io.c:23 | `io/mod.rs` | `file_write_nodes` | IO | landed in the I/O-phase PR (#46); inline numbering (setvertexmark at triangle_io.c:64-65), the writer seam is D31, the open funnels to Error::Io (D8); since the issue #70 extraction the header/line emission calls into triangle-io's write module (the orchestration and numbering stay) |
+| `file_writeelements` | triangle_io.c:78 | `io/mod.rs` | `file_write_elements` | IO | landed in the I/O-phase PR (#46); the order-2 mid slots ho+1, ho+2, ho (triangle_io.c:107-118); since the issue #70 extraction the header/line emission calls into triangle-io's write module (the orchestration stays) |
+| `file_writepoly` | triangle_io.c:133 | `io/mod.rs` | `file_write_poly` | IO | landed in the I/O-phase PR (#46); the hole/region tails (triangle_io.c:173-193) sit behind #ifndef CDT_ONLY, which this fork's build leaves undefined, so they always render in the measured binary; the port builds the full shape; since the issue #70 extraction the headers, segment lines and both tails call into triangle-io's write module (the traversal stays) |
+| `file_writeedges` | triangle_io.c:203 | `io/mod.rs` | `file_write_edges` | IO | landed in the I/O-phase PR (#46); the emit gate's conjunct swap is D29; since the issue #70 extraction the header/line emission calls into triangle-io's write module (the D29 walk stays) |
+| `file_writeneighbors` | triangle_io.c:264 | `io/mod.rs` | `file_write_neighbors` | IO | landed in the I/O-phase PR (#46); the word-6 overlay without the restore, the dummy's -1 stays (the overlay numbering at triangle_io.c:283-287 with the dummy's -1 at 287, the neighbor reads at 295-301); since the issue #70 extraction the header/line emission calls into triangle-io's write module (the overlay stays) |
+| `file_write_eps` | triangle_io.c:312 | `io/mod.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46); composes the io/eps.rs unit (triangle_io.c:331-347); untouched by the issue #70 extraction (EPS is mesh presentation, io/eps.rs stays) |
+| `readline` | triangle_io.c:370 | `triangle-io` (parse) | `read_line` | IO | landed in the I/O-phase PR (#46); INPUTLINESIZE, '#' comments, the number-lookahead charset, the rescan loop; moved to the triangle-io crate by the issue #70 extraction (migration table below) |
+| `findfield` | triangle_io.c:401 | `triangle-io` (parse) | `find_field` | IO | landed in the I/O-phase PR (#46); moved to the triangle-io crate by the issue #70 extraction (migration table below) |
+| `file_readnodes_internal` | triangle_io.c:432 | `triangle-io` (parse) | `parse_node_section` | IO | landed in the I/O-phase PR (#46); firstnode captured at i == 0, the attribute/marker defaults fill (triangle_io.c:432-536); moved to the triangle-io crate by the issue #70 extraction (migration table below), over the neutral NodeFile (the poly zero-count arm reports separate_file) |
+| `file_readsegments_internal` | triangle_io.c:546 | `triangle-io` (parse) | `parse_segments_section` | IO | landed in the I/O-phase PR (#46); moved to the triangle-io crate by the issue #70 extraction (migration table below) |
+| `file_readholes_internal` | triangle_io.c:616 | `triangle-io` (parse) | `parse_holes_regions_section` | IO | landed in the I/O-phase PR (#46); the missing-area branch copies the attribute (triangle_io.c:694); moved to the triangle-io crate by the issue #70 extraction (migration table below) |
+| `file_readnodes` | triangle_io.c:712 | `triangle-io` (parse) | `read_node_file` | IO | landed in the I/O-phase PR (#46); moved to the triangle-io crate by the issue #70 extraction (migration table below) |
+| `file_readpoly` | triangle_io.c:723 | `triangle-io` (parse) | `read_poly_file` | IO | landed in the I/O-phase PR (#46); moved to the triangle-io crate by the issue #70 extraction (migration table below) |
+| `file_readelements` | triangle_io.c:744 | `triangle-io` (parse) | `read_ele_file` | IO | landed in the I/O-phase PR (#46); numberofcorners pinned to 3 (triangle_io.c:783); moved to the triangle-io crate by the issue #70 extraction (migration table below) |
+| `file_readelementsarea` | triangle_io.c:828 | `triangle-io` (parse) | `read_area_file` | IO | landed in the I/O-phase PR (#46); a missing field stores -1.0 (triangle_io.c:864); moved to the triangle-io crate by the issue #70 extraction (migration table below), the element count an argument (C reads io->numberoftriangles) |
 ### `triangle_api.c` (src/Triangle/triangle_api.c)
 
 | C function | C site | Rust module | Rust symbol (R4) | Stage | Notes |
@@ -274,10 +277,41 @@ side changes; the function names are the stable key).
 | `triangle_write_edges` | triangle_api.c:466 | `io/mod.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46): the api.rs wrapper owns the open (fopen NULL -> TRI_FILE_OPEN dissolves into File::open's Error::Io, D8) and calls the io/mod.rs writer through the D15 RefCell bridge |
 | `triangle_write_neighbors` | triangle_api.c:475 | `io/mod.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46): the api.rs wrapper owns the open (fopen NULL -> TRI_FILE_OPEN dissolves into File::open's Error::Io, D8) and calls the io/mod.rs writer through the D15 RefCell bridge |
 | `triangle_write_eps` | triangle_api.c:484 | `io/mod.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46): the api.rs wrapper owns the open (fopen NULL -> TRI_FILE_OPEN dissolves into File::open's Error::Io, D8) and calls the io/mod.rs writer through the D15 RefCell bridge |
-| `triangle_read_nodes` | triangle_api.c:493 | `io/mod.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46): the api.rs wrapper owns the open and fills MeshInput through the io/mod.rs readers (fopen NULL -> Error::Io, D8; the reader status funnels per D8) |
-| `triangle_read_poly` | triangle_api.c:509 | `io/mod.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46): the api.rs wrapper owns the open and fills MeshInput through the io/mod.rs readers (fopen NULL -> Error::Io, D8; the reader status funnels per D8) |
-| `triangle_read_elements` | triangle_api.c:525 | `io/mod.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46): the api.rs wrapper owns the open and fills MeshInput through the io/mod.rs readers (fopen NULL -> Error::Io, D8; the reader status funnels per D8) |
-| `triangle_read_area` | triangle_api.c:541 | `io/mod.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46): the api.rs wrapper owns the open and fills MeshInput through the io/mod.rs readers (fopen NULL -> Error::Io, D8; the reader status funnels per D8) |
+| `triangle_read_nodes` | triangle_api.c:493 | `api.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46): the api.rs wrapper owns the open and fills MeshInput through the readers (fopen NULL -> Error::Io, D8; the reader status funnels per D8); since the issue #70 extraction the readers live in the triangle-io crate and the api.rs seam converts the neutral files into MeshInput (ADR 0006) |
+| `triangle_read_poly` | triangle_api.c:509 | `api.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46): the api.rs wrapper owns the open and fills MeshInput through the readers (fopen NULL -> Error::Io, D8; the reader status funnels per D8); since the issue #70 extraction the readers live in the triangle-io crate and the api.rs seam converts the neutral files into MeshInput (ADR 0006) |
+| `triangle_read_elements` | triangle_api.c:525 | `api.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46): the api.rs wrapper owns the open and fills MeshInput through the readers (fopen NULL -> Error::Io, D8; the reader status funnels per D8); since the issue #70 extraction the readers live in the triangle-io crate and the api.rs seam converts the neutral files into MeshInput (ADR 0006) |
+| `triangle_read_area` | triangle_api.c:541 | `api.rs` | same name (snake_case) | IO | landed in the I/O-phase PR (#46): the api.rs wrapper owns the open and fills MeshInput through the readers (fopen NULL -> Error::Io, D8; the reader status funnels per D8); since the issue #70 extraction the readers live in the triangle-io crate and the api.rs seam converts the neutral files into MeshInput (ADR 0006) |
+
+## Interchange-crate migration (issue #70, ADR 0006)
+
+The extraction moved the format surface into the workspace crate
+`rust/crates/triangle-io` (neutral types, pure std, the direction
+triangle -> triangle-io only). C anchors are unchanged; this table
+maps every moved unit (old location in the triangle crate -> new
+location). The triangle crate's `src/formatter.rs` remains as the
+re-export module of the v0 public items (`g`, `g_padded`,
+`g_padded_left`); the Mesh-bound writers stay in `src/io/mod.rs`
+and call across the crate boundary, and the `api.rs` read wrappers
+stay put and convert the neutral files into MeshInput at a private
+seam.
+
+| Moved unit | Old path (triangle crate) | New path (triangle-io) | C anchor (unchanged) |
+| --- | --- | --- | --- |
+| formatter module | `src/formatter.rs` | `crates/triangle-io/src/formatter.rs` | the printf sites measured in the module doc (triangle_io.c, eps_writer.c, util.c) |
+| parse seam (`read_line`, `LineFile`, `Line`, helpers, `INPUT_LINE_SIZE`) | `src/io/mod.rs` | `crates/triangle-io/src/parse.rs` | triangle_io.c:364-423; triangle_config.h:114 |
+| `file_read_nodes_internal` | `src/io/mod.rs` | `parse.rs` as `parse_node_section` (private) | triangle_io.c:432-546 |
+| `file_read_segments_internal` | `src/io/mod.rs` | `parse.rs` as `parse_segments_section` (private) | triangle_io.c:546-607 |
+| `file_read_holes_internal` | `src/io/mod.rs` | `parse.rs` as `parse_holes_regions_section` (private) | triangle_io.c:616-710 |
+| `file_read_nodes` | `src/io/mod.rs` | `parse.rs` as `read_node_file` | triangle_io.c:712-716 |
+| `file_read_poly` | `src/io/mod.rs` | `parse.rs` as `read_poly_file` | triangle_io.c:723-736 |
+| `file_read_elements` | `src/io/mod.rs` | `parse.rs` as `read_ele_file` | triangle_io.c:744-803 |
+| `file_read_elements_area` | `src/io/mod.rs` | `parse.rs` as `read_area_file` (the element count becomes an argument) | triangle_io.c:828-876 |
+| header/line/trailer emission (inlined in the writers) | `src/io/mod.rs` (inline `write!` sequences) | `crates/triangle-io/src/write.rs` (`write_*_header`, `write_*_line`, `write_poly_holes`, `write_poly_regions`) | triangle_io.c:42-43, 51-61, 91-92, 104-117, 148-151, 161-167, 173-193, 217, 237-254, 276, 303-304 |
+| neutral types | - | `crates/triangle-io/src/types.rs` | the reader-filled fields of triangle_io.c |
+| .edge reader | - | `parse.rs` as `read_edge_file` | no C counterpart (C only writes, triangle_io.c:203-262) |
+| .neigh reader | - | `parse.rs` as `read_neigh_file` | no C counterpart (C only writes, triangle_io.c:264-310) |
+| .area writer | - | `write.rs` as `write_area_file` / `write_area_header` / `write_area_line` | no C counterpart (C only reads, triangle_io.c:828-876) |
+| whole-file writers (`write_node_file` etc.) | - | `crates/triangle-io/src/write.rs` | compositions of the emitters above |
 
 ## Types and macros (triangle.h and friends)
 

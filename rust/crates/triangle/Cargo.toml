@@ -3,7 +3,14 @@ name = "triangle"
 description = "Rust port of Triangle (Shewchuk's Triangle 1.6 + aCute refinement), verified byte-identical against the pinned C oracle"
 version.workspace = true
 edition.workspace = true
-# No dependencies on day one (ADR 0004). Adding one needs its own ticket.
+# Zero dependencies on day one (ADR 0004); adding one needs its own
+# ticket. The single exception is the interchange-crate extraction
+# (issue #70, ADR 0006): the triangle-io path dependency owns the six
+# Triangle interchange file formats over neutral types, and the
+# direction is triangle -> triangle-io only.
+
+[dependencies]
+triangle-io = { path = "../triangle-io" }
 
 [features]
 default = ["acute"]

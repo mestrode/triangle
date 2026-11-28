@@ -370,6 +370,7 @@ dependencies = [
  "criterion",
  "serde",
  "serde_json",
+ "triangle-io",
 ]
 
 [[package]]
@@ -378,6 +379,10 @@ version = "0.1.0"
 dependencies = [
  "triangle",
 ]
+
+[[package]]
+name = "triangle-io"
+version = "0.1.0"
 
 [[package]]
 name = "unicode-ident"

@@ -672,12 +672,47 @@ impl Mesh {
 // ("r"), runs the reader, closes it, and answers TRI_FILE_OPEN when
 // fopen returned NULL. The port wraps File::open's error in Error::Io
 // (it carries the real io::Error, richer than C's bare code; D31's
-// equivalence class) and receives the readers' Error values directly
-// (rung 2: the readers raise at the seam, exactly where triangle.c's
-// fgets NULL and raw -1 TODO returns sit): TRI_FILE_READ (a fgets
-// NULL) is Error::Io and the raw -1 TODO failures are Error::Input
-// (they are malformed-input failures - C's own TODO texts say so;
-// the mapping was justified in the I/O-phase PR body).
+// equivalence class). Since the interchange-crate extraction (ADR
+// 0006, issue #70) the readers live in triangle-io over neutral
+// types; the seam below converts the parsed files into MeshInput and
+// maps triangle-io's errors back onto this crate's unchanged public
+// variants: TRI_FILE_READ (a fgets NULL) is Error::Io with the same
+// io::Error payload the stage-1 funnel arm carried, and the raw -1
+// TODO failures are Error::Input with the funnel arm's exact
+// TRI_FAILURE payload (they are malformed-input failures - C's own
+// TODO texts say so; the mapping was justified in the I/O-phase PR
+// body).
+
+/// The triangle-io error conversion at the read seam: Error::Read
+/// (TRI_FILE_READ, a fgets NULL) carries into Error::Io unchanged,
+/// Error::Input (the raw -1 TODO returns) into Error::Input with the
+/// same payload - the public error surface is identical to the
+/// pre-extraction readers (issue #70).
+fn io_error(e: triangle_io::Error) -> Error {
+    match e {
+        triangle_io::Error::Read(err) => Error::Io(err),
+        triangle_io::Error::Input(msg) => Error::Input(msg),
+    }
+}
+
+/// The seam conversion of a parsed .node section into the owned
+/// MeshInput (file_readnodes_internal's fill, triangle_io.c:432-546):
+/// the lists append exactly like C's pushes, the attribute count
+/// overwrites where C's store sits (491), and the poly zero-count
+/// arm clears the points (472-477) without touching the attribute
+/// count - the parser reports the arm in NodeFile::separate_file.
+fn load_nodes(io: &mut MeshInput, nodes: &triangle_io::NodeFile) {
+    if nodes.separate_file {
+        io.points.clear();
+        return;
+    }
+    io.attributes_per_point = nodes.attributes_per_point.max(0) as usize;
+    io.points
+        .extend(nodes.points.iter().map(|p| Point2 { x: p.x, y: p.y }));
+    io.point_attributes
+        .extend_from_slice(&nodes.point_attributes);
+    io.point_markers.extend_from_slice(&nodes.point_markers);
+}
 
 /// triangle_read_nodes (triangle_api.c:493-508).
 pub fn read_nodes(
@@ -685,26 +720,62 @@ pub fn read_nodes(
     io: &mut MeshInput,
     firstnode: &mut i32,
 ) -> Result<(), Error> {
-    let mut file = crate::io::LineFile::new(std::fs::File::open(nodefilename).map_err(Error::Io)?);
-    crate::io::file_read_nodes(&mut file, io, firstnode)
+    let file = std::fs::File::open(nodefilename).map_err(Error::Io)?;
+    let nodes = triangle_io::read_node_file(file).map_err(io_error)?;
+    load_nodes(io, &nodes);
+    *firstnode = nodes.first_number;
+    Ok(())
 }
 
 /// triangle_read_poly (triangle_api.c:509-523).
 pub fn read_poly(polyfilename: &str, io: &mut MeshInput, firstnode: &mut i32) -> Result<(), Error> {
-    let mut file = crate::io::LineFile::new(std::fs::File::open(polyfilename).map_err(Error::Io)?);
-    crate::io::file_read_poly(&mut file, io, firstnode)
+    let file = std::fs::File::open(polyfilename).map_err(Error::Io)?;
+    let poly = triangle_io::read_poly_file(file).map_err(io_error)?;
+    load_nodes(io, &poly.nodes);
+    if !poly.nodes.separate_file {
+        *firstnode = poly.nodes.first_number;
+    }
+    io.segments.extend(poly.segments.iter());
+    io.segment_markers.extend(poly.segment_markers.iter());
+    io.holes
+        .extend(poly.holes.iter().map(|h| Hole { x: h.x, y: h.y }));
+    io.regions.extend(poly.regions.iter().map(|r| Region {
+        x: r.x,
+        y: r.y,
+        attribute: r.attribute,
+        max_area: r.max_area,
+    }));
+    Ok(())
 }
 
 /// triangle_read_elements (triangle_api.c:525-539).
 pub fn read_elements(elefilename: &str, io: &mut MeshInput) -> Result<(), Error> {
-    let mut file = crate::io::LineFile::new(std::fs::File::open(elefilename).map_err(Error::Io)?);
-    crate::io::file_read_elements(&mut file, io)
+    let file = std::fs::File::open(elefilename).map_err(Error::Io)?;
+    let ele = triangle_io::read_ele_file(file).map_err(io_error)?;
+    // C: numberofcorners is pinned to 3 (triangle_io.c:769).
+    io.corners_per_element = ele.corners_per_element;
+    io.attributes_per_element = ele.attributes_per_element.max(0) as usize;
+    io.elements.extend_from_slice(&ele.elements);
+    io.element_attributes
+        .extend_from_slice(&ele.element_attributes);
+    Ok(())
 }
 
 /// triangle_read_area (triangle_api.c:541-555).
 pub fn read_area(areafilename: &str, io: &mut MeshInput) -> Result<(), Error> {
-    let mut file = crate::io::LineFile::new(std::fs::File::open(areafilename).map_err(Error::Io)?);
-    crate::io::file_read_elements_area(&mut file, io)
+    // C reads io->numberoftriangles, which file_readelements set
+    // from the .ele header; the owned list derives it
+    // (corners_per_element is pinned to 3 there, 0 on a fresh
+    // input).
+    let numelements = io
+        .elements
+        .len()
+        .checked_div(io.corners_per_element.max(1))
+        .unwrap_or(0);
+    let file = std::fs::File::open(areafilename).map_err(Error::Io)?;
+    let area = triangle_io::read_area_file(file, numelements).map_err(io_error)?;
+    io.triangle_areas.extend(area.areas.iter());
+    Ok(())
 }
 
 #[cfg(test)]

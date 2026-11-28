@@ -1,0 +1,14 @@
+[package]
+name = "triangle-io"
+description = "The Triangle interchange file formats (.poly/.node/.ele/.edge/.neigh/.area) over neutral, self-contained types - reading and writing without the meshing core"
+version.workspace = true
+edition.workspace = true
+# Interchange crate (ADR 0006, issue #70): pure std (io::Read/io::Write
+# based), zero dependencies, zero unsafe (the workspace forbid), no
+# libc. Never depends on the meshing crate: the direction is triangle
+# -> triangle-io only. Versioned 0.1.0 and unpublished pending the
+# maintainer's publication/naming decision.
+publish = false
+
+[lints]
+workspace = true
