@@ -117,6 +117,9 @@ _Avoid_: acute allocator, petal pool, acute arena
 
 ## Parallelism
 
+**Standing queue**: The bad-triangle and bad-subseg work queues of refinement, owned by mesh/queues.rs behind one seam; ADR 0005 section 6 designates the seam as the concurrent claim queue's swap-in point.
+_Avoid_: work list, job queue
+
 **Serial path**: The execution route with thread count 1: the transliterated core exactly as ported, whose byte-identity against the C oracle over the corpus is the permanently binding gate; every other guarantee stands on it as the reproducibility anchor.
 _Avoid_: fallback path, single-threaded mode
 
